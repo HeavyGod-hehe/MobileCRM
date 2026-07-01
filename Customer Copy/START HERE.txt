@@ -13,10 +13,10 @@ FIRST TIME
   • Activation: copy Hardware ID → get key from vendor → Activate
   • Sign up with username, password & email
   • Settings → Shop Details (one place for name, address, WhatsApp)
-  • Data folder is created automatically next to the app
+  • Data folder is created automatically next to the app (outside the .app file)
   • Your live database: Data/crm.db
   • Auto backups: Data/Backups/username_crm_backup_DATE.db
-  • Backups include username, password & all business data
+  • Open the same folder as Phone Reseller CRM.app to see Data/Backups
 
 FEATURES (v2.1)
 ───────────────

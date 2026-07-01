@@ -6,10 +6,12 @@ import hashlib
 import hmac
 import json
 import os
-import platform
+import shutil
 import sys
 import uuid
 from pathlib import Path
+
+from app_paths import customer_data_dir
 
 # Must match generate_key.py — change before distributing builds.
 _LICENSE_SECRET = os.environ.get(
@@ -18,25 +20,27 @@ _LICENSE_SECRET = os.environ.get(
 )
 
 
-def _app_dir() -> Path:
-    if getattr(sys, "frozen", False):
-        return Path(sys.executable).parent
-    return Path(__file__).parent
-
-
 def _license_dir() -> Path:
     if os.environ.get("CRM_LICENSE_PATH"):
         return Path(os.environ["CRM_LICENSE_PATH"]).expanduser().resolve().parent
+    data_dir = customer_data_dir()
+    if data_dir:
+        return data_dir
     if getattr(sys, "frozen", False):
-        home = Path.home()
-        system = platform.system().lower()
-        if system == "darwin":
-            return home / "Library" / "Application Support" / "Phone Reseller CRM"
-        if system == "windows":
-            base = Path(os.environ.get("APPDATA", home / "AppData" / "Roaming"))
-            return base / "Phone Reseller CRM"
-        return home / ".phone-reseller-crm"
-    return _app_dir()
+        return Path(sys.executable).resolve().parent
+    return Path(__file__).parent
+
+
+def _legacy_license_file() -> Path | None:
+    home = Path.home()
+    candidates = [
+        home / "Library" / "Application Support" / "Phone Reseller CRM" / "license.json",
+        Path(sys.executable).resolve().parent / "license.json",
+    ]
+    for path in candidates:
+        if path.is_file():
+            return path
+    return None
 
 
 LICENSE_FILE = Path(
@@ -69,6 +73,11 @@ def verify_activation_key(hardware_id: str, activation_key: str) -> bool:
 
 
 def load_saved_license() -> dict | None:
+    if not LICENSE_FILE.is_file():
+        legacy = _legacy_license_file()
+        if legacy and legacy.resolve() != LICENSE_FILE.resolve():
+            LICENSE_FILE.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(legacy, LICENSE_FILE)
     if not LICENSE_FILE.is_file():
         return None
     try:

@@ -11,13 +11,15 @@ import time
 import webbrowser
 from pathlib import Path
 
+from app_paths import customer_install_dir
+
 DEFAULT_PORT = int(os.environ.get("CRM_PORT", "5050"))
 HOST = os.environ.get("CRM_HOST", "127.0.0.1")
 
 
 def _project_root() -> Path:
     if getattr(sys, "frozen", False):
-        return Path(sys.executable).resolve().parent
+        return customer_install_dir()
     return Path(__file__).resolve().parent
 
 

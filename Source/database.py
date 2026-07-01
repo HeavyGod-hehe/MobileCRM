@@ -13,18 +13,7 @@ from pathlib import Path
 
 from werkzeug.security import check_password_hash, generate_password_hash
 
-
-def _app_bundle_dir() -> Path:
-    if getattr(sys, "frozen", False):
-        return Path(sys.executable).resolve().parent
-    return Path(__file__).resolve().parent
-
-
-def customer_data_dir() -> Path | None:
-    """Customer Copy live data folder (next to the .app bundle)."""
-    if not getattr(sys, "frozen", False):
-        return None
-    return _app_bundle_dir() / "Data"
+from app_paths import customer_data_dir, customer_install_dir, executable_dir, path_is_inside_app_bundle
 
 
 def default_backup_dir() -> Path | None:
@@ -604,15 +593,17 @@ def backup_username_slug(conn, user_id: int) -> str:
 def ensure_user_backup_path(conn, user_id: int) -> str:
     settings = get_user_settings(conn, user_id)
     current = (settings.get("local_backup_path") or "").strip()
+    desired = str(default_backup_dir()) if default_backup_dir() else ""
+    if current and path_is_inside_app_bundle(current) and desired:
+        update_user_settings(conn, user_id, {"local_backup_path": desired})
+        return desired
     if current:
         return current
-    backup_dir = default_backup_dir()
-    if not backup_dir:
+    if not desired:
         return ""
-    backup_dir.mkdir(parents=True, exist_ok=True)
-    path = str(backup_dir)
-    update_user_settings(conn, user_id, {"local_backup_path": path})
-    return path
+    Path(desired).mkdir(parents=True, exist_ok=True)
+    update_user_settings(conn, user_id, {"local_backup_path": desired})
+    return desired
 
 
 def ensure_customer_data_layout(conn) -> None:
@@ -629,8 +620,17 @@ def ensure_customer_data_layout(conn) -> None:
     data_dir.mkdir(parents=True, exist_ok=True)
     backup_dir.mkdir(parents=True, exist_ok=True)
 
-    legacy_db = _app_bundle_dir() / "crm.db"
-    if legacy_db.is_file() and legacy_db.resolve() != DB_PATH.resolve():
+    install_dir = customer_install_dir()
+    legacy_candidates = [
+        install_dir / "crm.db",
+        executable_dir() / "crm.db",
+        executable_dir() / "Data" / "crm.db",
+    ]
+    for legacy_db in legacy_candidates:
+        if not legacy_db.is_file():
+            continue
+        if legacy_db.resolve() == DB_PATH.resolve():
+            continue
         if not DB_PATH.is_file():
             shutil.move(str(legacy_db), str(DB_PATH))
         else:

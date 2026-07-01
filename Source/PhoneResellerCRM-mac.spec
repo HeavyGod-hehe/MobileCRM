@@ -18,6 +18,7 @@ a = Analysis(
     ],
     hiddenimports=[
         'werkzeug.security',
+        'app_paths',
         'backup_service',
         'database',
         'license_guard',
