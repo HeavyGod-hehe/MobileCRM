@@ -148,13 +148,11 @@
 
     <div class="mt-6 pt-6 border-t border-white/8 max-w-2xl">
       <h3 class="text-sm font-semibold text-white mb-3">Restore from Backup</h3>
-      <p class="text-xs text-slate-500 mb-3">Select a backup file from your backup folder. You will be logged out and must sign in again.</p>
-      <div class="flex gap-2 flex-wrap">
-        <select id="restore-backup-select" class="input-field flex-1 min-w-[200px] text-sm">
-          <option value="">— Select backup file —</option>
-        </select>
+      <p class="text-xs text-slate-500 mb-3">Browse for a backup file (.db) on your computer. You will be logged out and must sign in again.</p>
+      <div class="flex gap-2 flex-wrap items-center">
+        <input type="text" id="restore-backup-path" readonly class="input-field flex-1 min-w-[200px] text-sm font-mono" placeholder="No file selected">
+        <button type="button" id="btn-browse-restore" class="btn btn-ghost shrink-0">Browse File</button>
         <button type="button" id="btn-restore-backup" class="btn btn-ghost text-red-400 border-red-500/30">Restore</button>
-        <button type="button" id="btn-refresh-backups" class="btn btn-ghost btn-sm">Refresh list</button>
       </div>
     </div>
   </section>

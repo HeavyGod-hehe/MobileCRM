@@ -11,6 +11,20 @@ def pick_folder_macos() -> str | None:
     import subprocess
 
     script = 'POSIX path of (choose folder with prompt "Select backup folder")'
+    return _run_osascript_choose(script)
+
+
+def pick_file_macos() -> str | None:
+    """Native macOS file dialog for .db backup restore."""
+    import subprocess
+
+    script = 'POSIX path of (choose file with prompt "Select CRM backup file" of type {"db","public.database"})'
+    return _run_osascript_choose(script)
+
+
+def _run_osascript_choose(script: str) -> str | None:
+    import subprocess
+
     result = subprocess.run(
         ["osascript", "-e", script],
         capture_output=True,
@@ -23,7 +37,7 @@ def pick_folder_macos() -> str | None:
             return None
         if result.returncode == 1 and not (result.stdout or "").strip():
             return None
-        raise RuntimeError(err or "macOS folder picker failed")
+        raise RuntimeError(err or "macOS picker failed")
     path = (result.stdout or "").strip()
     return path or None
 
@@ -82,9 +96,44 @@ def pick_folder_windows() -> str | None:
     return path_buf.value or None
 
 
-def main() -> None:
-    path = None
+def pick_file_tkinter() -> str | None:
+    import tkinter as tk
+    from tkinter import filedialog
+
+    root = tk.Tk()
+    root.withdraw()
+    root.attributes("-topmost", True)
+    try:
+        path = filedialog.askopenfilename(
+            title="Select CRM backup file",
+            filetypes=[("SQLite database", "*.db"), ("All files", "*.*")],
+        )
+        return path or None
+    finally:
+        root.destroy()
+
+
+def pick_backup_file() -> str | None:
     if sys.platform == "darwin":
+        try:
+            return pick_file_macos()
+        except Exception:
+            try:
+                return pick_file_tkinter()
+            except ImportError:
+                return None
+    try:
+        return pick_file_tkinter()
+    except ImportError:
+        return None
+
+
+def main() -> None:
+    pick_file = "--file" in sys.argv
+    path = None
+    if pick_file:
+        path = pick_backup_file()
+    elif sys.platform == "darwin":
         try:
             path = pick_folder_macos()
         except Exception:

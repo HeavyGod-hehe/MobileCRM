@@ -1347,6 +1347,56 @@ def delete_phone(conn, user_id, phone_id):
     )
 
 
+def bulk_delete_phones(conn, user_id, phone_ids):
+    deleted = 0
+    for phone_id in phone_ids:
+        existing = conn.execute(
+            "SELECT id FROM phones WHERE id = ? AND user_id = ?",
+            (int(phone_id), user_id),
+        ).fetchone()
+        if existing:
+            delete_phone(conn, user_id, int(phone_id))
+            deleted += 1
+    return {"deleted": deleted}
+
+
+def bulk_mark_sold(conn, user_id, items):
+    """Mark multiple phones sold with sale price only (defaults: cash, no udhar)."""
+    updated = []
+    errors = []
+    for item in items:
+        phone_id = int(item["phone_id"])
+        sale_price = float(item.get("sale_price") or 0)
+        if sale_price <= 0:
+            errors.append(f"Phone #{phone_id}: sale price required")
+            continue
+        existing = conn.execute(
+            "SELECT * FROM phones WHERE id = ? AND user_id = ?",
+            (phone_id, user_id),
+        ).fetchone()
+        if not existing:
+            errors.append(f"Phone #{phone_id}: not found")
+            continue
+        if existing["status"] == "Sold":
+            errors.append(f"Phone #{phone_id}: already sold")
+            continue
+        data = {
+            "status": "Sold",
+            "sale_price": sale_price,
+            "receivable_amount": 0,
+            "buyer_name": "",
+            "buyer_contact": "",
+            "sale_payment_method": "cash",
+            "sale_bank_id": None,
+        }
+        phone = update_phone(conn, user_id, phone_id, data)
+        if phone:
+            updated.append(phone)
+    if errors and not updated:
+        raise ValueError("; ".join(errors))
+    return {"updated": updated, "errors": errors}
+
+
 def add_phone_expense(conn, user_id, phone_id, data):
     if not get_phone(conn, user_id, phone_id):
         return None

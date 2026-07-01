@@ -600,6 +600,33 @@ def update_phone(phone_id):
         return jsonify(phone)
 
 
+@app.route("/api/phones/bulk-delete", methods=["POST"])
+def bulk_delete_phones_api():
+    user_id = _current_user_id()
+    data = request.get_json(force=True)
+    phone_ids = data.get("phone_ids") or []
+    if not phone_ids:
+        return jsonify({"error": "No phones selected"}), 400
+    with db.db_session() as conn:
+        result = db.bulk_delete_phones(conn, user_id, phone_ids)
+        return jsonify(result)
+
+
+@app.route("/api/phones/bulk-sold", methods=["POST"])
+def bulk_mark_sold_api():
+    user_id = _current_user_id()
+    data = request.get_json(force=True)
+    items = data.get("items") or []
+    if not items:
+        return jsonify({"error": "No phones to mark sold"}), 400
+    try:
+        with db.db_session() as conn:
+            result = db.bulk_mark_sold(conn, user_id, items)
+            return jsonify(result)
+    except ValueError as exc:
+        return jsonify({"error": str(exc)}), 400
+
+
 @app.route("/api/phones/<int:phone_id>", methods=["DELETE"])
 def delete_phone(phone_id):
     user_id = _current_user_id()
@@ -726,6 +753,48 @@ def restore_backup_api():
         "message": "Database restored. Please sign in again.",
         "safety_copy": safety,
     })
+
+
+@app.route("/api/storage/browse-backup-file", methods=["POST"])
+def browse_backup_file_api():
+    """Open native file picker to choose a .db backup for restore."""
+    if sys.platform == "darwin":
+        try:
+            from folder_picker import pick_file_macos
+            path = pick_file_macos()
+        except RuntimeError as e:
+            return jsonify({"error": str(e)}), 500
+        except subprocess.TimeoutExpired:
+            return jsonify({"error": "File picker timed out"}), 408
+        if not path:
+            return jsonify({"cancelled": True})
+        return jsonify({"path": path})
+
+    if getattr(sys, "frozen", False):
+        exe_dir = Path(sys.executable).parent
+        picker_name = "FolderPicker.exe" if sys.platform == "win32" else "FolderPicker"
+        picker = exe_dir / picker_name
+        if not picker.is_file():
+            picker = Path(sys._MEIPASS) / "folder_picker.py"
+    else:
+        picker = Path(__file__).parent / "folder_picker.py"
+
+    cmd = ([sys.executable, str(picker), "--file"]
+           if picker.suffix.lower() == ".py" else [str(picker), "--file"])
+    try:
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=120)
+    except subprocess.TimeoutExpired:
+        return jsonify({"error": "File picker timed out"}), 408
+    except OSError as e:
+        return jsonify({"error": f"Could not launch file picker: {e}"}), 500
+
+    path = (result.stdout or "").strip()
+    if not path:
+        if result.returncode not in (0, 1):
+            err = (result.stderr or "").strip()
+            return jsonify({"error": err or "File picker failed"}), 500
+        return jsonify({"cancelled": True})
+    return jsonify({"path": path})
 
 
 @app.route("/api/storage/browse-folder", methods=["POST"])

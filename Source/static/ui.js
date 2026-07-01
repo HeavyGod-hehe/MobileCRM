@@ -244,20 +244,6 @@ async function initSettingsPage() {
     document.getElementById('settings-db-path').textContent = 'Unable to load path';
   }
 
-  async function refreshBackupList() {
-    const sel = document.getElementById('restore-backup-select');
-    if (!sel) return;
-    try {
-      const data = await apiFetch('/api/storage/backups');
-      const backups = data.backups || [];
-      sel.innerHTML = '<option value="">— Select backup file —</option>' +
-        backups.map(b => `<option value="${_escSelectHtml(b.path)}">${_escSelectHtml(b.name)} (${_escSelectHtml(b.modified)})</option>`).join('');
-    } catch (_) {
-      sel.innerHTML = '<option value="">Set backup folder first</option>';
-    }
-  }
-  refreshBackupList();
-
   authForm.addEventListener('submit', async (e) => {
     e.preventDefault();
     try {
@@ -358,7 +344,6 @@ async function initSettingsPage() {
       if (data.path) {
         input.value = data.path;
         toast('Backup folder selected');
-        refreshBackupList();
       }
     } catch (err) {
       toast(err.message, 'error');
@@ -394,14 +379,30 @@ async function initSettingsPage() {
     addShopPhoneRow();
   });
 
-  document.getElementById('btn-refresh-backups')?.addEventListener('click', () => {
-    refreshBackupList().then(() => toast('Backup list refreshed'));
+  document.getElementById('btn-browse-restore')?.addEventListener('click', async () => {
+    const btn = document.getElementById('btn-browse-restore');
+    const input = document.getElementById('restore-backup-path');
+    if (!btn || !input) return;
+    btn.disabled = true;
+    btn.textContent = 'Opening…';
+    try {
+      const data = await apiFetch('/api/storage/browse-backup-file', { method: 'POST' });
+      if (data.path) {
+        input.value = data.path;
+        toast('Backup file selected');
+      }
+    } catch (err) {
+      toast(err.message, 'error');
+    } finally {
+      btn.disabled = false;
+      btn.textContent = 'Browse File';
+    }
   });
 
   document.getElementById('btn-restore-backup')?.addEventListener('click', async () => {
-    const path = document.getElementById('restore-backup-select')?.value;
+    const path = document.getElementById('restore-backup-path')?.value?.trim();
     if (!path) {
-      toast('Select a backup file first', 'error');
+      toast('Browse and select a backup file first', 'error');
       return;
     }
     if (!confirm('Restore this backup? Current data will be replaced. You will need to sign in again.')) return;

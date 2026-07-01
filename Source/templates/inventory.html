@@ -30,6 +30,12 @@
         <div class="w-full sm:w-auto sm:min-w-[220px]">
           <input type="search" id="inventory-search" class="input-field text-sm" placeholder="Search IMEI, model…" autocomplete="off">
         </div>
+        <div id="bulk-actions" class="hidden w-full sm:w-auto flex flex-wrap items-center gap-2 no-print">
+          <span id="bulk-count" class="text-xs text-slate-400 font-medium">0 selected</span>
+          <button type="button" id="btn-bulk-sold" class="btn btn-primary btn-sm">Mark Sold</button>
+          <button type="button" id="btn-bulk-delete" class="btn btn-danger btn-sm">Delete</button>
+          <button type="button" id="btn-bulk-clear" class="btn btn-ghost btn-sm">Clear</button>
+        </div>
       </div>
 
       <div class="px-4 pt-3 pb-2">
@@ -45,6 +51,9 @@
         <table class="w-full text-sm">
           <thead>
             <tr class="text-slate-500 text-left text-xs uppercase tracking-wider">
+              <th class="px-3 py-3 font-medium w-10 no-print">
+                <input type="checkbox" id="select-all-page" class="rounded border-white/20" title="Select all on this page">
+              </th>
               <th class="px-4 py-3 font-medium">Model</th>
               <th class="px-4 py-3 font-medium">Status</th>
               <th class="px-4 py-3 font-medium">Type</th>
@@ -73,6 +82,27 @@
     </div>
   </div>
 </section>
+
+<!-- Bulk Sold Modal -->
+<div id="bulk-sold-overlay" class="modal-overlay"></div>
+<div id="bulk-sold-modal" class="modal-wrap">
+  <div class="modal-panel modal-panel-wide">
+    <div class="p-6 border-b border-white/8 flex items-center justify-between">
+      <h3 class="text-lg font-semibold text-white">Mark Selected as Sold</h3>
+      <button type="button" id="bulk-sold-cancel-x" class="btn btn-ghost btn-icon text-slate-400">
+        <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/></svg>
+      </button>
+    </div>
+    <form id="bulk-sold-form" class="p-6 space-y-4 max-h-[65vh] overflow-y-auto">
+      <p class="text-sm text-slate-400">Enter the sale price for each phone. Payment is recorded as cash received in full.</p>
+      <div id="bulk-sold-list" class="space-y-3"></div>
+      <div class="flex gap-3 pt-2 border-t border-white/8">
+        <button type="submit" class="btn btn-primary flex-1">Confirm Sold</button>
+        <button type="button" id="bulk-sold-cancel" class="btn btn-ghost">Cancel</button>
+      </div>
+    </form>
+  </div>
+</div>
 
 <!-- Phone Form Modal -->
 <div id="modal-overlay" class="modal-overlay"></div>
@@ -299,6 +329,7 @@
   let searchQuery = '';
   let currentPage = 1;
   const PAGE_SIZE = 25;
+  let selectedIds = new Set();
   const saleSection = document.getElementById('sale-section');
 
   const statusBadge = (status) => {
@@ -333,20 +364,58 @@
   const unifiedRow = (p, i) => {
     const sold = p.status === 'Sold';
     const party = sold ? (p.buyer_name || '—') : (p.supplier_name || '—');
-    return `<tr class="table-row cursor-pointer" onclick="viewPhone(${p.id})" style="animation: page-in 0.3s ease ${i*0.04}s both">
-      <td class="px-4 py-3.5 font-medium text-white">${esc(p.model)}</td>
-      <td class="px-4 py-3.5">${statusBadge(p.status)}</td>
-      <td class="px-4 py-3.5">${typeBadge(p.type)}</td>
-      <td class="px-4 py-3.5 text-slate-400">${esc(p.condition)||'—'}</td>
-      <td class="px-4 py-3.5 text-slate-400 text-xs font-mono">${esc(p.imei)||'—'}</td>
-      <td class="px-4 py-3.5 text-right tabular-nums font-medium">${fmt(p.purchase_price)}</td>
-      <td class="px-4 py-3.5 text-right tabular-nums ${sold ? 'text-emerald-400' : 'text-slate-600'}">${sold ? fmt(p.sale_price) : '—'}</td>
-      <td class="px-4 py-3.5 text-right tabular-nums ${sold && (p.receivable_amount || 0) > 0 ? 'text-amber-400' : 'text-slate-600'}">${sold && (p.receivable_amount || 0) > 0 ? fmt(p.receivable_amount) : sold ? fmt(0) : '—'}</td>
-      <td class="px-4 py-3.5 text-right tabular-nums ${p.net_profit != null && p.net_profit >= 0 ? 'text-emerald-400/90' : p.net_profit != null ? 'text-red-400' : 'text-slate-600'}">${p.net_profit != null ? fmt(p.net_profit) : '—'}</td>
-      <td class="px-4 py-3.5 text-slate-400">${esc(party)}</td>
+    const checked = selectedIds.has(p.id) ? 'checked' : '';
+    return `<tr class="table-row ${selectedIds.has(p.id) ? 'bg-emerald-500/5' : ''}" style="animation: page-in 0.3s ease ${i*0.04}s both">
+      <td class="px-3 py-3.5 no-print" onclick="event.stopPropagation()">
+        <input type="checkbox" class="phone-select rounded border-white/20" data-id="${p.id}" ${checked}
+          onchange="togglePhoneSelect(${p.id}, this.checked)">
+      </td>
+      <td class="px-4 py-3.5 font-medium text-white cursor-pointer" onclick="viewPhone(${p.id})">${esc(p.model)}</td>
+      <td class="px-4 py-3.5 cursor-pointer" onclick="viewPhone(${p.id})">${statusBadge(p.status)}</td>
+      <td class="px-4 py-3.5 cursor-pointer" onclick="viewPhone(${p.id})">${typeBadge(p.type)}</td>
+      <td class="px-4 py-3.5 text-slate-400 cursor-pointer" onclick="viewPhone(${p.id})">${esc(p.condition)||'—'}</td>
+      <td class="px-4 py-3.5 text-slate-400 text-xs font-mono cursor-pointer" onclick="viewPhone(${p.id})">${esc(p.imei)||'—'}</td>
+      <td class="px-4 py-3.5 text-right tabular-nums font-medium cursor-pointer" onclick="viewPhone(${p.id})">${fmt(p.purchase_price)}</td>
+      <td class="px-4 py-3.5 text-right tabular-nums ${sold ? 'text-emerald-400' : 'text-slate-600'} cursor-pointer" onclick="viewPhone(${p.id})">${sold ? fmt(p.sale_price) : '—'}</td>
+      <td class="px-4 py-3.5 text-right tabular-nums ${sold && (p.receivable_amount || 0) > 0 ? 'text-amber-400' : 'text-slate-600'} cursor-pointer" onclick="viewPhone(${p.id})">${sold && (p.receivable_amount || 0) > 0 ? fmt(p.receivable_amount) : sold ? fmt(0) : '—'}</td>
+      <td class="px-4 py-3.5 text-right tabular-nums ${p.net_profit != null && p.net_profit >= 0 ? 'text-emerald-400/90' : p.net_profit != null ? 'text-red-400' : 'text-slate-600'} cursor-pointer" onclick="viewPhone(${p.id})">${p.net_profit != null ? fmt(p.net_profit) : '—'}</td>
+      <td class="px-4 py-3.5 text-slate-400 cursor-pointer" onclick="viewPhone(${p.id})">${esc(party)}</td>
       <td class="px-4 py-3.5 text-right"><div class="flex justify-end gap-1">${actions(p.id, sold)}</div></td>
     </tr>`;
   };
+
+  window.togglePhoneSelect = (id, on) => {
+    if (on) selectedIds.add(id); else selectedIds.delete(id);
+    updateBulkBar();
+    renderInventoryTable();
+  };
+
+  function updateBulkBar() {
+    const bar = document.getElementById('bulk-actions');
+    const n = selectedIds.size;
+    bar.classList.toggle('hidden', n === 0);
+    document.getElementById('bulk-count').textContent = `${n} selected`;
+  }
+
+  function getSelectedPhones() {
+    return phones.filter(p => selectedIds.has(p.id));
+  }
+
+  function getPageItems() {
+    const filtered = getFilteredPhones();
+    const start = (currentPage - 1) * PAGE_SIZE;
+    return filtered.slice(start, start + PAGE_SIZE);
+  }
+
+  function syncSelectAllCheckbox() {
+    const pageItems = getPageItems();
+    const el = document.getElementById('select-all-page');
+    if (!el) return;
+    if (!pageItems.length) { el.checked = false; el.indeterminate = false; return; }
+    const selectedOnPage = pageItems.filter(p => selectedIds.has(p.id)).length;
+    el.checked = selectedOnPage === pageItems.length;
+    el.indeterminate = selectedOnPage > 0 && selectedOnPage < pageItems.length;
+  }
 
   function getFilteredPhones() {
     const q = searchQuery.toLowerCase().trim();
@@ -386,6 +455,7 @@
     document.getElementById('page-info').textContent = `Showing ${from}–${to} of ${total}`;
     document.getElementById('btn-prev-page').disabled = currentPage <= 1;
     document.getElementById('btn-next-page').disabled = currentPage >= totalPages;
+    syncSelectAllCheckbox();
   }
 
   async function loadPartners() {
@@ -783,6 +853,89 @@
   });
   document.getElementById('expense-overlay').addEventListener('click', () => closeModal('expense-overlay', 'expense-modal'));
   document.getElementById('expense-close-x')?.addEventListener('click', () => closeModal('expense-overlay', 'expense-modal'));
+
+  document.getElementById('select-all-page')?.addEventListener('change', (e) => {
+    getPageItems().forEach(p => {
+      if (e.target.checked) selectedIds.add(p.id); else selectedIds.delete(p.id);
+    });
+    updateBulkBar();
+    renderInventoryTable();
+  });
+
+  document.getElementById('btn-bulk-clear')?.addEventListener('click', () => {
+    selectedIds.clear();
+    updateBulkBar();
+    renderInventoryTable();
+  });
+
+  document.getElementById('btn-bulk-delete')?.addEventListener('click', async () => {
+    const ids = [...selectedIds];
+    if (!ids.length) return;
+    if (!confirm(`Delete ${ids.length} selected phone record(s)?`)) return;
+    try {
+      await apiFetch('/api/phones/bulk-delete', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ phone_ids: ids }),
+      });
+      selectedIds.clear();
+      updateBulkBar();
+      toast(`${ids.length} phone(s) deleted`);
+      loadPhones();
+    } catch (err) { toast(err.message, 'error'); }
+  });
+
+  function openBulkSoldModal() {
+    const selected = getSelectedPhones().filter(p => p.status !== 'Sold');
+    if (!selected.length) {
+      toast('Select phones that are not already sold', 'error');
+      return;
+    }
+    document.getElementById('bulk-sold-list').innerHTML = selected.map(p => `
+      <div class="flex flex-col sm:flex-row sm:items-center gap-2 p-3 rounded-lg border border-white/8 bg-slate-900/40">
+        <div class="flex-1 min-w-0">
+          <p class="font-medium text-white truncate">${esc(p.model)}</p>
+          <p class="text-xs text-slate-500">${esc(p.imei) || 'No IMEI'} · Cost ${fmt(p.purchase_price)}</p>
+        </div>
+        <div class="sm:w-40">
+          <label class="block text-xs text-slate-500 mb-1">Sale Price *</label>
+          <input type="number" required min="1" step="1" class="input-field bulk-sale-price"
+            data-id="${p.id}" placeholder="0">
+        </div>
+      </div>`).join('');
+    openModal('bulk-sold-overlay', 'bulk-sold-modal');
+  }
+
+  document.getElementById('btn-bulk-sold')?.addEventListener('click', openBulkSoldModal);
+  document.getElementById('bulk-sold-cancel')?.addEventListener('click', () => closeModal('bulk-sold-overlay', 'bulk-sold-modal'));
+  document.getElementById('bulk-sold-cancel-x')?.addEventListener('click', () => closeModal('bulk-sold-overlay', 'bulk-sold-modal'));
+  document.getElementById('bulk-sold-overlay')?.addEventListener('click', () => closeModal('bulk-sold-overlay', 'bulk-sold-modal'));
+
+  document.getElementById('bulk-sold-form')?.addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const items = [...document.querySelectorAll('.bulk-sale-price')].map(el => ({
+      phone_id: parseInt(el.dataset.id, 10),
+      sale_price: el.value,
+    }));
+    if (items.some(i => !i.sale_price || parseFloat(i.sale_price) <= 0)) {
+      toast('Enter a sale price for every phone', 'error');
+      return;
+    }
+    try {
+      const res = await apiFetch('/api/phones/bulk-sold', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ items }),
+      });
+      closeModal('bulk-sold-overlay', 'bulk-sold-modal');
+      selectedIds.clear();
+      updateBulkBar();
+      const n = (res.updated || []).length;
+      toast(n ? `${n} phone(s) marked sold` : 'Done');
+      if (res.errors?.length) toast(res.errors.join('; '), 'error');
+      loadPhones();
+    } catch (err) { toast(err.message, 'error'); }
+  });
 
   loadPartners();
   loadPaymentBanks();
