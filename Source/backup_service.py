@@ -18,6 +18,7 @@ BACKUP_INTERVAL_SECONDS = int(
 def backup_user_data(user_id: int, *, force: bool = False) -> str | None:
     """Copy the SQLite database to the user's configured backup folder."""
     with db.db_session() as conn:
+        db.ensure_user_backup_path(conn, user_id)
         settings = db.get_storage_settings(conn, user_id)
         if not force and not settings.get("auto_backup_enabled", True):
             return None
@@ -28,7 +29,8 @@ def backup_user_data(user_id: int, *, force: bool = False) -> str | None:
         dest_dir = Path(backup_dir)
         dest_dir.mkdir(parents=True, exist_ok=True)
         stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        dest = dest_dir / f"crm_backup_{stamp}.db"
+        username = db.backup_username_slug(conn, user_id)
+        dest = dest_dir / f"{username}_crm_backup_{stamp}.db"
         shutil.copy2(db.DB_PATH, dest)
 
         db.update_user_settings(conn, user_id, {
@@ -37,12 +39,12 @@ def backup_user_data(user_id: int, *, force: bool = False) -> str | None:
         return str(dest)
 
 
-def backup_all_users() -> list[str]:
+def backup_all_users(*, force: bool = False) -> list[str]:
     created: list[str] = []
     with db.db_session() as conn:
         users = conn.execute("SELECT id FROM users").fetchall()
     for row in users:
-        path = backup_user_data(row["id"])
+        path = backup_user_data(row["id"], force=force)
         if path:
             created.append(path)
     return created
@@ -56,6 +58,16 @@ def list_backup_files(user_id: int) -> list[dict]:
 def restore_from_backup(backup_path: str) -> str:
     """Replace live database with a backup copy. Returns path to safety copy."""
     return db.restore_database_from_backup(backup_path)
+
+
+def run_startup_backups() -> list[str]:
+    """Create Data/Backups on first run and save an immediate backup when possible."""
+    try:
+        with db.db_session() as conn:
+            db.ensure_customer_data_layout(conn)
+        return backup_all_users(force=True)
+    except Exception:
+        return []
 
 
 def start_auto_backup_thread() -> None:

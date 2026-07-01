@@ -1,3 +1,7 @@
 venv/
 __pycache__/
 .DS_Store
+crm.db
+build/
+dist/
+Phone Reseller CRM.app/

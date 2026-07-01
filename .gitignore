@@ -10,5 +10,6 @@ Source/venv/
 Source/build/
 Source/dist/
 Source/Phone Reseller CRM.app/
+Source/crm.db
 
-# Note: crm.db and Customer Copy/ are intentionally tracked (requested)
+# Note: Customer Copy/ is intentionally tracked (requested)

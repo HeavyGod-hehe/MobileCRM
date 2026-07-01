@@ -1,5 +1,8 @@
+from __future__ import annotations
+
 import json
 import random
+import re
 import shutil
 import sqlite3
 import os
@@ -11,16 +14,37 @@ from pathlib import Path
 from werkzeug.security import check_password_hash, generate_password_hash
 
 
+def _app_bundle_dir() -> Path:
+    if getattr(sys, "frozen", False):
+        return Path(sys.executable).resolve().parent
+    return Path(__file__).resolve().parent
+
+
+def customer_data_dir() -> Path | None:
+    """Customer Copy live data folder (next to the .app bundle)."""
+    if not getattr(sys, "frozen", False):
+        return None
+    return _app_bundle_dir() / "Data"
+
+
+def default_backup_dir() -> Path | None:
+    data_dir = customer_data_dir()
+    if not data_dir:
+        return None
+    return data_dir / "Backups"
+
+
 def _resolve_db_path() -> Path:
     env_path = os.environ.get("CRM_DB_PATH")
     if env_path:
         return Path(env_path)
     if getattr(sys, "frozen", False):
-        return Path(sys.executable).parent / "crm.db"
+        return customer_data_dir() / "crm.db"
     return Path(__file__).parent / "crm.db"
 
 
 DB_PATH = _resolve_db_path()
+_CUSTOMER_LAYOUT_READY = False
 PASSWORD_HASH_METHOD = "pbkdf2:sha256"
 
 PHONE_STATUSES = ("Bought", "Sold", "In Repair", "Returned to Supplier")
@@ -205,6 +229,7 @@ def init_db():
                 (key, value),
             )
         _migrate_multi_user(conn)
+        ensure_customer_data_layout(conn)
 
 
 def _column_exists(conn, table, column):
@@ -568,6 +593,57 @@ def get_user(conn, user_id):
     return dict(row) if row else None
 
 
+def backup_username_slug(conn, user_id: int) -> str:
+    user = get_user(conn, user_id)
+    if not user:
+        return "user"
+    slug = re.sub(r"[^a-zA-Z0-9_-]+", "_", (user.get("username") or "user").strip())
+    return (slug[:32] or "user").lower()
+
+
+def ensure_user_backup_path(conn, user_id: int) -> str:
+    settings = get_user_settings(conn, user_id)
+    current = (settings.get("local_backup_path") or "").strip()
+    if current:
+        return current
+    backup_dir = default_backup_dir()
+    if not backup_dir:
+        return ""
+    backup_dir.mkdir(parents=True, exist_ok=True)
+    path = str(backup_dir)
+    update_user_settings(conn, user_id, {"local_backup_path": path})
+    return path
+
+
+def ensure_customer_data_layout(conn) -> None:
+    """Create Data/Backups for Customer Copy and migrate legacy crm.db if needed."""
+    global _CUSTOMER_LAYOUT_READY
+    if _CUSTOMER_LAYOUT_READY or not getattr(sys, "frozen", False):
+        return
+
+    data_dir = customer_data_dir()
+    backup_dir = default_backup_dir()
+    if not data_dir or not backup_dir:
+        return
+
+    data_dir.mkdir(parents=True, exist_ok=True)
+    backup_dir.mkdir(parents=True, exist_ok=True)
+
+    legacy_db = _app_bundle_dir() / "crm.db"
+    if legacy_db.is_file() and legacy_db.resolve() != DB_PATH.resolve():
+        if not DB_PATH.is_file():
+            shutil.move(str(legacy_db), str(DB_PATH))
+        else:
+            stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+            shutil.copy2(legacy_db, backup_dir / f"legacy_crm_backup_{stamp}.db")
+
+    users = conn.execute("SELECT id FROM users").fetchall()
+    for row in users:
+        ensure_user_backup_path(conn, row["id"])
+
+    _CUSTOMER_LAYOUT_READY = True
+
+
 def get_user_settings(conn, user_id):
     settings = dict(DEFAULT_SETTINGS)
     rows = conn.execute(
@@ -602,10 +678,15 @@ def get_shop_info(conn, user_id):
 
 def get_storage_settings(conn, user_id):
     """Return database path and user-configured backup preferences."""
+    if getattr(sys, "frozen", False):
+        ensure_user_backup_path(conn, user_id)
     settings = get_user_settings(conn, user_id)
+    backup_path = (settings.get("local_backup_path") or "").strip()
+    if not backup_path and default_backup_dir():
+        backup_path = str(default_backup_dir())
     return {
         "database_path": str(DB_PATH.resolve()),
-        "local_backup_path": settings.get("local_backup_path", ""),
+        "local_backup_path": backup_path,
         "google_drive_sync_enabled": settings.get("google_drive_sync_enabled", "false") == "true",
         "auto_backup_enabled": settings.get("auto_backup_enabled", "true") == "true",
         "last_backup_at": settings.get("last_backup_at", ""),
@@ -750,6 +831,7 @@ def register_user(conn, username, password, email="", shop_name=""):
         _copy_legacy_settings_to_user(conn, user_id)
         _seed_user_partners(conn, user_id)
     seed_expense_accounts(conn, user_id)
+    ensure_user_backup_path(conn, user_id)
     user = get_user(conn, user_id)
     return {
         "user_id": user["id"],
@@ -2633,7 +2715,7 @@ def list_backup_files(conn, user_id):
     if not path.is_dir():
         return []
     files = sorted(
-        path.glob("crm_backup_*.db"),
+        {*path.glob("*_crm_backup_*.db"), *path.glob("crm_backup_*.db")},
         key=lambda p: p.stat().st_mtime,
         reverse=True,
     )

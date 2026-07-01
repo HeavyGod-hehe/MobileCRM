@@ -60,6 +60,7 @@ def main() -> None:
     threading.Thread(target=open_browser_when_ready, args=(HOST, port), daemon=True).start()
 
     import backup_service
+    backup_service.run_startup_backups()
     backup_service.start_auto_backup_thread()
 
     from app import app

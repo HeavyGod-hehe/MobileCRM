@@ -68,7 +68,10 @@ FIRST TIME
   • Activation: copy Hardware ID → get key from vendor → Activate
   • Sign up with username, password & email
   • Settings → Shop Details (one place for name, address, WhatsApp)
-  • Settings → Backup folder → enable auto-backup
+  • Data folder is created automatically next to the app
+  • Your live database: Data/crm.db
+  • Auto backups: Data/Backups/username_crm_backup_DATE.db
+  • Backups include username, password & all business data
 
 FEATURES (v2.1)
 ───────────────

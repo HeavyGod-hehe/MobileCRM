@@ -208,6 +208,8 @@ def auth_signup():
         session["user_id"] = user["user_id"]
         session["username"] = user["username"]
         session["show_welcome"] = True
+        import backup_service
+        backup_service.backup_user_data(user["user_id"], force=True)
         return jsonify({"ok": True, **user})
     except ValueError as e:
         return jsonify({"error": str(e)}), 400
@@ -1275,6 +1277,7 @@ if __name__ == "__main__":
     print(f"  Server: {url}")
     print("  Press Ctrl+C to stop.\n")
 
+    backup_service.run_startup_backups()
     backup_service.start_auto_backup_thread()
     threading.Thread(target=_open_browser, args=(_HOST, port), daemon=True).start()
     app.run(host="0.0.0.0", port=port, debug=False, use_reloader=False)
