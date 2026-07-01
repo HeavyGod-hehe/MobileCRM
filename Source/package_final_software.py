@@ -1,50 +1,87 @@
 #!/usr/bin/env python3
-"""Package the latest Version007 CRM into ~/Downloads/Final Software."""
+"""Package full Version007 source for ~/Downloads/Final Software (build on Mac locally)."""
 
 from __future__ import annotations
 
 import shutil
-import sys
+import subprocess
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
-SOURCE = ROOT / "Source"
 OUT = Path.home() / "Downloads" / "Final Software"
-UNIVERSAL = ROOT / "Customer Copy Universal Mac"
-WINDOWS = ROOT / "Customer Windows Copy - Built"
+REPO_OUT = OUT / "MobileCRM"
+
+# Copy these top-level repo items (full source tree, no pre-built Mac .app).
+INCLUDE_ITEMS = (
+    "Source",
+    "README.md",
+    "README.txt",
+    "CUSTOMER_COPIES.md",
+    ".gitignore",
+)
+
+IGNORE = shutil.ignore_patterns("__pycache__", ".pytest_cache", "*.pyc", "build", "dist")
 
 
 def package() -> Path:
     if OUT.exists():
         shutil.rmtree(OUT)
     OUT.mkdir(parents=True)
+    REPO_OUT.mkdir(parents=True)
 
-    shutil.copytree(SOURCE, OUT / "Source")
-    if UNIVERSAL.is_dir():
-        shutil.copytree(UNIVERSAL, OUT / "Phone Reseller CRM (Mac Universal)")
-    if WINDOWS.is_dir():
-        shutil.copytree(WINDOWS, OUT / "Phone Reseller CRM (Windows)")
+    for name in INCLUDE_ITEMS:
+        src = ROOT / name
+        if src.exists():
+            dest = REPO_OUT / name
+            if src.is_dir():
+                shutil.copytree(src, dest, ignore=IGNORE)
+            else:
+                shutil.copy2(src, dest)
+
+    # Double-clickable Mac builder at the Final Software root.
+    builder_src = ROOT / "Source" / "BUILD ON MAC.command"
+    builder_dest = OUT / "BUILD ON MAC.command"
+    shutil.copy2(builder_src, builder_dest)
+    builder_dest.chmod(0o755)
 
     (OUT / "README.txt").write_text(
-        """Phone Reseller CRM — Final Software Package
-=============================================
+        """Phone Reseller CRM — Final Software (Mac)
+===========================================
 
-Mac (Intel + Apple Silicon):
-  Open folder: Phone Reseller CRM (Mac Universal)
-  Double-click: Phone Reseller CRM.app
+WHAT IS IN THIS FOLDER
+----------------------
+  MobileCRM/          Full Version007 source code from GitHub
+  BUILD ON MAC.command   Double-click to build the Mac app locally
 
-Windows:
-  Open folder: Phone Reseller CRM (Windows)
-  Double-click: Phone Reseller CRM\\Phone Reseller CRM.exe
+HOW TO BUILD ON YOUR MACBOOK
+----------------------------
+  1. Put this whole "Final Software" folder in:
+       ~/Downloads/Final Software
 
-Browser tip (Mac):
-  If you close the browser, double-click the app again to reopen CRM.
-  The server keeps running in the background until you use Settings → Close CRM.
+  2. Double-click:
+       BUILD ON MAC.command
 
-Developers:
-  Rebuild Mac universal app on macOS:
-    cd Source
-    python3 build_customer_universal_mac.py
+  3. Wait for the build to finish (a few minutes).
+
+  4. Open:
+       Phone Reseller CRM (Mac Universal)/Phone Reseller CRM.app
+
+WHY BUILD LOCALLY?
+------------------
+  macOS often blocks downloaded apps as "damaged" if they were built
+  on another computer. Building on your own Mac fixes that.
+
+IF macOS STILL BLOCKS THE APP
+-----------------------------
+  Open Terminal in the app folder and run:
+    xattr -cr "Phone Reseller CRM.app"
+    codesign --force --deep --sign - "Phone Reseller CRM.app"
+
+  Then right-click the app → Open → Open.
+
+BROWSER TIP
+-----------
+  Closed the browser? Double-click the app again to reopen CRM.
 """,
         encoding="utf-8",
     )
@@ -53,5 +90,19 @@ Developers:
     return OUT
 
 
-if __name__ == "__main__":
+def make_zip(zip_path: Path | None = None) -> Path:
     package()
+    zip_path = zip_path or Path("/tmp/Phone-Reseller-CRM-Source-v2.3.zip")
+    if zip_path.exists():
+        zip_path.unlink()
+    subprocess.run(
+        ["zip", "-r", "-y", str(zip_path), "."],
+        cwd=str(OUT),
+        check=True,
+    )
+    print(f"Zip ready: {zip_path}")
+    return zip_path
+
+
+if __name__ == "__main__":
+    make_zip()

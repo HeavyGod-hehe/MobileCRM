@@ -84,9 +84,12 @@ WRONG CHIP?
 
 FIRST TIME ON MAC
 ─────────────────
-  If macOS blocks the app:
+  This app is ad-hoc signed when built on your Mac.
+  If macOS still blocks it:
   1. Open Terminal in this folder
-  2. Run:  xattr -cr "Phone Reseller CRM.app"
+  2. Run:
+       xattr -cr "Phone Reseller CRM.app"
+       codesign --force --deep --sign - "Phone Reseller CRM.app"
   3. Right-click the app → Open → Open
 
 TROUBLESHOOTING
@@ -183,6 +186,11 @@ def build_mac_copy(arch: str, out: Path | None = None) -> Path:
     write_start_here(out, arch)
     (out / "license.json").write_text("{}\n", encoding="utf-8")
     verify_no_source(out)
+
+    app_bundle = out / "Phone Reseller CRM.app"
+    from mac_sign_app import prepare_mac_app
+
+    prepare_mac_app(app_bundle)
 
     print(f"\n✓ Customer Copy ready ({arch}):\n  {out}\n")
     return out

@@ -68,9 +68,12 @@ HOW TO START
 
 FIRST TIME ON MAC
 ─────────────────
-  If macOS blocks the app:
+  This app is ad-hoc signed when built on your Mac.
+  If macOS still blocks it:
   1. Open Terminal in this folder
-  2. Run:  xattr -cr "Phone Reseller CRM.app"
+  2. Run:
+       xattr -cr "Phone Reseller CRM.app"
+       codesign --force --deep --sign - "Phone Reseller CRM.app"
   3. Right-click the app → Open → Open
 
 TROUBLESHOOTING
@@ -127,6 +130,17 @@ def merge_arch_copies(arm_dir: Path, intel_dir: Path, out: Path) -> Path:
     for path in out.iterdir():
         if path.suffix == ".py" and path.name in SOURCE_NAMES:
             raise RuntimeError(f"Source file must not be shipped: {path}")
+
+    from mac_sign_app import prepare_mac_app
+
+    prepare_mac_app(out / "Phone Reseller CRM.app")
+    picker = out / "FolderPicker"
+    if picker.is_file():
+        from mac_sign_app import strip_quarantine
+        import subprocess
+
+        strip_quarantine(picker)
+        subprocess.run(["codesign", "--force", "--sign", "-", str(picker)], check=False)
 
     print(f"\n✓ Universal Customer Copy ready:\n  {out}\n")
     return out
