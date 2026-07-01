@@ -1,0 +1,1373 @@
+{% extends "base.html" %}
+{% set active = 'inventory' %}
+{% block title %}Inventory — Welcome, {{ current_username }}{% endblock %}
+
+{% block head %}
+<script src="https://unpkg.com/html5-qrcode@2.3.8/html5-qrcode.min.js"></script>
+{% endblock %}
+
+{% block content %}
+<section class="space-y-6">
+  <div class="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
+    <div>
+      <h1 class="text-2xl font-bold text-white tracking-tight">Inventory</h1>
+      <p class="text-slate-400 text-sm mt-1">Track bought, repair &amp; sold phones</p>
+    </div>
+    <button id="btn-add" class="btn btn-primary">
+      <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2.5" d="M12 4v16m8-8H4"/></svg>
+      Add New Phone
+    </button>
+  </div>
+
+  <div class="stagger space-y-5">
+    <div class="section-panel" id="panel-inventory">
+      <div class="section-header flex-wrap gap-3">
+        <div class="flex items-center gap-2 flex-1 min-w-0">
+          <div class="w-2 h-2 rounded-full bg-emerald-400"></div>
+          <h3 class="text-sm font-semibold text-emerald-200">Phone Inventory</h3>
+          <span id="count-all" class="badge-count bg-emerald-500/20 text-emerald-300 border border-emerald-500/20">0</span>
+        </div>
+        <div class="w-full sm:w-auto sm:min-w-[220px]">
+          <input type="search" id="inventory-search" class="input-field text-sm" placeholder="Search IMEI, model…" autocomplete="off">
+        </div>
+        <div id="bulk-actions" class="hidden w-full sm:w-auto flex flex-wrap items-center gap-2 no-print">
+          <span id="bulk-count" class="text-xs text-slate-400 font-medium">0 selected</span>
+          <button type="button" id="btn-bulk-sold" class="btn btn-primary btn-sm">Mark Sold</button>
+          <button type="button" id="btn-bulk-delete" class="btn btn-danger btn-sm">Delete</button>
+          <button type="button" id="btn-bulk-clear" class="btn btn-ghost btn-sm">Clear</button>
+        </div>
+      </div>
+
+      <div class="px-4 pt-3 pb-2">
+        <div class="filter-tabs" id="status-tabs">
+          <button type="button" class="filter-tab active" data-status="All">All</button>
+          <button type="button" class="filter-tab" data-status="Bought">Bought</button>
+          <button type="button" class="filter-tab" data-status="Sold">Sold</button>
+          <button type="button" class="filter-tab" data-status="In Repair">In Repair</button>
+        </div>
+      </div>
+
+      <div class="overflow-x-auto inventory-table-wrap">
+        <table class="w-full text-sm">
+          <thead>
+            <tr class="text-slate-500 text-left text-xs uppercase tracking-wider">
+              <th class="px-3 py-3 font-medium w-10 no-print">
+                <input type="checkbox" id="select-all-page" class="rounded border-white/20" title="Select all on this page">
+              </th>
+              <th class="px-4 py-3 font-medium">Model</th>
+              <th class="px-4 py-3 font-medium">Status</th>
+              <th class="px-4 py-3 font-medium">Type</th>
+              <th class="px-4 py-3 font-medium">Condition</th>
+              <th class="px-4 py-3 font-medium">IMEI</th>
+              <th class="px-4 py-3 font-medium">IMEI 2</th>
+              <th class="px-4 py-3 font-medium text-right">Cost</th>
+              <th class="px-4 py-3 font-medium text-right">Total Cost</th>
+              <th class="px-4 py-3 font-medium text-right">Sold Price</th>
+              <th class="px-4 py-3 font-medium text-right">Receivable</th>
+              <th class="px-4 py-3 font-medium text-right">Profit</th>
+              <th class="px-4 py-3 font-medium">Party</th>
+              <th class="px-4 py-3 font-medium text-right">Actions</th>
+            </tr>
+          </thead>
+          <tbody id="inventory-tbody" class="divide-y divide-white/5"></tbody>
+        </table>
+        <div id="empty-inventory" class="hidden empty-state">No phones match your search</div>
+      </div>
+
+      <div class="pagination-bar no-print">
+        <span id="page-info">Showing 0 of 0</span>
+        <div class="flex gap-2">
+          <button type="button" id="btn-prev-page" class="btn btn-ghost btn-sm" disabled>Previous</button>
+          <button type="button" id="btn-next-page" class="btn btn-ghost btn-sm" disabled>Next</button>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- Bulk Sold Modal -->
+<div id="bulk-sold-overlay" class="modal-overlay"></div>
+<div id="bulk-sold-modal" class="modal-wrap">
+  <div class="modal-panel modal-panel-wide">
+    <div class="p-6 border-b border-white/8 flex items-center justify-between">
+      <h3 class="text-lg font-semibold text-white">Mark Selected as Sold</h3>
+      <button type="button" id="bulk-sold-cancel-x" class="btn btn-ghost btn-icon text-slate-400">
+        <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/></svg>
+      </button>
+    </div>
+    <form id="bulk-sold-form" class="p-6 space-y-4 max-h-[65vh] overflow-y-auto">
+      <p class="text-sm text-slate-400">Enter sale price per phone. Profit is calculated per device (sale price minus total cost including expenses).</p>
+      <div class="flex flex-col sm:flex-row gap-3 p-3 rounded-lg border border-white/8 bg-slate-900/40">
+        <div class="flex-1">
+          <label class="block text-xs text-slate-500 mb-1">Same sale price for all (per phone)</label>
+          <input type="number" id="bulk-sale-unit-price" min="0" step="1" class="input-field" placeholder="e.g. 125000">
+        </div>
+        <div class="flex items-end">
+          <button type="button" id="bulk-apply-unit-price" class="btn btn-ghost btn-sm">Apply to all</button>
+        </div>
+      </div>
+      <div id="bulk-sold-list" class="space-y-3"></div>
+      <div class="flex gap-3 pt-2 border-t border-white/8">
+        <button type="submit" class="btn btn-primary flex-1">Confirm Sold</button>
+        <button type="button" id="bulk-sold-cancel" class="btn btn-ghost">Cancel</button>
+      </div>
+    </form>
+  </div>
+</div>
+
+<!-- Phone Form Modal -->
+<div id="modal-overlay" class="modal-overlay"></div>
+<div id="phone-modal" class="modal-wrap modal-wrap-scroll">
+  <div class="modal-panel modal-panel-form">
+    <div class="modal-header">
+      <h3 id="modal-title" class="text-lg font-semibold text-white flex-1 min-w-0 truncate">Add New Phone</h3>
+      <button type="button" id="btn-cancel-x" class="btn btn-ghost btn-icon text-slate-400 shrink-0" aria-label="Close">
+        <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/></svg>
+      </button>
+    </div>
+    <form id="phone-form" class="p-6 space-y-5">
+      <input type="hidden" id="phone-id">
+      <div class="grid grid-cols-2 gap-4">
+        <div class="col-span-2">
+          <label class="block text-xs font-medium text-slate-400 mb-1.5">iPhone Model *</label>
+          <input type="text" id="f-model" required placeholder="e.g. iPhone 13" class="input-field">
+        </div>
+        <div id="quantity-field">
+          <label class="block text-xs font-medium text-slate-400 mb-1.5">Quantity</label>
+          <input type="number" id="f-quantity" min="1" step="1" value="1" class="input-field">
+        </div>
+        <div>
+          <label class="block text-xs font-medium text-slate-400 mb-1.5">Condition</label>
+          <select id="f-condition" class="input-field">
+            <option value="">Select condition</option>
+          </select>
+        </div>
+        <div>
+          <label class="block text-xs font-medium text-slate-400 mb-1.5">Box Status</label>
+          <select id="f-box-status" class="input-field">
+            <option value="">Select</option>
+            <option value="With Box">With Box</option>
+            <option value="Without Box">Without Box</option>
+          </select>
+        </div>
+        <div>
+          <label class="block text-xs font-medium text-slate-400 mb-1.5">Battery Health</label>
+          <input type="text" id="f-battery" placeholder="e.g. 92%" class="input-field">
+        </div>
+        <div>
+          <label class="block text-xs font-medium text-slate-400 mb-1.5">Variant</label>
+          <select id="f-variant" class="input-field">
+            <option value="">Select variant</option>
+            <option value="Physical + eSIM">Physical + eSIM</option>
+            <option value="eSIM + eSIM">eSIM + eSIM</option>
+            <option value="Dual Physical SIM">Dual Physical SIM</option>
+          </select>
+        </div>
+        <div>
+          <label class="block text-xs font-medium text-slate-400 mb-1.5">Type *</label>
+          <select id="f-type" required class="input-field">
+            <option value="PTA">PTA</option>
+            <option value="NON-PTA">NON-PTA</option>
+            <option value="JV">JV</option>
+          </select>
+        </div>
+        <div>
+          <label class="block text-xs font-medium text-slate-400 mb-1.5">Section *</label>
+          <select id="f-status" required class="input-field">
+            <option value="Bought">Bought</option>
+            <option value="Sold">Sold</option>
+            <option value="In Repair">In Repair</option>
+          </select>
+        </div>
+        <div>
+          <label class="block text-xs font-medium text-slate-400 mb-1.5">Purchase Price (per phone) *</label>
+          <input type="number" id="f-purchase-price" required min="0" step="1" class="input-field">
+        </div>
+        <div id="qty-total-wrap" class="hidden col-span-2">
+          <p class="text-sm text-orange-300/90">Total purchase cost: <span id="qty-total-purchase" class="font-semibold">—</span></p>
+          <p class="text-xs text-slate-500">Per-phone price × quantity</p>
+        </div>
+        <div>
+          <label class="block text-xs font-medium text-slate-400 mb-1.5">How Acquired *</label>
+          <select id="f-acquisition-type" class="input-field">
+            <option value="purchase">Purchase</option>
+            <option value="borrow">Borrow from Shopkeeper</option>
+          </select>
+        </div>
+        <div id="f-payable-wrap">
+          <label class="block text-xs font-medium text-slate-400 mb-1.5">Purchase Udhar (payable)</label>
+          <input type="number" id="f-payable-amount" min="0" step="1" value="0" class="input-field" placeholder="Amount still owed">
+          <p id="borrow-hint" class="hidden text-xs text-amber-400/90 mt-1">Borrowed phones post full value to the shopkeeper account (no cash out).</p>
+        </div>
+        <div>
+          <label class="block text-xs font-medium text-slate-400 mb-1.5">Purchase Date &amp; Time</label>
+          <input type="datetime-local" id="f-purchase-date" class="input-field">
+        </div>
+        <div id="purchase-payment-section" class="col-span-2">
+          <label class="block text-xs font-medium text-slate-400 mb-1.5">Purchase Payment Method *</label>
+          <select id="f-purchase-payment" required class="input-field">
+            <option value="cash">Cash</option>
+          </select>
+        </div>
+        <div id="f-purchase-bank-wrap" class="col-span-2 hidden">
+          <label class="block text-xs font-medium text-slate-400 mb-1.5">Purchase Bank Account *</label>
+          <select id="f-purchase-bank" class="input-field"></select>
+        </div>
+      </div>
+
+      <div id="imei-section" class="border-t border-white/8 pt-4">
+        <p class="text-xs font-semibold uppercase tracking-wider text-slate-500 mb-3">IMEI Numbers — 1 Phone = 2 IMEI</p>
+        <p id="imei-hint" class="text-xs text-slate-600 mb-3">Enter both IMEI numbers for each device (dual SIM phones).</p>
+        <div id="single-imei-field">
+          <div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
+            <div>
+              <label class="block text-xs font-medium text-slate-400 mb-1.5" for="f-imei">IMEI 1</label>
+              <div class="flex gap-2">
+                <input type="text" id="f-imei" placeholder="15-digit IMEI" class="input-field flex-1" inputmode="numeric" autocomplete="off">
+                <button type="button" id="btn-scan-imei-inv" class="btn btn-ghost btn-sm shrink-0">Scan</button>
+              </div>
+            </div>
+            <div>
+              <label class="block text-xs font-medium text-slate-400 mb-1.5" for="f-imei2">IMEI 2 *</label>
+              <input type="text" id="f-imei2" placeholder="Second IMEI" class="input-field" inputmode="numeric" autocomplete="off">
+            </div>
+          </div>
+        </div>
+        <div id="imei-bulk-section" class="hidden">
+          <p class="text-xs text-slate-500 mb-2">One IMEI field per device (quantity &gt; 1)</p>
+          <div id="imei-fields" class="imei-fields-list space-y-2"></div>
+        </div>
+      </div>
+
+      <div class="border-t border-white/8 pt-4">
+        <p class="text-xs font-semibold uppercase tracking-wider text-slate-500 mb-3">Supplier</p>
+        <div class="grid grid-cols-2 gap-4">
+          <div>
+            <label class="block text-xs font-medium text-slate-400 mb-1.5">Supplier Name</label>
+            <input type="text" id="f-supplier-name" class="input-field">
+          </div>
+          <div>
+            <label class="block text-xs font-medium text-slate-400 mb-1.5">Supplier Contact</label>
+            <input type="text" id="f-supplier-contact" class="input-field">
+          </div>
+          <div class="sm:col-span-2">
+            <label class="block text-xs font-medium text-slate-400 mb-1.5">Supplier / Shopkeeper Account</label>
+            <div id="f-supplier-account-wrap"></div>
+            <p class="text-xs text-slate-600 mt-1">Required when borrowing — links payable to accounts &amp; cash book</p>
+          </div>
+        </div>
+      </div>
+
+      <div id="partner-invest-section" class="border-t border-white/8 pt-4">
+        <p class="text-xs font-semibold uppercase tracking-wider text-slate-500 mb-3">Partner Investment</p>
+        <div id="partner-invest-fields" class="space-y-2"></div>
+      </div>
+
+      <div id="intake-expense-section" class="border-t border-white/8 pt-4">
+        <p class="text-xs font-semibold uppercase tracking-wider text-slate-500 mb-3">Initial Expense (optional)</p>
+        <div class="grid grid-cols-2 gap-4">
+          <div>
+            <label class="block text-xs font-medium text-slate-400 mb-1.5">Amount</label>
+            <input type="number" id="f-expense-amount" min="0" step="1" class="input-field" placeholder="0">
+          </div>
+          <div>
+            <label class="block text-xs font-medium text-slate-400 mb-1.5">Description</label>
+            <input type="text" id="f-expense-desc" class="input-field" placeholder="e.g. Screen protector">
+          </div>
+        </div>
+      </div>
+
+      <div id="edit-expense-section" class="hidden border-t border-white/8 pt-4">
+        <p class="text-xs font-semibold uppercase tracking-wider text-slate-500 mb-3">Logged Expenses</p>
+        <div id="edit-expense-list" class="space-y-2 mb-2"></div>
+      </div>
+
+      <div id="total-costing-preview" class="border-t border-white/8 pt-4">
+        <div class="p-4 rounded-xl bg-orange-500/10 border border-orange-500/20">
+          <p class="text-xs font-semibold uppercase text-orange-300 mb-1">Total Costing</p>
+          <p id="total-costing-value" class="text-2xl font-bold text-orange-200">—</p>
+          <p id="total-costing-breakdown" class="text-xs text-slate-500 mt-1">Purchase + expenses</p>
+        </div>
+      </div>
+
+      <div id="sale-section" class="border-t border-white/8 pt-4 hidden">
+        <p class="text-xs font-semibold uppercase tracking-wider text-slate-500 mb-3">Sale Details</p>
+        <div class="grid grid-cols-2 gap-4">
+          <div>
+            <label class="block text-xs font-medium text-slate-400 mb-1.5">Buyer Name</label>
+            <input type="text" id="f-buyer-name" class="input-field">
+          </div>
+          <div>
+            <label class="block text-xs font-medium text-slate-400 mb-1.5">Buyer Contact</label>
+            <input type="text" id="f-buyer-contact" class="input-field">
+          </div>
+          <div>
+            <label class="block text-xs font-medium text-slate-400 mb-1.5">Sale Price</label>
+            <input type="number" id="f-sale-price" min="0" step="1" class="input-field">
+          </div>
+          <div>
+            <label class="block text-xs font-medium text-slate-400 mb-1.5">Receivable Amount (Credit)</label>
+            <input type="number" id="f-receivable" min="0" step="1" value="0" class="input-field">
+          </div>
+          <div class="sm:col-span-2">
+            <label class="block text-xs font-medium text-slate-400 mb-1.5">Buyer Account (for sale credit)</label>
+            <div id="f-buyer-account-wrap"></div>
+            <p class="text-xs text-slate-600 mt-1">Required when receivable &gt; 0 — syncs to accounts &amp; cash book</p>
+          </div>
+          <div>
+            <label class="block text-xs font-medium text-slate-400 mb-1.5">Sale Date &amp; Time</label>
+            <input type="datetime-local" id="f-sale-date" class="input-field">
+          </div>
+          <div class="col-span-2">
+            <label class="block text-xs font-medium text-slate-400 mb-1.5">Sale Payment Method *</label>
+            <select id="f-sale-payment" class="input-field">
+              <option value="cash">Cash</option>
+            </select>
+          </div>
+          <div id="f-sale-bank-wrap" class="col-span-2 hidden">
+            <label class="block text-xs font-medium text-slate-400 mb-1.5">Sale Bank Account *</label>
+            <select id="f-sale-bank" class="input-field"></select>
+          </div>
+        </div>
+        <div id="net-profit-preview" class="hidden mt-3 p-3 rounded-lg bg-emerald-500/10 border border-emerald-500/20 text-sm text-emerald-300 font-medium">
+          Net Profit: <span id="net-profit-value">—</span>
+        </div>
+      </div>
+
+      <div class="flex gap-3 pt-1">
+        <button type="submit" id="btn-save" class="btn btn-primary flex-1">Save Phone</button>
+        <button type="button" id="btn-cancel" class="btn btn-ghost">Cancel</button>
+      </div>
+    </form>
+  </div>
+</div>
+
+<!-- Phone Detail Modal -->
+<div id="detail-overlay" class="modal-overlay"></div>
+<div id="detail-modal" class="modal-wrap">
+  <div class="modal-panel">
+    <div class="modal-header">
+      <h3 id="detail-title" class="text-lg font-semibold text-white">Phone Details</h3>
+      <button type="button" onclick="closeModal('detail-overlay','detail-modal')" class="btn btn-ghost btn-icon text-slate-400" aria-label="Close">
+        <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/></svg>
+      </button>
+    </div>
+    <div id="detail-body" class="p-6 space-y-4"></div>
+  </div>
+</div>
+
+<!-- Add Expense Modal -->
+<div id="expense-overlay" class="modal-overlay"></div>
+<div id="expense-modal" class="modal-wrap">
+  <div class="modal-panel modal-panel-sm">
+    <div class="modal-header">
+      <h3 class="text-lg font-semibold text-white">Add Expense</h3>
+      <button type="button" id="expense-close-x" class="btn btn-ghost btn-icon text-slate-400" aria-label="Close">
+        <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/></svg>
+      </button>
+    </div>
+    <form id="expense-form" class="p-6 space-y-4">
+      <input type="hidden" id="expense-phone-id">
+      <div id="expense-phone-summary" class="p-3 rounded-lg bg-slate-900/60 border border-white/8 text-sm space-y-1">
+        <p id="expense-phone-title" class="font-semibold text-white">—</p>
+        <p class="text-slate-400">Purchase: <span id="expense-purchase-cost" class="text-white">—</span></p>
+        <p class="text-slate-400">Existing expenses: <span id="expense-existing-total" class="text-red-300">—</span></p>
+        <p class="text-orange-300 font-semibold pt-1">Total after save: <span id="expense-new-total">—</span></p>
+      </div>
+      <div>
+        <label class="block text-xs font-medium text-slate-400 mb-1.5">Amount *</label>
+        <input type="number" id="expense-amount" required min="1" step="1" class="input-field">
+      </div>
+      <div>
+        <label class="block text-xs font-medium text-slate-400 mb-1.5">Description</label>
+        <input type="text" id="expense-desc" class="input-field" placeholder="e.g. Repair cost">
+      </div>
+      <div>
+        <label class="block text-xs font-medium text-slate-400 mb-1.5">Expense Date</label>
+        <input type="datetime-local" id="expense-date" class="input-field">
+      </div>
+      <div>
+        <label class="block text-xs font-medium text-slate-400 mb-1.5">Account (optional)</label>
+        <div id="expense-account-wrap"></div>
+        <p class="text-xs text-slate-600 mt-1">Default: No Account</p>
+      </div>
+      <button type="submit" class="btn btn-primary w-full">Save Expense</button>
+    </form>
+  </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+  let phones = [];
+  let partners = [];
+  let paymentBanks = [];
+  let activeStatus = 'All';
+  let searchQuery = '';
+  let currentPage = 1;
+  const PAGE_SIZE = 25;
+  let selectedIds = new Set();
+  let formExistingExpenseTotal = 0;
+  let expenseModalPurchase = 0;
+  let expenseModalExisting = 0;
+  let expenseModalPhoneId = null;
+  let expenseEditId = null;
+  let supplierAccountPicker = null;
+  let buyerAccountPicker = null;
+  let expenseAccountPicker = null;
+  let inventoryAccounts = [];
+  const saleSection = document.getElementById('sale-section');
+
+  function localDatetimeValue() {
+    const d = new Date();
+    d.setMinutes(d.getMinutes() - d.getTimezoneOffset());
+    return d.toISOString().slice(0, 16);
+  }
+
+  function toDatetimeLocal(value) {
+    if (!value) return localDatetimeValue();
+    const text = String(value).trim().replace(' ', 'T');
+    if (text.length >= 16) return text.slice(0, 16);
+    if (text.length === 10) return `${text}T12:00`;
+    return localDatetimeValue();
+  }
+
+  function formatImeiDisplay(p) {
+    const parts = [p.imei, p.imei2].filter(Boolean);
+    return parts.length ? parts.join(' / ') : '—';
+  }
+
+  const acquisitionBadge = (p) => {
+    if ((p.acquisition_type || 'purchase') === 'borrow') {
+      return '<span class="badge-count bg-violet-500/20 text-violet-300 border border-violet-500/20 ml-1">Borrowed</span>';
+    }
+    return '';
+  };
+
+  const statusBadge = (status) => {
+    const colors = {
+      'Bought': 'bg-blue-500/20 text-blue-300 border-blue-500/20',
+      'Sold': 'bg-emerald-500/20 text-emerald-300 border-emerald-500/20',
+      'In Repair': 'bg-amber-500/20 text-amber-300 border-amber-500/20',
+      'Returned to Supplier': 'bg-red-500/20 text-red-300 border-red-500/20',
+    };
+    const cls = colors[status] || 'bg-slate-500/20 text-slate-300';
+    return `<span class="badge-count ${cls}">${esc(status)}</span>`;
+  };
+
+  CONDITION_OPTIONS.forEach(c => {
+    document.getElementById('f-condition').innerHTML += `<option value="${c}">${c}</option>`;
+  });
+
+  const typeBadge = (type) => {
+    const cls = { 'PTA': 'type-pta', 'NON-PTA': 'type-nonpta', 'JV': 'type-jv' }[type] || '';
+    return `<span class="type-badge ${cls}">${type}</span>`;
+  };
+
+  const actions = (id, sold=false) => sold ? `
+    <button onclick="event.stopPropagation();viewPhone(${id})" class="action-pill edit">View</button>
+    <button onclick="event.stopPropagation();editPhone(${id})" class="action-pill edit">Edit</button>
+    <button onclick="event.stopPropagation();deletePhone(${id})" class="action-pill delete">Delete</button>` : `
+    <button onclick="event.stopPropagation();markAsSold(${id})" class="action-pill sold">✓ Sold</button>
+    <button onclick="event.stopPropagation();addExpense(${id})" class="action-pill edit">+ Expense</button>
+    <button onclick="event.stopPropagation();editPhone(${id})" class="action-pill edit">Edit</button>
+    <button onclick="event.stopPropagation();deletePhone(${id})" class="action-pill delete">Delete</button>`;
+
+  const unifiedRow = (p, i) => {
+    const sold = p.status === 'Sold';
+    const party = sold ? (p.buyer_name || '—') : (p.supplier_name || '—');
+    const checked = selectedIds.has(p.id) ? 'checked' : '';
+    return `<tr class="table-row ${selectedIds.has(p.id) ? 'bg-emerald-500/5' : ''}" style="animation: page-in 0.3s ease ${i*0.04}s both">
+      <td class="px-3 py-3.5 no-print" onclick="event.stopPropagation()">
+        <input type="checkbox" class="phone-select rounded border-white/20" data-id="${p.id}" ${checked}
+          onchange="togglePhoneSelect(${p.id}, this.checked)">
+      </td>
+      <td class="px-4 py-3.5 font-medium text-white cursor-pointer" onclick="viewPhone(${p.id})">${esc(p.model)}${acquisitionBadge(p)}</td>
+      <td class="px-4 py-3.5 cursor-pointer" onclick="viewPhone(${p.id})">${statusBadge(p.status)}</td>
+      <td class="px-4 py-3.5 cursor-pointer" onclick="viewPhone(${p.id})">${typeBadge(p.type)}</td>
+      <td class="px-4 py-3.5 text-slate-400 cursor-pointer" onclick="viewPhone(${p.id})">${esc(p.condition)||'—'}</td>
+      <td class="px-4 py-3.5 text-slate-400 text-xs font-mono cursor-pointer" onclick="viewPhone(${p.id})">${esc(p.imei)||'—'}</td>
+      <td class="px-4 py-3.5 text-slate-400 text-xs font-mono cursor-pointer" onclick="viewPhone(${p.id})">${esc(p.imei2)||'—'}</td>
+      <td class="px-4 py-3.5 text-right tabular-nums font-medium cursor-pointer" onclick="viewPhone(${p.id})">${fmt(p.purchase_price)}</td>
+      <td class="px-4 py-3.5 text-right tabular-nums text-orange-300 cursor-pointer" onclick="viewPhone(${p.id})">${fmt(p.total_costing ?? p.purchase_price)}</td>
+      <td class="px-4 py-3.5 text-right tabular-nums ${sold ? 'text-emerald-400' : 'text-slate-600'} cursor-pointer" onclick="viewPhone(${p.id})">${sold ? fmt(p.sale_price) : '—'}</td>
+      <td class="px-4 py-3.5 text-right tabular-nums ${sold && (p.receivable_amount || 0) > 0 ? 'text-amber-400' : 'text-slate-600'} cursor-pointer" onclick="viewPhone(${p.id})">${sold && (p.receivable_amount || 0) > 0 ? fmt(p.receivable_amount) : sold ? fmt(0) : '—'}</td>
+      <td class="px-4 py-3.5 text-right tabular-nums ${p.net_profit != null && p.net_profit >= 0 ? 'text-emerald-400/90' : p.net_profit != null ? 'text-red-400' : 'text-slate-600'} cursor-pointer" onclick="viewPhone(${p.id})">${p.net_profit != null ? fmt(p.net_profit) : '—'}</td>
+      <td class="px-4 py-3.5 text-slate-400 cursor-pointer" onclick="viewPhone(${p.id})">${esc(party)}</td>
+      <td class="px-4 py-3.5 text-right"><div class="flex justify-end gap-1">${actions(p.id, sold)}</div></td>
+    </tr>`;
+  };
+
+  window.togglePhoneSelect = (id, on) => {
+    if (on) selectedIds.add(id); else selectedIds.delete(id);
+    updateBulkBar();
+    renderInventoryTable();
+  };
+
+  function updateBulkBar() {
+    const bar = document.getElementById('bulk-actions');
+    const n = selectedIds.size;
+    bar.classList.toggle('hidden', n === 0);
+    document.getElementById('bulk-count').textContent = `${n} selected`;
+  }
+
+  function getSelectedPhones() {
+    return phones.filter(p => selectedIds.has(p.id));
+  }
+
+  function getPageItems() {
+    const filtered = getFilteredPhones();
+    const start = (currentPage - 1) * PAGE_SIZE;
+    return filtered.slice(start, start + PAGE_SIZE);
+  }
+
+  function syncSelectAllCheckbox() {
+    const pageItems = getPageItems();
+    const el = document.getElementById('select-all-page');
+    if (!el) return;
+    if (!pageItems.length) { el.checked = false; el.indeterminate = false; return; }
+    const selectedOnPage = pageItems.filter(p => selectedIds.has(p.id)).length;
+    el.checked = selectedOnPage === pageItems.length;
+    el.indeterminate = selectedOnPage > 0 && selectedOnPage < pageItems.length;
+  }
+
+  function getFilteredPhones() {
+    const q = searchQuery.toLowerCase().trim();
+    return phones.filter(p => {
+      if (activeStatus !== 'All' && p.status !== activeStatus) return false;
+      if (!q) return true;
+      const hay = `${p.imei||''} ${p.imei2||''} ${p.model||''} ${p.variant||''}`.toLowerCase();
+      return hay.includes(q);
+    });
+  }
+
+  function renderInventoryTable() {
+    const filtered = getFilteredPhones();
+    const total = filtered.length;
+    const totalPages = Math.max(1, Math.ceil(total / PAGE_SIZE));
+    if (currentPage > totalPages) currentPage = totalPages;
+    const start = (currentPage - 1) * PAGE_SIZE;
+    const pageItems = filtered.slice(start, start + PAGE_SIZE);
+
+    const countEl = document.getElementById('count-all');
+    const prev = parseInt(countEl.textContent) || 0;
+    countEl.textContent = total;
+    if (total !== prev) bumpBadge('count-all');
+
+    const tbody = document.getElementById('inventory-tbody');
+    const empty = document.getElementById('empty-inventory');
+    if (!pageItems.length) {
+      tbody.innerHTML = '';
+      empty.classList.remove('hidden');
+    } else {
+      empty.classList.add('hidden');
+      tbody.innerHTML = pageItems.map((p, i) => unifiedRow(p, i)).join('');
+    }
+
+    const from = total ? start + 1 : 0;
+    const to = Math.min(start + PAGE_SIZE, total);
+    document.getElementById('page-info').textContent = `Showing ${from}–${to} of ${total}`;
+    document.getElementById('btn-prev-page').disabled = currentPage <= 1;
+    document.getElementById('btn-next-page').disabled = currentPage >= totalPages;
+    syncSelectAllCheckbox();
+  }
+
+  async function loadPartners() {
+    partners = await apiFetch('/api/partners');
+    renderPartnerInvestFields();
+  }
+
+  function renderPartnerInvestFields(values = {}) {
+    const el = document.getElementById('partner-invest-fields');
+    if (!partners.length) {
+      el.innerHTML = '<p class="text-slate-500 text-xs">No partners configured — add them in Overview</p>';
+      return;
+    }
+    el.innerHTML = partners.map(p => `
+      <div class="flex items-center gap-3">
+        <label class="text-sm text-slate-400 w-28 shrink-0">${esc(p.name)}</label>
+        <input type="number" data-partner-id="${p.id}" class="input-field partner-invest-input" min="0" step="1"
+          value="${values[p.id] || ''}" placeholder="Amount invested">
+      </div>`).join('');
+  }
+
+  function updateQtyTotalPreview() {
+    const qty = parseInt(document.getElementById('f-quantity').value) || 1;
+    const unit = parseFloat(document.getElementById('f-purchase-price').value) || 0;
+    const wrap = document.getElementById('qty-total-wrap');
+    const isEdit = !!document.getElementById('phone-id').value;
+    if (isEdit || qty <= 1) {
+      wrap.classList.add('hidden');
+      return;
+    }
+    wrap.classList.remove('hidden');
+    document.getElementById('qty-total-purchase').textContent = fmt(unit * qty);
+  }
+
+  function updateImeiFields() {
+    const qty = parseInt(document.getElementById('f-quantity').value) || 1;
+    const isEdit = !!document.getElementById('phone-id').value;
+    const bulkSection = document.getElementById('imei-bulk-section');
+    const singleField = document.getElementById('single-imei-field');
+    const qtyField = document.getElementById('quantity-field');
+
+    updateQtyTotalPreview();
+
+    if (isEdit) {
+      bulkSection.classList.add('hidden');
+      singleField.classList.remove('hidden');
+      qtyField.classList.add('hidden');
+      return;
+    }
+
+    qtyField.classList.remove('hidden');
+    if (qty > 1) {
+      bulkSection.classList.remove('hidden');
+      singleField.classList.add('hidden');
+      document.getElementById('imei-fields').innerHTML = Array.from({length: qty}, (_, i) => `
+        <div class="imei-field-row p-3 rounded-lg border border-white/8 bg-slate-900/30">
+          <p class="text-xs font-medium text-slate-400 mb-2">Device ${i + 1}</p>
+          <div class="grid grid-cols-1 sm:grid-cols-2 gap-2">
+            <div>
+              <label class="block text-xs text-slate-500 mb-1" for="imei-bulk-${i}">IMEI 1</label>
+              <input type="text" id="imei-bulk-${i}" class="input-field imei-bulk-input" data-index="${i}"
+                placeholder="15-digit IMEI" inputmode="numeric" autocomplete="off">
+            </div>
+            <div>
+              <label class="block text-xs text-slate-500 mb-1" for="imei2-bulk-${i}">IMEI 2 *</label>
+              <input type="text" id="imei2-bulk-${i}" class="input-field imei2-bulk-input" data-index="${i}"
+                placeholder="Second IMEI" inputmode="numeric" autocomplete="off">
+            </div>
+          </div>
+        </div>`).join('');
+    } else {
+      bulkSection.classList.add('hidden');
+      singleField.classList.remove('hidden');
+    }
+  }
+
+  async function loadInventoryAccounts() {
+    const data = await apiFetch('/api/accounts');
+    inventoryAccounts = data.accounts || [];
+    if (!supplierAccountPicker) {
+      supplierAccountPicker = createSearchableAccountSelect('f-supplier-account-wrap', {
+        placeholder: 'Search supplier account…',
+        allowEmpty: true,
+        emptyLabel: 'No Account',
+      });
+    }
+    if (!expenseAccountPicker) {
+      expenseAccountPicker = createSearchableAccountSelect('expense-account-wrap', {
+        placeholder: 'Search account…',
+        allowEmpty: true,
+        emptyLabel: 'No Account',
+      });
+    }
+    if (!buyerAccountPicker) {
+      buyerAccountPicker = createSearchableAccountSelect('f-buyer-account-wrap', {
+        placeholder: 'Search buyer account…',
+        allowEmpty: true,
+        emptyLabel: 'No Account',
+      });
+    }
+    supplierAccountPicker.setAccounts(inventoryAccounts);
+    expenseAccountPicker.setAccounts(inventoryAccounts);
+    buyerAccountPicker.setAccounts(inventoryAccounts);
+  }
+
+  function toggleAcquisitionFields() {
+    const isBorrow = document.getElementById('f-acquisition-type').value === 'borrow';
+    const isSold = document.getElementById('f-status').value === 'Sold';
+    const paySection = document.getElementById('purchase-payment-section');
+    const bankWrap = document.getElementById('f-purchase-bank-wrap');
+    const paySel = document.getElementById('f-purchase-payment');
+    const payableWrap = document.getElementById('f-payable-wrap');
+    const borrowHint = document.getElementById('borrow-hint');
+    paySection.classList.toggle('hidden', isBorrow);
+    bankWrap.classList.toggle('hidden', isBorrow || !paySel.value.startsWith('bank:'));
+    paySel.required = !isBorrow && !isSold;
+    borrowHint.classList.toggle('hidden', !isBorrow);
+    if (isBorrow) {
+      const price = parseFloat(document.getElementById('f-purchase-price').value) || 0;
+      document.getElementById('f-payable-amount').value = price;
+    }
+  }
+
+  async function loadPhones() {
+    phones = await apiFetch('/api/phones');
+    currentPage = 1;
+    renderInventoryTable();
+  }
+
+  document.getElementById('inventory-search').addEventListener('input', (e) => {
+    searchQuery = e.target.value;
+    currentPage = 1;
+    renderInventoryTable();
+  });
+
+  document.querySelectorAll('#status-tabs .filter-tab').forEach(btn => {
+    btn.addEventListener('click', () => {
+      document.querySelectorAll('#status-tabs .filter-tab').forEach(b => b.classList.remove('active'));
+      btn.classList.add('active');
+      activeStatus = btn.dataset.status;
+      currentPage = 1;
+      renderInventoryTable();
+    });
+  });
+
+  document.getElementById('btn-prev-page').addEventListener('click', () => {
+    if (currentPage > 1) { currentPage--; renderInventoryTable(); }
+  });
+  document.getElementById('btn-next-page').addEventListener('click', () => {
+    const totalPages = Math.ceil(getFilteredPhones().length / PAGE_SIZE);
+    if (currentPage < totalPages) { currentPage++; renderInventoryTable(); }
+  });
+
+  function showPhoneModal(title) {
+    document.getElementById('modal-title').textContent = title;
+    openModal('modal-overlay', 'phone-modal');
+  }
+
+  function hidePhoneModal(cb) {
+    closeModal('modal-overlay', 'phone-modal', () => {
+      document.getElementById('phone-form').reset();
+      document.getElementById('phone-id').value = '';
+      document.getElementById('f-status').value = 'Bought';
+      document.getElementById('f-quantity').value = '1';
+      saleSection.classList.add('hidden');
+      document.getElementById('net-profit-preview').classList.add('hidden');
+      document.getElementById('imei-bulk-section').classList.add('hidden');
+      document.getElementById('single-imei-field').classList.remove('hidden');
+      document.getElementById('quantity-field').classList.remove('hidden');
+      formExistingExpenseTotal = 0;
+      document.getElementById('intake-expense-section').classList.remove('hidden');
+      document.getElementById('edit-expense-section').classList.add('hidden');
+      renderPartnerInvestFields();
+      if (cb) cb();
+    });
+  }
+
+  function populatePaymentSelects() {
+    const buildOpts = (selectedMethod, selectedBankId) => {
+      let html = '<option value="cash">Cash</option>';
+      paymentBanks.forEach(b => {
+        html += `<option value="bank:${b.id}">Bank: ${esc(b.name)}</option>`;
+      });
+      return html;
+    };
+    const purchaseSel = document.getElementById('f-purchase-payment');
+    const saleSel = document.getElementById('f-sale-payment');
+    const pVal = purchaseSel.value;
+    const sVal = saleSel.value;
+    purchaseSel.innerHTML = buildOpts();
+    saleSel.innerHTML = buildOpts();
+    if (pVal) purchaseSel.value = pVal;
+    if (sVal) saleSel.value = sVal;
+
+    const bankOpts = paymentBanks.map(b =>
+      `<option value="${b.id}">${esc(b.name)}</option>`).join('');
+    document.getElementById('f-purchase-bank').innerHTML =
+      '<option value="">— Select bank —</option>' + bankOpts;
+    document.getElementById('f-sale-bank').innerHTML =
+      '<option value="">— Select bank —</option>' + bankOpts;
+  }
+
+  function togglePaymentBank(prefix) {
+    const sel = document.getElementById(`${prefix}-payment`);
+    const wrap = document.getElementById(`${prefix}-bank-wrap`);
+    const bank = document.getElementById(`${prefix}-bank`);
+    const isBank = sel.value.startsWith('bank:');
+    wrap.classList.toggle('hidden', !isBank);
+    bank.required = isBank;
+    if (isBank && !bank.value) {
+      const id = sel.value.split(':')[1];
+      if (id) bank.value = id;
+    }
+  }
+
+  async function loadPaymentBanks() {
+    const data = await apiFetch('/api/banks');
+    paymentBanks = data.banks || [];
+    populatePaymentSelects();
+  }
+
+  function readPaymentFields(prefix) {
+    const sel = document.getElementById(`${prefix}-payment`);
+    const val = sel.value;
+    if (val.startsWith('bank:')) {
+      return { method: 'bank', bank_id: document.getElementById(`${prefix}-bank`).value || val.split(':')[1] };
+    }
+    return { method: 'cash', bank_id: null };
+  }
+
+  function setPaymentFields(prefix, method, bankId) {
+    const sel = document.getElementById(`${prefix}-payment`);
+    if (method === 'bank' && bankId) {
+      sel.value = `bank:${bankId}`;
+      document.getElementById(`${prefix}-bank`).value = bankId;
+    } else {
+      sel.value = 'cash';
+    }
+    togglePaymentBank(prefix);
+  }
+
+  document.getElementById('f-purchase-payment').addEventListener('change', () => togglePaymentBank('f-purchase'));
+  document.getElementById('f-sale-payment').addEventListener('change', () => togglePaymentBank('f-sale'));
+
+  function updateTotalCostingPreview() {
+    const purchase = parseFloat(document.getElementById('f-purchase-price').value) || 0;
+    const isNew = !document.getElementById('phone-id').value;
+    const intakeExpense = isNew ? (parseFloat(document.getElementById('f-expense-amount').value) || 0) : 0;
+    const expenseTotal = formExistingExpenseTotal + intakeExpense;
+    const total = purchase + expenseTotal;
+    document.getElementById('total-costing-value').textContent = fmt(total);
+    document.getElementById('total-costing-breakdown').textContent =
+      `${fmt(purchase)} purchase + ${fmt(expenseTotal)} expenses`;
+    updateNetProfitPreview(total);
+  }
+
+  function renderEditExpenseList(expenses = [], phoneId = null) {
+    const wrap = document.getElementById('edit-expense-section');
+    const list = document.getElementById('edit-expense-list');
+    if (!expenses.length) {
+      wrap.classList.add('hidden');
+      list.innerHTML = '';
+      return;
+    }
+    wrap.classList.remove('hidden');
+    list.innerHTML = expenses.map(e => `
+      <div class="flex justify-between items-center gap-2 text-sm p-2 rounded-lg bg-slate-900/40 border border-white/8">
+        <div class="min-w-0">
+          <span class="text-slate-300">${esc(e.description) || 'Expense'}</span>
+          <span class="text-slate-600 text-xs ml-2">${esc((e.expense_date || e.created_at || '').slice(0, 16))}</span>
+        </div>
+        <div class="flex items-center gap-2 shrink-0">
+          <span class="text-red-400 font-medium">${fmt(e.amount)}</span>
+          <button type="button" class="action-pill edit" onclick="editExpense(${phoneId}, ${e.id})">Edit</button>
+          <button type="button" class="action-pill delete" onclick="deleteExpense(${phoneId}, ${e.id})">Delete</button>
+        </div>
+      </div>`).join('');
+  }
+
+  function updateExpenseModalTotal() {
+    const amount = parseFloat(document.getElementById('expense-amount').value) || 0;
+    const total = expenseModalPurchase + expenseModalExisting + amount;
+    document.getElementById('expense-new-total').textContent = fmt(total);
+  }
+
+  function toggleSaleSection() {
+    const isSold = document.getElementById('f-status').value === 'Sold';
+    saleSection.classList.toggle('hidden', !isSold);
+    document.getElementById('f-sale-payment').required = isSold;
+    if (isSold) {
+      if (!document.getElementById('f-sale-date').value) {
+        document.getElementById('f-sale-date').value = localDatetimeValue();
+      }
+      updateNetProfitPreview();
+    }
+  }
+
+  function updateNetProfitPreview(totalCostingOverride) {
+    const purchase = parseFloat(document.getElementById('f-purchase-price').value) || 0;
+    const sale = parseFloat(document.getElementById('f-sale-price').value) || 0;
+    const isNew = !document.getElementById('phone-id').value;
+    const intakeExpense = isNew ? (parseFloat(document.getElementById('f-expense-amount').value) || 0) : 0;
+    const totalCost = totalCostingOverride != null
+      ? totalCostingOverride
+      : purchase + formExistingExpenseTotal + intakeExpense;
+    const preview = document.getElementById('net-profit-preview');
+    if (document.getElementById('f-status').value === 'Sold' && sale > 0) {
+      preview.classList.remove('hidden');
+      document.getElementById('net-profit-value').textContent = fmt(sale - totalCost);
+    } else preview.classList.add('hidden');
+  }
+
+  function fillPhoneForm(p, statusOverride) {
+    const isEdit = !statusOverride && !!p.id;
+    formExistingExpenseTotal = isEdit ? (p.expense_total || 0) : 0;
+    document.getElementById('intake-expense-section').classList.toggle('hidden', isEdit);
+    renderEditExpenseList(isEdit ? (p.expenses || []) : [], p.id);
+    document.getElementById('f-expense-amount').value = '';
+    document.getElementById('f-expense-desc').value = '';
+    document.getElementById('phone-id').value = p.id;
+    document.getElementById('f-model').value = p.model;
+    document.getElementById('f-condition').value = p.condition || '';
+    document.getElementById('f-box-status').value = p.box_status || '';
+    document.getElementById('f-battery').value = p.battery_health || '';
+    document.getElementById('f-variant').value = p.variant || '';
+    document.getElementById('f-type').value = p.type;
+    document.getElementById('f-purchase-price').value = p.purchase_price;
+    document.getElementById('f-purchase-date').value = toDatetimeLocal(p.purchase_date || p.created_at);
+    document.getElementById('f-status').value = statusOverride || p.status;
+    document.getElementById('f-supplier-name').value = p.supplier_name;
+    document.getElementById('f-supplier-contact').value = p.supplier_contact;
+    document.getElementById('f-imei').value = p.imei || '';
+    document.getElementById('f-imei2').value = p.imei2 || '';
+    document.getElementById('f-buyer-name').value = statusOverride === 'Sold' ? '' : p.buyer_name;
+    document.getElementById('f-buyer-contact').value = statusOverride === 'Sold' ? '' : p.buyer_contact;
+    document.getElementById('f-sale-price').value = statusOverride === 'Sold' ? '' : (p.sale_price || '');
+    document.getElementById('f-receivable').value = statusOverride === 'Sold' ? 0 : p.receivable_amount;
+    document.getElementById('f-sale-date').value = toDatetimeLocal(p.sold_at);
+    document.getElementById('f-acquisition-type').value = p.acquisition_type || 'purchase';
+    document.getElementById('f-payable-amount').value = p.payable_amount || 0;
+    supplierAccountPicker?.setValue(p.supplier_account_id || '');
+    buyerAccountPicker?.setValue(p.buyer_account_id || '');
+    setPaymentFields('f-purchase', p.purchase_payment_method || 'cash', p.purchase_bank_id);
+    setPaymentFields('f-sale', p.sale_payment_method || 'cash', p.sale_bank_id);
+    updateImeiFields();
+    toggleSaleSection();
+    toggleAcquisitionFields();
+    updateTotalCostingPreview();
+  }
+
+  window.viewPhone = async (id) => {
+    const p = await apiFetch(`/api/phones/${id}`);
+    document.getElementById('detail-title').textContent = p.model;
+    const invHtml = (p.investments || []).length ? (p.investments || []).map(i => `
+      <div class="flex justify-between text-sm">
+        <span class="text-slate-400">${esc(i.partner_name)}</span>
+        <span class="text-emerald-400 font-medium">${fmt(i.amount)}</span>
+      </div>`).join('') : '<p class="text-slate-500 text-sm">No partner attribution recorded</p>';
+
+    const expHtml = (p.expenses || []).length ? (p.expenses || []).map(e => `
+      <div class="flex justify-between items-center text-sm gap-2">
+        <span class="text-slate-400">${esc(e.description) || 'Expense'}</span>
+        <div class="flex items-center gap-2">
+          <span class="text-red-400">${fmt(e.amount)}</span>
+          <button type="button" class="action-pill edit" onclick="editExpense(${p.id}, ${e.id})">Edit</button>
+          <button type="button" class="action-pill delete" onclick="deleteExpense(${p.id}, ${e.id})">Delete</button>
+        </div>
+      </div>`).join('') : '<p class="text-slate-500 text-sm">No expenses logged</p>';
+
+    document.getElementById('detail-body').innerHTML = `
+      <div class="grid grid-cols-2 gap-3 text-sm">
+        <div><span class="text-slate-500">Purchase Date</span><p class="text-white">${esc(p.purchase_date) || (p.created_at ? p.created_at.slice(0,10) : '—')}</p></div>
+        <div><span class="text-slate-500">Condition</span><p class="text-white">${esc(p.condition)||'—'}</p></div>
+        <div><span class="text-slate-500">IMEI 1</span><p class="text-white">${esc(p.imei)||'—'}</p></div>
+        <div><span class="text-slate-500">IMEI 2</span><p class="text-white">${esc(p.imei2)||'—'}</p></div>
+        <div><span class="text-slate-500">Box</span><p class="text-white">${esc(p.box_status)||'—'}</p></div>
+        <div><span class="text-slate-500">Battery</span><p class="text-white">${esc(p.battery_health)||'—'}</p></div>
+        <div><span class="text-slate-500">Variant</span><p class="text-white">${esc(p.variant)||'—'}</p></div>
+        <div><span class="text-slate-500">Type</span><p>${typeBadge(p.type)}</p></div>
+        <div><span class="text-slate-500">Acquired</span><p class="text-white">${(p.acquisition_type || 'purchase') === 'borrow' ? 'Borrowed from shopkeeper' : 'Purchase'}</p></div>
+        <div><span class="text-slate-500">Payable</span><p class="text-white">${fmt(p.payable_amount || 0)}</p></div>
+      </div>
+      <div class="border-t border-white/8 pt-4">
+        <p class="text-xs font-semibold uppercase text-slate-500 mb-2">Purchase Cost</p>
+        <p class="text-xl font-bold text-white">${fmt(p.purchase_price)}</p>
+      </div>
+      <div class="border-t border-white/8 pt-4">
+        <p class="text-xs font-semibold uppercase text-slate-500 mb-2">Partner Investment</p>
+        ${invHtml}
+      </div>
+      <div class="border-t border-white/8 pt-4">
+        <p class="text-xs font-semibold uppercase text-slate-500 mb-2">Expenses</p>
+        ${expHtml}
+      </div>
+      ${p.status === 'Sold' ? `
+      <div class="border-t border-white/8 pt-4">
+        <p class="text-xs font-semibold uppercase text-slate-500 mb-2">Sale Details</p>
+        <div class="grid grid-cols-2 gap-3 text-sm">
+          <div><span class="text-slate-500">Buyer</span><p class="text-white">${esc(p.buyer_name)||'—'}</p></div>
+          <div><span class="text-slate-500">Sale Price</span><p class="text-emerald-400 font-semibold">${fmt(p.sale_price)}</p></div>
+          <div><span class="text-slate-500">Receivable (Udhar)</span><p class="${(p.receivable_amount||0) > 0 ? 'text-amber-400 font-semibold' : 'text-slate-400'}">${fmt(p.receivable_amount||0)}</p></div>
+          <div><span class="text-slate-500">Net Profit</span><p class="text-emerald-400 font-semibold">${p.net_profit != null ? fmt(p.net_profit) : '—'}</p></div>
+        </div>
+      </div>` : ''}
+      <div class="border-t border-white/8 pt-4 p-4 rounded-xl bg-orange-500/10 border border-orange-500/20">
+        <p class="text-xs font-semibold uppercase text-orange-300 mb-1">Total Costing after Expenses</p>
+        <p class="text-2xl font-bold text-orange-200">${fmt(p.total_costing)}</p>
+        <p class="text-xs text-slate-500 mt-1">${fmt(p.purchase_price)} purchase + ${fmt(p.expense_total)} expenses</p>
+      </div>
+      <div class="flex gap-2 pt-2">
+        <button onclick="closeModal('detail-overlay','detail-modal');editPhone(${p.id})" class="btn btn-primary btn-sm flex-1">Edit</button>
+        <button onclick="closeModal('detail-overlay','detail-modal');addExpense(${p.id})" class="btn btn-ghost btn-sm flex-1">Add Expense</button>
+      </div>`;
+    openModal('detail-overlay', 'detail-modal');
+  };
+
+  window.addExpense = async (id) => {
+    const p = await apiFetch(`/api/phones/${id}`);
+    openExpenseModal(p);
+  };
+
+  window.editExpense = async (phoneId, expenseId) => {
+    const p = await apiFetch(`/api/phones/${phoneId}`);
+    const expense = (p.expenses || []).find(e => e.id === expenseId);
+    if (!expense) return;
+    openExpenseModal(p, expense);
+  };
+
+  window.deleteExpense = async (phoneId, expenseId) => {
+    if (!confirm('Delete this expense? Cash book entry will be reversed.')) return;
+    await apiFetch(`/api/phones/${phoneId}/expenses/${expenseId}`, { method: 'DELETE' });
+    toast('Expense deleted');
+    loadPhones();
+    if (document.getElementById('detail-modal').classList.contains('open')) {
+      viewPhone(phoneId);
+    }
+  };
+
+  function openExpenseModal(p, expense = null) {
+    expenseModalPhoneId = p.id;
+    expenseEditId = expense ? expense.id : null;
+    expenseModalPurchase = p.purchase_price || 0;
+    expenseModalExisting = expense
+      ? (p.expense_total || 0) - (expense.amount || 0)
+      : (p.expense_total || 0);
+    document.getElementById('expense-phone-id').value = p.id;
+    document.getElementById('expense-form').reset();
+    document.getElementById('expense-phone-id').value = p.id;
+    document.getElementById('expense-phone-title').textContent = p.model;
+    document.getElementById('expense-purchase-cost').textContent = fmt(expenseModalPurchase);
+    document.getElementById('expense-existing-total').textContent = fmt(expenseModalExisting);
+    document.getElementById('expense-amount').value = expense ? expense.amount : '';
+    document.getElementById('expense-desc').value = expense ? (expense.description || '') : '';
+    document.getElementById('expense-date').value = toDatetimeLocal(expense?.expense_date || expense?.created_at);
+    expenseAccountPicker?.setValue(expense?.account_id || '');
+    document.querySelector('#expense-modal .text-lg').textContent = expense ? 'Edit Expense' : 'Add Expense';
+    updateExpenseModalTotal();
+    openModal('expense-overlay', 'expense-modal');
+  }
+
+
+  window.markAsSold = (id) => {
+    const p = phones.find(x => x.id === id);
+    if (p) {
+      fillPhoneForm(p, 'Sold');
+      document.getElementById('f-sale-date').value = localDatetimeValue();
+      showPhoneModal('Mark as Sold');
+    }
+  };
+
+  window.editPhone = async (id) => {
+    const p = await apiFetch(`/api/phones/${id}`);
+    fillPhoneForm(p);
+    const invValues = {};
+    (p.investments || []).forEach(i => { invValues[i.partner_id] = i.amount; });
+    renderPartnerInvestFields(invValues);
+    showPhoneModal('Edit Phone');
+  };
+  window.deletePhone = async (id) => {
+    if (!confirm('Delete this phone? Linked cash book and account entries will also be removed.')) return;
+    await apiFetch(`/api/phones/${id}`, { method: 'DELETE' });
+    toast('Phone deleted');
+    loadPhones();
+  };
+
+  function collectInvestments() {
+    return [...document.querySelectorAll('.partner-invest-input')].map(el => ({
+      partner_id: parseInt(el.dataset.partnerId),
+      amount: parseFloat(el.value) || 0,
+    })).filter(i => i.amount > 0);
+  }
+
+  document.getElementById('btn-add').addEventListener('click', () => {
+    hidePhoneModal();
+    document.getElementById('phone-form').reset();
+    document.getElementById('phone-id').value = '';
+    document.getElementById('f-status').value = 'Bought';
+    document.getElementById('f-quantity').value = '1';
+    document.getElementById('f-purchase-date').value = localDatetimeValue();
+    document.getElementById('f-sale-date').value = localDatetimeValue();
+    supplierAccountPicker?.setValue('');
+    buyerAccountPicker?.setValue('');
+    document.getElementById('f-acquisition-type').value = 'purchase';
+    document.getElementById('f-payable-amount').value = '0';
+    setPaymentFields('f-purchase', 'cash', null);
+    setPaymentFields('f-sale', 'cash', null);
+    formExistingExpenseTotal = 0;
+    document.getElementById('intake-expense-section').classList.remove('hidden');
+    document.getElementById('edit-expense-section').classList.add('hidden');
+    renderEditExpenseList([]);
+    renderPartnerInvestFields();
+    updateImeiFields();
+    toggleAcquisitionFields();
+    updateTotalCostingPreview();
+    showPhoneModal('Add New Phone');
+  });
+  document.getElementById('btn-cancel').addEventListener('click', () => hidePhoneModal());
+  document.getElementById('btn-cancel-x').addEventListener('click', () => hidePhoneModal());
+  document.getElementById('modal-overlay').addEventListener('click', () => hidePhoneModal());
+  document.getElementById('f-status').addEventListener('change', () => { toggleSaleSection(); toggleAcquisitionFields(); });
+  document.getElementById('f-acquisition-type').addEventListener('change', toggleAcquisitionFields);
+  document.getElementById('f-purchase-price').addEventListener('input', () => {
+    if (document.getElementById('f-acquisition-type').value === 'borrow') {
+      document.getElementById('f-payable-amount').value = document.getElementById('f-purchase-price').value || 0;
+    }
+    updateTotalCostingPreview();
+    updateQtyTotalPreview();
+  });
+  document.getElementById('f-expense-amount').addEventListener('input', updateTotalCostingPreview);
+  document.getElementById('f-sale-price').addEventListener('input', () => updateTotalCostingPreview());
+  document.getElementById('f-quantity').addEventListener('input', updateImeiFields);
+
+  document.getElementById('phone-form').addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const btn = document.getElementById('btn-save');
+    btn.disabled = true; btn.textContent = 'Saving…';
+    const id = document.getElementById('phone-id').value;
+    const qty = parseInt(document.getElementById('f-quantity').value) || 1;
+    const payload = {
+      model: document.getElementById('f-model').value,
+      condition: document.getElementById('f-condition').value,
+      box_status: document.getElementById('f-box-status').value,
+      battery_health: document.getElementById('f-battery').value,
+      variant: document.getElementById('f-variant').value,
+      type: document.getElementById('f-type').value,
+      purchase_price: document.getElementById('f-purchase-price').value,
+      purchase_date: document.getElementById('f-purchase-date').value,
+      status: document.getElementById('f-status').value,
+      supplier_name: document.getElementById('f-supplier-name').value,
+      supplier_contact: document.getElementById('f-supplier-contact').value,
+      acquisition_type: document.getElementById('f-acquisition-type').value,
+      payable_amount: document.getElementById('f-payable-amount').value || 0,
+      investments: collectInvestments(),
+    };
+
+    const expAmt = parseFloat(document.getElementById('f-expense-amount').value) || 0;
+    if (expAmt > 0) {
+      payload.expenses = [{ amount: expAmt, description: document.getElementById('f-expense-desc').value }];
+    }
+
+    const supplierAcct = supplierAccountPicker?.getValue();
+    if (supplierAcct) payload.supplier_account_id = supplierAcct;
+    if (payload.acquisition_type === 'borrow' && !supplierAcct) {
+      toast('Select a shopkeeper account when borrowing a phone', 'error');
+      btn.disabled = false; btn.textContent = 'Save Phone';
+      return;
+    }
+
+    if (id) {
+      payload.imei = document.getElementById('f-imei').value;
+      payload.imei2 = document.getElementById('f-imei2').value;
+    } else if (qty > 1) {
+      payload.quantity = qty;
+      payload.imeis = [...document.querySelectorAll('.imei-bulk-input')].map((el, i) => ({
+        imei: el.value,
+        imei2: document.getElementById(`imei2-bulk-${i}`)?.value || '',
+      }));
+    } else {
+      payload.imei = document.getElementById('f-imei').value;
+      payload.imei2 = document.getElementById('f-imei2').value;
+    }
+
+    const purchasePay = readPaymentFields('f-purchase');
+    payload.purchase_payment_method = purchasePay.method;
+    if (purchasePay.bank_id) payload.purchase_bank_id = purchasePay.bank_id;
+
+    if (payload.status === 'Sold') {
+      if (!document.getElementById('f-sale-price').value) { toast('Enter a sale price', 'error'); btn.disabled=false; btn.textContent='Save Phone'; return; }
+      payload.buyer_name = document.getElementById('f-buyer-name').value;
+      payload.buyer_contact = document.getElementById('f-buyer-contact').value;
+      payload.sale_price = document.getElementById('f-sale-price').value;
+      payload.receivable_amount = document.getElementById('f-receivable').value;
+      const buyerAcct = buyerAccountPicker?.getValue();
+      if (buyerAcct) payload.buyer_account_id = buyerAcct;
+      const receivable = parseFloat(payload.receivable_amount) || 0;
+      if (receivable > 0 && !buyerAcct) {
+        toast('Select a buyer account when recording sale udhar', 'error');
+        btn.disabled = false; btn.textContent = 'Save Phone';
+        return;
+      }
+      payload.sold_at = document.getElementById('f-sale-date').value;
+      const salePay = readPaymentFields('f-sale');
+      payload.sale_payment_method = salePay.method;
+      if (salePay.bank_id) payload.sale_bank_id = salePay.bank_id;
+    } else if (!id) {
+      /* purchase payment required for new phones */
+    }
+    try {
+      await apiFetch(id ? `/api/phones/${id}` : '/api/phones', { method: id?'PUT':'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(payload) });
+      hidePhoneModal();
+      toast(id ? 'Phone updated' : (qty > 1 ? `${qty} phones added` : 'Phone added'));
+      loadPhones();
+    } catch(err) { toast(err.message, 'error'); }
+    btn.disabled = false; btn.textContent = 'Save Phone';
+  });
+
+  document.getElementById('expense-amount').addEventListener('input', updateExpenseModalTotal);
+
+  document.getElementById('expense-form').addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const phoneId = document.getElementById('expense-phone-id').value;
+    const body = {
+      amount: document.getElementById('expense-amount').value,
+      description: document.getElementById('expense-desc').value,
+      expense_date: document.getElementById('expense-date').value,
+    };
+    const acctId = expenseAccountPicker?.getValue();
+    if (acctId) body.account_id = acctId;
+    const url = expenseEditId
+      ? `/api/phones/${phoneId}/expenses/${expenseEditId}`
+      : `/api/phones/${phoneId}/expenses`;
+    const res = await apiFetch(url, {
+      method: expenseEditId ? 'PUT' : 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    });
+    closeModal('expense-overlay', 'expense-modal');
+    toast(`Expense saved — total costing now ${fmt(res.total_costing)}`);
+    expenseEditId = null;
+    loadPhones();
+  });
+  document.getElementById('expense-overlay').addEventListener('click', () => closeModal('expense-overlay', 'expense-modal'));
+  document.getElementById('expense-close-x')?.addEventListener('click', () => closeModal('expense-overlay', 'expense-modal'));
+
+  document.getElementById('select-all-page')?.addEventListener('change', (e) => {
+    getPageItems().forEach(p => {
+      if (e.target.checked) selectedIds.add(p.id); else selectedIds.delete(p.id);
+    });
+    updateBulkBar();
+    renderInventoryTable();
+  });
+
+  document.getElementById('btn-bulk-clear')?.addEventListener('click', () => {
+    selectedIds.clear();
+    updateBulkBar();
+    renderInventoryTable();
+  });
+
+  document.getElementById('btn-bulk-delete')?.addEventListener('click', async () => {
+    const ids = [...selectedIds];
+    if (!ids.length) return;
+    if (!confirm(`Delete ${ids.length} selected phone(s)? Linked cash book and account entries will also be removed.`)) return;
+    try {
+      await apiFetch('/api/phones/bulk-delete', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ phone_ids: ids }),
+      });
+      selectedIds.clear();
+      updateBulkBar();
+      toast(`${ids.length} phone(s) deleted`);
+      loadPhones();
+    } catch (err) { toast(err.message, 'error'); }
+  });
+
+  function openBulkSoldModal() {
+    const selected = getSelectedPhones().filter(p => p.status !== 'Sold');
+    if (!selected.length) {
+      toast('Select phones that are not already sold', 'error');
+      return;
+    }
+    document.getElementById('bulk-sale-unit-price').value = '';
+    document.getElementById('bulk-sold-list').innerHTML = selected.map(p => {
+      const cost = p.total_costing ?? p.purchase_price ?? 0;
+      return `
+      <div class="bulk-sold-row flex flex-col sm:flex-row sm:items-center gap-2 p-3 rounded-lg border border-white/8 bg-slate-900/40">
+        <div class="flex-1 min-w-0">
+          <p class="font-medium text-white truncate">${esc(p.model)}</p>
+          <p class="text-xs text-slate-500">${formatImeiDisplay(p)} · Total cost ${fmt(cost)}</p>
+        </div>
+        <div class="sm:w-40">
+          <label class="block text-xs text-slate-500 mb-1">Sale Price (per phone) *</label>
+          <input type="number" required min="1" step="1" class="input-field bulk-sale-price"
+            data-id="${p.id}" data-cost="${cost}" placeholder="0">
+        </div>
+        <div class="sm:w-32 text-right">
+          <p class="text-xs text-slate-500 mb-1">Profit</p>
+          <p class="bulk-profit-preview text-sm font-semibold text-emerald-400">—</p>
+        </div>
+      </div>`;
+    }).join('');
+    document.querySelectorAll('.bulk-sale-price').forEach(el => {
+      el.addEventListener('input', updateBulkSoldProfits);
+    });
+    openModal('bulk-sold-overlay', 'bulk-sold-modal');
+  }
+
+  function updateBulkSoldProfits() {
+    document.querySelectorAll('.bulk-sale-price').forEach(el => {
+      const cost = parseFloat(el.dataset.cost) || 0;
+      const sale = parseFloat(el.value) || 0;
+      const profitEl = el.closest('.bulk-sold-row')?.querySelector('.bulk-profit-preview');
+      if (!profitEl) return;
+      if (sale > 0) {
+        const profit = sale - cost;
+        profitEl.textContent = fmt(profit);
+        profitEl.className = `bulk-profit-preview text-sm font-semibold ${profit >= 0 ? 'text-emerald-400' : 'text-red-400'}`;
+      } else {
+        profitEl.textContent = '—';
+        profitEl.className = 'bulk-profit-preview text-sm font-semibold text-emerald-400';
+      }
+    });
+  }
+
+  document.getElementById('bulk-apply-unit-price')?.addEventListener('click', () => {
+    const unit = document.getElementById('bulk-sale-unit-price').value;
+    if (!unit) { toast('Enter a sale price per phone first', 'error'); return; }
+    document.querySelectorAll('.bulk-sale-price').forEach(el => { el.value = unit; });
+    updateBulkSoldProfits();
+  });
+
+  document.getElementById('btn-bulk-sold')?.addEventListener('click', openBulkSoldModal);
+  document.getElementById('bulk-sold-cancel')?.addEventListener('click', () => closeModal('bulk-sold-overlay', 'bulk-sold-modal'));
+  document.getElementById('bulk-sold-cancel-x')?.addEventListener('click', () => closeModal('bulk-sold-overlay', 'bulk-sold-modal'));
+  document.getElementById('bulk-sold-overlay')?.addEventListener('click', () => closeModal('bulk-sold-overlay', 'bulk-sold-modal'));
+
+  document.getElementById('bulk-sold-form')?.addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const items = [...document.querySelectorAll('.bulk-sale-price')].map(el => ({
+      phone_id: parseInt(el.dataset.id, 10),
+      sale_price: el.value,
+    }));
+    if (items.some(i => !i.sale_price || parseFloat(i.sale_price) <= 0)) {
+      toast('Enter a sale price for every phone', 'error');
+      return;
+    }
+    try {
+      const res = await apiFetch('/api/phones/bulk-sold', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          sale_price_per_unit: document.getElementById('bulk-sale-unit-price').value || null,
+          items,
+        }),
+      });
+      closeModal('bulk-sold-overlay', 'bulk-sold-modal');
+      selectedIds.clear();
+      updateBulkBar();
+      const n = (res.updated || []).length;
+      toast(n ? `${n} phone(s) marked sold` : 'Done');
+      if (res.errors?.length) toast(res.errors.join('; '), 'error');
+      loadPhones();
+    } catch (err) { toast(err.message, 'error'); }
+  });
+
+  loadPartners();
+  loadPaymentBanks();
+  loadInventoryAccounts();
+  loadPhones();
+  document.getElementById('f-purchase-date').value = localDatetimeValue();
+
+  let invQr = null;
+  document.getElementById('btn-scan-imei-inv')?.addEventListener('click', async () => {
+    if (typeof Html5Qrcode === 'undefined') { toast('Scanner not loaded', 'error'); return; }
+    const wrap = document.createElement('div');
+    wrap.id = 'inv-qr-temp';
+    wrap.className = 'fixed inset-0 z-50 bg-black/80 flex flex-col items-center justify-center p-4';
+    wrap.innerHTML = '<div id="inv-qr-reader" class="w-full max-w-md bg-black rounded-lg"></div><button type="button" class="btn btn-ghost mt-4 text-white">Cancel</button>';
+    document.body.appendChild(wrap);
+    wrap.querySelector('button').onclick = async () => {
+      try { if (invQr) await invQr.stop(); } catch (_) {}
+      wrap.remove();
+      invQr = null;
+    };
+    invQr = new Html5Qrcode('inv-qr-reader');
+    try {
+      await invQr.start({ facingMode: 'environment' }, { fps: 8, qrbox: { width: 250, height: 120 } },
+        (decoded) => {
+          const digits = decoded.replace(/\D/g, '');
+          if (digits.length >= 14) {
+            document.getElementById('f-imei').value = digits.slice(-15);
+            invQr.stop().then(() => { wrap.remove(); invQr = null; });
+          }
+        }, () => {});
+    } catch (err) {
+      toast('Camera unavailable', 'error');
+      wrap.remove();
+    }
+  });
+</script>
+{% endblock %}

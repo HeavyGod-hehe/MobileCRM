@@ -1,0 +1,26 @@
+Phone Reseller CRM — Customer Edition (Mac — Intel only (x86_64 — runs on M Macs via Rosetta))
+====================================================================================================
+
+This build: Intel only (x86_64 — runs on M Macs via Rosetta)
+NO Python or source code — everything is inside the app.
+
+HOW TO START
+────────────
+  1. Double-click:  Phone Reseller CRM.app
+  2. Browser opens at http://localhost:5050
+  3. If it does not open, wait 10 seconds and visit http://localhost:5050
+
+FIRST TIME ON MAC
+─────────────────
+  If macOS blocks the app:
+  1. Open Terminal in this folder
+  2. Run:  xattr -cr "Phone Reseller CRM.app"
+  3. Right-click the app → Open → Open
+
+TROUBLESHOOTING
+───────────────
+  • Check Data/crm.log next to the app for errors
+  • Your data lives in Data/crm.db and Data/Backups/
+  • Use Settings → Close CRM instead of Force Quit
+
+Support: contact your CRM vendor.

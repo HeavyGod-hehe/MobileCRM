@@ -1,0 +1,130 @@
+{% extends "base.html" %}
+{% set active = 'today' %}
+{% block title %}Today — Welcome, {{ current_username }}{% endblock %}
+
+{% block content %}
+<div class="mb-8 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
+  <div>
+    <h1 class="text-2xl font-bold text-white tracking-tight">Today</h1>
+    <p id="today-date-label" class="text-slate-400 text-sm mt-1">Loading…</p>
+  </div>
+  <div class="flex gap-2 no-print">
+    <a href="/inventory" class="btn btn-ghost btn-sm">Inventory</a>
+    <a href="/month-report" class="btn btn-primary btn-sm">Month Report</a>
+  </div>
+</div>
+
+<section class="grid grid-cols-2 lg:grid-cols-5 gap-4 mb-8 stagger">
+  <div class="hero-card rounded-2xl p-6">
+    <p class="text-emerald-400/90 text-sm font-medium mb-2">Phones Sold</p>
+    <p id="today-sold-count" class="text-3xl font-bold text-white">—</p>
+  </div>
+  <div class="hero-card rounded-2xl p-6">
+    <p class="text-blue-400/90 text-sm font-medium mb-2">Phones Bought</p>
+    <p id="today-bought-count" class="text-3xl font-bold text-white">—</p>
+  </div>
+  <div class="hero-card rounded-2xl p-6">
+    <p class="text-blue-400/90 text-sm font-medium mb-2">Sales Revenue</p>
+    <p id="today-revenue" class="text-3xl font-bold text-white">—</p>
+  </div>
+  <div class="hero-card rounded-2xl p-6">
+    <p class="text-amber-400/90 text-sm font-medium mb-2">Today's Profit</p>
+    <p id="today-profit" class="text-3xl font-bold text-white">—</p>
+  </div>
+  <div class="hero-card rounded-2xl p-6 col-span-2 lg:col-span-1">
+    <p class="text-slate-400 text-sm font-medium mb-2">Cash In / Out</p>
+    <p id="today-cash" class="text-xl font-bold text-white">—</p>
+  </div>
+</section>
+
+<div class="grid grid-cols-1 lg:grid-cols-2 gap-6">
+  <section class="glass-card rounded-xl p-6">
+    <h2 class="text-lg font-semibold text-white mb-4">Sold Today</h2>
+    <div class="overflow-x-auto">
+      <table class="w-full text-sm">
+        <thead>
+          <tr class="text-slate-500 text-left text-xs uppercase tracking-wider">
+            <th class="px-4 py-3 font-medium">Model</th>
+            <th class="px-4 py-3 font-medium">IMEI</th>
+            <th class="px-4 py-3 font-medium">Buyer</th>
+            <th class="px-4 py-3 font-medium text-right">Sale Price</th>
+          </tr>
+        </thead>
+        <tbody id="today-sold-tbody" class="divide-y divide-white/5"></tbody>
+      </table>
+      <div id="today-sold-empty" class="hidden empty-state py-8">No phones sold today yet</div>
+    </div>
+  </section>
+
+  <section class="glass-card rounded-xl p-6">
+    <h2 class="text-lg font-semibold text-white mb-4">Bought Today</h2>
+    <p id="today-bought-spend" class="text-xs text-slate-500 mb-3"></p>
+    <div class="overflow-x-auto">
+      <table class="w-full text-sm">
+        <thead>
+          <tr class="text-slate-500 text-left text-xs uppercase tracking-wider">
+            <th class="px-4 py-3 font-medium">Model</th>
+            <th class="px-4 py-3 font-medium">IMEI</th>
+            <th class="px-4 py-3 font-medium">Supplier</th>
+            <th class="px-4 py-3 font-medium text-right">Cost</th>
+          </tr>
+        </thead>
+        <tbody id="today-bought-tbody" class="divide-y divide-white/5"></tbody>
+      </table>
+      <div id="today-bought-empty" class="hidden empty-state py-8">No phones bought today yet</div>
+    </div>
+  </section>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+  async function loadToday() {
+    const data = await apiFetch('/api/today');
+    document.getElementById('today-date-label').textContent = data.date_label || 'Today';
+    document.getElementById('today-sold-count').textContent = data.phones_sold ?? 0;
+    document.getElementById('today-bought-count').textContent = data.phones_bought ?? 0;
+    document.getElementById('today-revenue').textContent = fmt(data.sales_revenue);
+    document.getElementById('today-profit').textContent = fmt(data.sales_profit);
+    document.getElementById('today-cash').innerHTML =
+      `<span class="text-emerald-400">${fmt(data.cash_in)}</span> / <span class="text-red-400">${fmt(data.cash_out)}</span>`;
+    document.getElementById('today-bought-spend').textContent =
+      data.phones_bought ? `Total spent today: ${fmt(data.purchase_spend)}` : '';
+
+    const soldBody = document.getElementById('today-sold-tbody');
+    const soldEmpty = document.getElementById('today-sold-empty');
+    const sold = data.sold_phones || [];
+    if (!sold.length) {
+      soldBody.innerHTML = '';
+      soldEmpty.classList.remove('hidden');
+    } else {
+      soldEmpty.classList.add('hidden');
+      soldBody.innerHTML = sold.map(p => `
+        <tr class="table-row">
+          <td class="px-4 py-3 font-medium text-white">${esc(p.model)}</td>
+          <td class="px-4 py-3 font-mono text-xs text-slate-400">${esc(p.imei)||'—'}</td>
+          <td class="px-4 py-3 text-slate-400">${esc(p.buyer_name)||'—'}</td>
+          <td class="px-4 py-3 text-right text-emerald-400 font-medium">${fmt(p.sale_price)}</td>
+        </tr>`).join('');
+    }
+
+    const boughtBody = document.getElementById('today-bought-tbody');
+    const boughtEmpty = document.getElementById('today-bought-empty');
+    const bought = data.bought_phones || [];
+    if (!bought.length) {
+      boughtBody.innerHTML = '';
+      boughtEmpty.classList.remove('hidden');
+    } else {
+      boughtEmpty.classList.add('hidden');
+      boughtBody.innerHTML = bought.map(p => `
+        <tr class="table-row">
+          <td class="px-4 py-3 font-medium text-white">${esc(p.model)}${p.status === 'Sold' ? ' <span class="text-xs text-emerald-400/80">(Sold)</span>' : ''}</td>
+          <td class="px-4 py-3 font-mono text-xs text-slate-400">${esc(p.imei)||'—'}</td>
+          <td class="px-4 py-3 text-slate-400">${esc(p.supplier_name)||'—'}</td>
+          <td class="px-4 py-3 text-right text-blue-400 font-medium">${fmt(p.purchase_price)}</td>
+        </tr>`).join('');
+    }
+  }
+  loadToday().catch(err => toast(err.message, 'error'));
+</script>
+{% endblock %}
