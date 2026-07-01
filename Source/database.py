@@ -197,6 +197,7 @@ def init_db():
         _migrate_journal_vouchers(conn)
         _migrate_cursor_panga(conn)
         _migrate_payment_methods(conn)
+        _migrate_account_entry_payments(conn)
 
         for key, value in DEFAULT_SETTINGS.items():
             conn.execute(
@@ -426,6 +427,17 @@ def _migrate_payment_methods(conn):
             conn.execute(f"ALTER TABLE phones ADD COLUMN {col} {typedef}")
 
 
+def _migrate_account_entry_payments(conn):
+    if not _column_exists(conn, "account_entries", "payment_source"):
+        conn.execute(
+            "ALTER TABLE account_entries ADD COLUMN payment_source TEXT NOT NULL DEFAULT ''"
+        )
+    if not _column_exists(conn, "account_entries", "bank_account_id"):
+        conn.execute(
+            "ALTER TABLE account_entries ADD COLUMN bank_account_id INTEGER REFERENCES bank_accounts(id)"
+        )
+
+
 def _migrate_cursor_panga(conn):
     conn.executescript(
         """
@@ -623,6 +635,7 @@ def update_user_settings(conn, user_id, data):
         "last_backup_at", "auto_backup_enabled",
         "shop_whatsapp", "vendor_whatsapp", "vendor_support_note",
         "gmail_smtp_user", "gmail_smtp_app_password", "invoice_counter",
+        "profit_reinvested_total",
     }
     user_fields = {}
     for key, value in data.items():
@@ -959,6 +972,46 @@ def delete_partner(conn, user_id, partner_id):
         "DELETE FROM partners WHERE id = ? AND user_id = ?",
         (partner_id, user_id),
     )
+
+
+def reinvest_profit(conn, user_id, data):
+    """Move available profit into a partner's invested capital."""
+    amount = float(data.get("amount") or 0)
+    if amount <= 0:
+        raise ValueError("Amount must be greater than zero")
+
+    partner_id = int(data["partner_id"])
+    partner = get_partner(conn, user_id, partner_id)
+    if not partner:
+        raise ValueError("Partner not found")
+
+    sold = conn.execute(
+        """
+        SELECT purchase_price, sale_price FROM phones
+        WHERE status = 'Sold' AND user_id = ?
+        """,
+        (user_id,),
+    ).fetchall()
+    total_net_profit = sum(
+        (r["sale_price"] or 0) - (r["purchase_price"] or 0) for r in sold
+    )
+    settings = get_user_settings(conn, user_id)
+    reinvested = float(settings.get("profit_reinvested_total") or 0)
+    available = round(total_net_profit - reinvested, 2)
+    if amount > available + 0.01:
+        raise ValueError(f"Only {available:,.0f} profit available to reinvest")
+
+    new_capital = round(partner["capital"] + amount, 2)
+    update_partner(conn, user_id, partner_id, {"capital": new_capital})
+    update_user_settings(conn, user_id, {
+        "profit_reinvested_total": str(round(reinvested + amount, 2)),
+    })
+    return {
+        "partner": get_partner(conn, user_id, partner_id),
+        "amount_reinvested": round(amount, 2),
+        "profit_reinvested_total": round(reinvested + amount, 2),
+        "available_profit": round(available - amount, 2),
+    }
 
 
 # --- Phones ---
@@ -1895,9 +1948,13 @@ def compute_dashboard(conn, user_id):
     total_in_bank = total_bank_balance(conn, user_id)
     total_in_cash = cash_in_hand_balance(conn, user_id)
 
+    profit_reinvested = float(settings.get("profit_reinvested_total") or 0)
+    available_profit = max(0.0, round(total_net_profit - profit_reinvested, 2))
+
     formula_expected = (
         total_investment + total_net_profit - total_udhar - active_stock_worth
     )
+    expected_bank_balance = round(formula_expected - total_in_cash, 2)
 
     active_inventory = [dict(r) for r in inventory]
     active_receivables = [
@@ -1929,8 +1986,10 @@ def compute_dashboard(conn, user_id):
         "total_payables": total_payables_combined,
         "phone_payables": round(phone_payables, 2),
         "active_stock_worth": round(active_stock_worth, 2),
-        "expected_cash_balance": total_in_bank,
+        "expected_cash_balance": expected_bank_balance,
         "formula_expected_balance": round(formula_expected, 2),
+        "profit_reinvested": round(profit_reinvested, 2),
+        "available_profit": available_profit,
         "total_in_bank": total_in_bank,
         "total_in_cash": round(total_in_cash, 2),
         "cash_in_hand": round(total_in_cash, 2),
@@ -2098,24 +2157,58 @@ def build_statement(conn, user_id, account_id):
     }
 
 
-def create_entry(conn, account_id, data):
+def create_entry(conn, account_id, data, user_id=None):
     entry_type = data["entry_type"]
     if entry_type not in ENTRY_TYPES:
         raise ValueError("Invalid entry type")
+
+    amount = float(data["amount"])
+    note = data.get("note", "")
+    payment_source = (data.get("payment_source") or "").strip().lower()
+    bank_account_id = data.get("bank_account_id")
+
+    if payment_source and payment_source not in ("cash", "bank"):
+        raise ValueError("Payment source must be cash or bank")
+    if entry_type == "credit" and payment_source:
+        raise ValueError("Payment method applies only to Wasool (Payment) entries")
+    if user_id and entry_type == "debit" and not payment_source:
+        raise ValueError("Payment method is required for Wasool entries")
+    if payment_source == "bank":
+        if not bank_account_id:
+            raise ValueError("Select a bank account")
+        bank_account_id = int(bank_account_id)
+        if user_id and not get_bank(conn, user_id, bank_account_id):
+            raise ValueError("Bank account not found")
+
     cursor = conn.execute(
         """
-        INSERT INTO account_entries (account_id, entry_type, amount, note)
-        VALUES (?, ?, ?, ?)
+        INSERT INTO account_entries (
+            account_id, entry_type, amount, note, payment_source, bank_account_id
+        ) VALUES (?, ?, ?, ?, ?, ?)
         """,
         (
             account_id,
             entry_type,
-            float(data["amount"]),
-            data.get("note", ""),
+            amount,
+            note,
+            payment_source,
+            bank_account_id if payment_source == "bank" else None,
         ),
     )
+    entry_id = cursor.lastrowid
+
+    if user_id and entry_type == "debit" and payment_source == "cash":
+        acct = get_account(conn, user_id, account_id)
+        acct_name = acct["name"] if acct else "Account"
+        create_cash_book_entry(conn, user_id, {
+            "entry_type": "in",
+            "amount": amount,
+            "note": note or f"Wasool — {acct_name}",
+            "payment_source": "cash",
+        })
+
     row = conn.execute(
-        "SELECT * FROM account_entries WHERE id = ?", (cursor.lastrowid,)
+        "SELECT * FROM account_entries WHERE id = ?", (entry_id,)
     ).fetchone()
     return dict(row)
 

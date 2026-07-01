@@ -47,6 +47,7 @@
         <button id="btn-new-bank" class="btn btn-primary btn-sm">+ Bank</button>
       </div>
       <p class="text-xs text-slate-600 mb-2">Total in Bank: <span id="total-in-bank" class="text-emerald-400 font-bold">—</span></p>
+      <p class="text-xs text-slate-600 mb-2">Expected Bank: <span id="expected-bank-balance" class="text-blue-400 font-bold">—</span></p>
       <div id="bank-list" class="space-y-2 max-h-[30vh] overflow-y-auto"></div>
     </div>
   </div>
@@ -149,6 +150,19 @@
           <div>
             <label class="block text-xs font-medium text-slate-400 mb-1.5">Amount *</label>
             <input type="number" id="e-amount" required min="1" step="1" class="input-field" placeholder="0">
+          </div>
+          <div id="e-payment-wrap" class="hidden">
+            <label class="block text-xs font-medium text-slate-400 mb-1.5">Payment Method *</label>
+            <select id="e-payment" class="input-field">
+              <option value="cash">Cash</option>
+              <option value="bank">Bank</option>
+            </select>
+          </div>
+          <div id="e-bank-wrap" class="hidden">
+            <label class="block text-xs font-medium text-slate-400 mb-1.5">Bank Account *</label>
+            <select id="e-bank" class="input-field">
+              <option value="">— Select bank —</option>
+            </select>
           </div>
           <div class="sm:col-span-2">
             <label class="block text-xs font-medium text-slate-400 mb-1.5">Note</label>
@@ -311,6 +325,8 @@
     animateValue(document.getElementById('sum-payable'), data.summary.total_payable, fmt);
     animateValue(document.getElementById('cash-in-hand'), data.cash_in_hand, fmt);
     animateValue(document.getElementById('total-in-bank'), data.total_in_bank, fmt);
+    animateValue(document.getElementById('expected-bank-balance'), data.expected_bank_balance ?? 0, fmt);
+    populateEntryBankSelect();
     renderAccountList();
     if (!accountJumpPicker) {
       accountJumpPicker = createSearchableAccountSelect('account-jump-picker', {
@@ -332,6 +348,7 @@
     const data = await apiFetch('/api/banks');
     banks = data.banks;
     animateValue(document.getElementById('total-in-bank'), data.total_balance, fmt);
+    populateEntryBankSelect();
     renderBankList();
     if (selectedBankId && banks.find(b => b.id === selectedBankId)) loadBankTransactions(selectedBankId);
   }
@@ -527,21 +544,48 @@
     renderAccountList();
   });
 
+  function populateEntryBankSelect() {
+    const sel = document.getElementById('e-bank');
+    sel.innerHTML = '<option value="">— Select bank —</option>' +
+      banks.map(b => `<option value="${b.id}">${esc(b.name)}</option>`).join('');
+  }
+
+  function toggleEntryPaymentFields() {
+    const isWasool = document.getElementById('e-type').value === 'debit';
+    document.getElementById('e-payment-wrap').classList.toggle('hidden', !isWasool);
+    const isBank = isWasool && document.getElementById('e-payment').value === 'bank';
+    document.getElementById('e-bank-wrap').classList.toggle('hidden', !isBank);
+    document.getElementById('e-payment').required = isWasool;
+    document.getElementById('e-bank').required = isBank;
+  }
+
+  document.getElementById('e-type').addEventListener('change', toggleEntryPaymentFields);
+  document.getElementById('e-payment').addEventListener('change', toggleEntryPaymentFields);
+
   document.getElementById('entry-form').addEventListener('submit', async (e) => {
     e.preventDefault();
     const btn = document.getElementById('btn-add-entry');
     btn.disabled = true;
     try {
+      const entryType = document.getElementById('e-type').value;
+      const payload = {
+        entry_type: entryType,
+        amount: document.getElementById('e-amount').value,
+        note: document.getElementById('e-note').value,
+      };
+      if (entryType === 'debit') {
+        payload.payment_source = document.getElementById('e-payment').value;
+        if (payload.payment_source === 'bank') {
+          payload.bank_account_id = document.getElementById('e-bank').value;
+        }
+      }
       await apiFetch(`/api/accounts/${selectedId}/entries`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          entry_type: document.getElementById('e-type').value,
-          amount: document.getElementById('e-amount').value,
-          note: document.getElementById('e-note').value,
-        }),
+        body: JSON.stringify(payload),
       });
       document.getElementById('entry-form').reset();
+      toggleEntryPaymentFields();
       toast('Entry added');
       loadAccounts();
     } catch(err) { toast(err.message, 'error'); }
@@ -682,5 +726,6 @@
   apiFetch('/api/settings/shop').then(s => { shopInfo = s; }).catch(() => {});
   loadAccounts();
   loadBanks();
+  toggleEntryPaymentFields();
 </script>
 {% endblock %}

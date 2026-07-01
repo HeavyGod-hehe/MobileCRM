@@ -52,6 +52,7 @@
               <th class="px-4 py-3 font-medium">IMEI</th>
               <th class="px-4 py-3 font-medium text-right">Cost</th>
               <th class="px-4 py-3 font-medium text-right">Sold Price</th>
+              <th class="px-4 py-3 font-medium text-right">Receivable</th>
               <th class="px-4 py-3 font-medium text-right">Profit</th>
               <th class="px-4 py-3 font-medium">Party</th>
               <th class="px-4 py-3 font-medium text-right">Actions</th>
@@ -340,6 +341,7 @@
       <td class="px-4 py-3.5 text-slate-400 text-xs font-mono">${esc(p.imei)||'—'}</td>
       <td class="px-4 py-3.5 text-right tabular-nums font-medium">${fmt(p.purchase_price)}</td>
       <td class="px-4 py-3.5 text-right tabular-nums ${sold ? 'text-emerald-400' : 'text-slate-600'}">${sold ? fmt(p.sale_price) : '—'}</td>
+      <td class="px-4 py-3.5 text-right tabular-nums ${sold && (p.receivable_amount || 0) > 0 ? 'text-amber-400' : 'text-slate-600'}">${sold && (p.receivable_amount || 0) > 0 ? fmt(p.receivable_amount) : sold ? fmt(0) : '—'}</td>
       <td class="px-4 py-3.5 text-right tabular-nums ${p.net_profit != null && p.net_profit >= 0 ? 'text-emerald-400/90' : p.net_profit != null ? 'text-red-400' : 'text-slate-600'}">${p.net_profit != null ? fmt(p.net_profit) : '—'}</td>
       <td class="px-4 py-3.5 text-slate-400">${esc(party)}</td>
       <td class="px-4 py-3.5 text-right"><div class="flex justify-end gap-1">${actions(p.id, sold)}</div></td>
@@ -631,6 +633,16 @@
         <p class="text-xs font-semibold uppercase text-slate-500 mb-2">Expenses</p>
         ${expHtml}
       </div>
+      ${p.status === 'Sold' ? `
+      <div class="border-t border-white/8 pt-4">
+        <p class="text-xs font-semibold uppercase text-slate-500 mb-2">Sale Details</p>
+        <div class="grid grid-cols-2 gap-3 text-sm">
+          <div><span class="text-slate-500">Buyer</span><p class="text-white">${esc(p.buyer_name)||'—'}</p></div>
+          <div><span class="text-slate-500">Sale Price</span><p class="text-emerald-400 font-semibold">${fmt(p.sale_price)}</p></div>
+          <div><span class="text-slate-500">Receivable (Udhar)</span><p class="${(p.receivable_amount||0) > 0 ? 'text-amber-400 font-semibold' : 'text-slate-400'}">${fmt(p.receivable_amount||0)}</p></div>
+          <div><span class="text-slate-500">Net Profit</span><p class="text-emerald-400 font-semibold">${p.net_profit != null ? fmt(p.net_profit) : '—'}</p></div>
+        </div>
+      </div>` : ''}
       <div class="border-t border-white/8 pt-4 p-4 rounded-xl bg-orange-500/10 border border-orange-500/20">
         <p class="text-xs font-semibold uppercase text-orange-300 mb-1">Total Costing after Expenses</p>
         <p class="text-2xl font-bold text-orange-200">${fmt(p.total_costing)}</p>

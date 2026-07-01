@@ -50,13 +50,20 @@
       Expected Bank Balance
     </p>
     <p id="expected-balance" class="text-4xl sm:text-5xl font-bold text-white tracking-tight num-animate" data-value="0">—</p>
-    <p class="text-slate-400/80 text-xs mt-3">Synced with aggregate bank account totals</p>
+    <p class="text-slate-400/80 text-xs mt-3">Investment + Profit − Udhar − Stock − Cash (synced with Accounts)</p>
+    <p class="text-slate-500/80 text-xs mt-1">Actual bank total shown separately above — khata payments do not change it</p>
   </div>
 
-  <div class="grid grid-cols-2 lg:grid-cols-4 gap-3">
+  <div class="grid grid-cols-2 lg:grid-cols-5 gap-3">
     <div class="stat-card p-4">
       <p class="text-xs text-slate-500 uppercase tracking-wide font-medium">Total Investment</p>
       <p id="total-investment" class="text-xl font-bold mt-2 num-animate" data-value="0">—</p>
+    </div>
+    <div class="stat-card p-4">
+      <p class="text-xs text-slate-500 uppercase tracking-wide font-medium">Total Profit</p>
+      <p id="total-profit" class="text-xl font-bold mt-2 text-emerald-400 num-animate" data-value="0">—</p>
+      <p class="text-xs text-slate-600 mt-1">Available: <span id="available-profit" class="text-emerald-400/80">—</span></p>
+      <button id="btn-reinvest-profit" class="btn btn-ghost btn-sm mt-2 w-full text-xs">Move Profit → Investment</button>
     </div>
     <div class="stat-card p-4">
       <p class="text-xs text-slate-500 uppercase tracking-wide font-medium">Udhar (Receivable)</p>
@@ -162,6 +169,35 @@
   </div>
 </div>
 
+<!-- Reinvest Profit Modal -->
+<div id="reinvest-overlay" class="modal-overlay"></div>
+<div id="reinvest-modal" class="modal-wrap">
+  <div class="modal-panel">
+    <div class="p-6 border-b border-white/8 flex items-center justify-between">
+      <h3 class="text-lg font-semibold text-white">Move Profit into Investment</h3>
+      <button type="button" id="reinvest-cancel-x" class="btn btn-ghost btn-icon text-slate-400">
+        <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/></svg>
+      </button>
+    </div>
+    <form id="reinvest-form" class="p-6 space-y-4">
+      <p class="text-sm text-slate-400">Transfer available profit into a partner's invested capital. This reduces available profit and increases total investment.</p>
+      <div>
+        <label class="block text-xs font-medium text-slate-400 mb-1.5">Partner *</label>
+        <select id="reinvest-partner" required class="input-field"></select>
+      </div>
+      <div>
+        <label class="block text-xs font-medium text-slate-400 mb-1.5">Amount *</label>
+        <input type="number" id="reinvest-amount" required min="1" step="1" class="input-field">
+        <p class="text-xs text-slate-500 mt-1">Available profit: <span id="reinvest-available" class="text-emerald-400">—</span></p>
+      </div>
+      <div class="flex gap-3">
+        <button type="button" id="btn-reinvest-all" class="btn btn-ghost flex-1">Move All</button>
+        <button type="submit" class="btn btn-primary flex-1">Confirm</button>
+      </div>
+    </form>
+  </div>
+</div>
+
 <!-- Active Stock Modal -->
 <div id="stock-overlay" class="modal-overlay"></div>
 <div id="stock-modal" class="modal-wrap">
@@ -202,6 +238,9 @@
     animateValue(document.getElementById('total-in-cash'), s.total_in_cash, fmt, 800);
     animateValue(document.getElementById('expected-balance'), s.expected_cash_balance, fmt, 800);
     animateValue(document.getElementById('total-investment'), s.total_investment, fmt);
+    animateValue(document.getElementById('total-profit'), s.total_net_profit, fmt);
+    document.getElementById('available-profit').textContent = fmt(s.available_profit);
+    document.getElementById('reinvest-available').textContent = fmt(s.available_profit);
     animateValue(document.getElementById('total-udhar'), s.total_udhar, fmt);
     animateValue(document.getElementById('active-stock'), s.active_stock_worth, fmt);
     animateValue(document.getElementById('total-payable'), s.accounts_payable ?? s.total_payables, fmt);
@@ -373,6 +412,45 @@
     document.getElementById('fixed-expense-form').reset();
     toast('Fixed expense added');
     loadOverview();
+  });
+
+  function openReinvestModal() {
+    if (!overviewData) return;
+    const s = overviewData.summary;
+    const sel = document.getElementById('reinvest-partner');
+    sel.innerHTML = partners.map(p =>
+      `<option value="${p.id}">${esc(p.name)} (${fmt(p.capital)})</option>`
+    ).join('') || '<option value="">No partners</option>';
+    document.getElementById('reinvest-amount').value = s.available_profit || 0;
+    document.getElementById('reinvest-available').textContent = fmt(s.available_profit);
+    openModal('reinvest-overlay', 'reinvest-modal');
+  }
+
+  document.getElementById('btn-reinvest-profit').addEventListener('click', openReinvestModal);
+  document.getElementById('reinvest-cancel-x').addEventListener('click', () => closeModal('reinvest-overlay', 'reinvest-modal'));
+  document.getElementById('reinvest-overlay').addEventListener('click', () => closeModal('reinvest-overlay', 'reinvest-modal'));
+  document.getElementById('btn-reinvest-all').addEventListener('click', () => {
+    if (overviewData) {
+      document.getElementById('reinvest-amount').value = overviewData.summary.available_profit || 0;
+    }
+  });
+  document.getElementById('reinvest-form').addEventListener('submit', async (e) => {
+    e.preventDefault();
+    try {
+      await apiFetch('/api/partners/reinvest-profit', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          partner_id: document.getElementById('reinvest-partner').value,
+          amount: document.getElementById('reinvest-amount').value,
+        }),
+      });
+      closeModal('reinvest-overlay', 'reinvest-modal');
+      toast('Profit moved into investment');
+      loadOverview();
+    } catch (err) {
+      toast(err.message, 'error');
+    }
   });
 
   loadOverview();

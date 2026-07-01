@@ -815,6 +815,22 @@ def delete_partner_api(partner_id):
         return jsonify({"ok": True})
 
 
+@app.route("/api/partners/reinvest-profit", methods=["POST"])
+def reinvest_profit_api():
+    user_id = _current_user_id()
+    data = request.get_json(force=True)
+    if not data.get("partner_id"):
+        return jsonify({"error": "Partner is required"}), 400
+    if not data.get("amount"):
+        return jsonify({"error": "Amount is required"}), 400
+    try:
+        with db.db_session() as conn:
+            result = db.reinvest_profit(conn, user_id, data)
+            return jsonify(result)
+    except ValueError as exc:
+        return jsonify({"error": str(exc)}), 400
+
+
 # --- Fixed Expenses ---
 
 @app.route("/api/fixed-expenses", methods=["GET"])
@@ -1023,6 +1039,7 @@ def list_accounts_api():
             "summary": summary,
             "cash_in_hand": dash["cash_in_hand"],
             "total_in_bank": dash["total_in_bank"],
+            "expected_bank_balance": dash["expected_cash_balance"],
         })
 
 
@@ -1079,7 +1096,7 @@ def create_entry_api(account_id):
     with db.db_session() as conn:
         if not db.get_account(conn, user_id, account_id):
             return jsonify({"error": "Account not found"}), 404
-        entry = db.create_entry(conn, account_id, data)
+        entry = db.create_entry(conn, account_id, data, user_id=user_id)
         return jsonify(entry), 201
 
 
