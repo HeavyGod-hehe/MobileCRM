@@ -117,7 +117,7 @@ def main() -> None:
         shutil.rmtree(OUT)
     OUT.mkdir(parents=True)
 
-    print("Building Phone Reseller CRM …")
+    print("Building Phone Reseller CRM ...")
     run_build("PhoneResellerCRM-win.spec")
 
     app_src = ROOT / "dist" / "Phone Reseller CRM"
@@ -137,7 +137,7 @@ def main() -> None:
     (OUT / "license.json").write_text("{}\n", encoding="utf-8")
     verify_no_source(OUT)
 
-    print(f"\n✓ Customer Windows Copy ready:\n  {OUT}\n")
+    print(f"\nOK Customer Windows Copy ready:\n  {OUT}\n")
 
 
 if __name__ == "__main__":
