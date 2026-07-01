@@ -7,8 +7,12 @@ Pakistani phone reseller CRM: inventory, accounts (khata), cash book, billing, W
 | Folder | Purpose |
 |--------|---------|
 | **Source/** | Full Python project — run with `python3 app.py` |
-| **Customer Copy/** | Mac customer build — double-click `Phone Reseller CRM.app` |
-| **Source/crm.db** | Sample / dev SQLite database (included) |
+| **Customer Copy Apple Silicon/** | Mac customer build — **M1/M2/M3/M4** only |
+| **Customer Copy Intel Mac/** | Mac customer build — **Intel** Macs only |
+| **Customer Windows Copy/** | Windows customer build — `.exe` |
+| **CUSTOMER_COPIES.md** | Which folder to use on your PC/Mac |
+
+See **CUSTOMER_COPIES.md** for download and troubleshooting (including "not supported on Mac").
 
 ## Quick start (developer)
 

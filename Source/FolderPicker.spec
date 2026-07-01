@@ -1,9 +1,13 @@
 # -*- mode: python ; coding: utf-8 -*-
 """PyInstaller spec for the standalone folder picker helper."""
 
+import os
 from pathlib import Path
 
 ROOT = Path(SPECPATH)
+
+_mac_arch = os.environ.get("CRM_MAC_ARCH", "").strip().lower()
+TARGET_ARCH = _mac_arch if _mac_arch in ("arm64", "x86_64") else None
 
 a = Analysis(
     ['folder_picker.py'],
@@ -40,7 +44,7 @@ exe = EXE(
     console=False,
     disable_windowed_traceback=False,
     argv_emulation=False,
-    target_arch=None,
+    target_arch=TARGET_ARCH,
     codesign_identity=None,
     entitlements_file=None,
 )

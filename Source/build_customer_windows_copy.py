@@ -91,6 +91,12 @@ FEATURES (v2.3)
   • Billing, Month Report, Returns, Journal vouchers
   • Restore from backup in Settings
 
+OTHER PLATFORMS
+───────────────
+  • Mac M1/M2/M3/M4  → Customer Copy Apple Silicon folder
+  • Mac Intel        → Customer Copy Intel Mac folder
+  • Windows          → this folder (Customer Windows Copy)
+
 Support: contact your CRM vendor.
 """,
         encoding="utf-8",

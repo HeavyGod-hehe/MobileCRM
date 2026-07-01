@@ -1,11 +1,15 @@
 # -*- mode: python ; coding: utf-8 -*-
 """PyInstaller spec — macOS Customer .app (onedir bundle for faster, reliable startup)."""
 
+import os
 import platform
 from pathlib import Path
 
 ROOT = Path(SPECPATH)
 VERSION = (ROOT / "VERSION").read_text(encoding="utf-8").strip()
+
+_mac_arch = os.environ.get("CRM_MAC_ARCH", "").strip().lower()
+TARGET_ARCH = _mac_arch if _mac_arch in ("arm64", "x86_64") else None
 
 a = Analysis(
     ["launch_crm.py"],
@@ -51,7 +55,7 @@ exe = EXE(
     console=False,
     disable_windowed_traceback=False,
     argv_emulation=False,
-    target_arch=None,
+    target_arch=TARGET_ARCH,
     codesign_identity=None,
     entitlements_file=None,
 )

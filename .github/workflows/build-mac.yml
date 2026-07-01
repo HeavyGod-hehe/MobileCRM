@@ -1,4 +1,4 @@
-name: Build Mac Customer Copy
+name: Build Mac Customer Copies
 
 on:
   workflow_dispatch:
@@ -7,9 +7,12 @@ on:
     paths:
       - 'Source/**'
       - '.github/workflows/build-mac.yml'
+      - 'Customer Copy Apple Silicon/**'
+      - 'Customer Copy Intel Mac/**'
 
 jobs:
-  build-mac:
+  build-mac-arm64:
+    name: Apple Silicon (M chip)
     runs-on: macos-latest
     steps:
       - uses: actions/checkout@v4
@@ -23,12 +26,41 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r Source/requirements.txt pyinstaller
 
-      - name: Build Customer Copy
-        run: python Source/build_customer_copy.py
+      - name: Build Customer Copy Apple Silicon
+        run: python Source/build_customer_mac.py --arch arm64
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
-          name: Customer-Copy-Mac
-          path: Customer Copy/
+          name: Customer-Copy-Apple-Silicon
+          path: Customer Copy Apple Silicon/
+          retention-days: 30
+
+  build-mac-intel:
+    name: Intel Mac
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rosetta (for x64 Python/tooling)
+        run: softwareupdate --install-rosetta --agree-to-license || true
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          architecture: x64
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r Source/requirements.txt pyinstaller
+
+      - name: Build Customer Copy Intel Mac
+        run: python Source/build_customer_mac.py --arch x86_64
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: Customer-Copy-Intel-Mac
+          path: Customer Copy Intel Mac/
           retention-days: 30
