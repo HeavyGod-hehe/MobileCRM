@@ -3,7 +3,7 @@ name: Build Windows Customer Copy
 on:
   workflow_dispatch:
   push:
-    branches: [main, 'cursor/**']
+    branches: [main, MoreFixes-update, 'cursor/**']
     paths:
       - 'Source/**'
       - '.github/workflows/build-windows.yml'
