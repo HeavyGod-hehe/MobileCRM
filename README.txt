@@ -4,7 +4,8 @@ Cursor-Panga — Phone Reseller CRM v2.1
 Folder layout:
 
   Source/           ← Full developer project (Python, templates, build scripts)
-  Customer Copy/    ← Ship this folder to shopkeepers (no source code)
+  Customer Copy/    ← Ship this folder to shopkeepers on Mac (no source code)
+  Customer Windows Copy/  ← Ship this folder to shopkeepers on Windows (no source code)
 
 DEVELOPER (you)
 ───────────────
@@ -21,8 +22,9 @@ DEVELOPER (you)
 
 CUSTOMER
 ────────
-  Double-click: Customer Copy/Phone Reseller CRM.app
-  Read: Customer Copy/START HERE.txt
+  Mac:     Double-click Customer Copy/Phone Reseller CRM.app
+  Windows: Double-click Customer Windows Copy/Phone Reseller CRM/Phone Reseller CRM.exe
+  Read:    START HERE.txt inside each customer folder
 
 NEW IN v2.1
 ───────────
