@@ -1,7 +1,7 @@
-Phone Reseller CRM — Customer Edition v2.3 (Mac — Apple Silicon M1/M2/M3/M4)
-============================================================================
+Phone Reseller CRM — Customer Edition v2.3 (Mac — Apple Silicon (M1/M2/M3/M4))
+===============================================================================
 
-This build is for: Apple Silicon (M chip) Macs only
+This build is for: Apple Silicon (M1/M2/M3/M4)
 NO Python or source code — everything is inside the app.
 
 HOW TO START
@@ -12,7 +12,7 @@ HOW TO START
 
 WRONG CHIP?
 ───────────
-  • M1/M2/M3/M4 Mac → use this folder (Customer Copy Apple Silicon)
+  • M1/M2/M3/M4 Mac → use "Customer Copy Apple Silicon" folder
   • Intel Mac       → use "Customer Copy Intel Mac" folder
   • Windows PC      → use "Customer Windows Copy" folder
 

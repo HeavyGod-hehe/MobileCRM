@@ -1,0 +1,137 @@
+{% extends "base.html" %}
+{% set active = 'journal' %}
+{% block title %}Journal Voucher — Welcome, {{ current_username }}{% endblock %}
+
+{% block content %}
+<div class="mb-8">
+  <h1 class="text-2xl font-bold text-white tracking-tight">Journal Voucher</h1>
+  <p class="text-slate-400 text-sm mt-1">Record debit/credit transfers between accounts</p>
+</div>
+
+<section class="glass-card rounded-xl p-5 mb-8">
+  <p class="text-xs font-semibold uppercase tracking-wider text-slate-500 mb-4">New Voucher</p>
+  <form id="jv-form" class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
+    <div>
+      <label class="block text-xs font-medium text-slate-400 mb-1.5">Date</label>
+      <input type="date" id="jv-date" class="input-field" required>
+    </div>
+    <div>
+      <label class="block text-xs font-medium text-slate-400 mb-1.5">Reference #</label>
+      <input type="text" id="jv-ref" class="input-field" placeholder="JV-001">
+    </div>
+    <div>
+      <label class="block text-xs font-medium text-slate-400 mb-1.5">Amount *</label>
+      <input type="number" id="jv-amount" class="input-field" min="1" step="1" required placeholder="0">
+    </div>
+    <div>
+      <label class="block text-xs font-medium text-slate-400 mb-1.5">Debit Account *</label>
+      <div id="jv-debit-wrap"></div>
+    </div>
+    <div>
+      <label class="block text-xs font-medium text-slate-400 mb-1.5">Credit Account *</label>
+      <div id="jv-credit-wrap"></div>
+    </div>
+    <div class="sm:col-span-2 lg:col-span-3">
+      <label class="block text-xs font-medium text-slate-400 mb-1.5">Narration</label>
+      <input type="text" id="jv-narration" class="input-field" placeholder="Description of this entry">
+    </div>
+    <div class="sm:col-span-2 lg:col-span-3">
+      <button type="submit" class="btn btn-primary btn-sm">Post Journal Voucher</button>
+    </div>
+  </form>
+</section>
+
+<section class="glass-card rounded-xl p-5">
+  <h2 class="text-xs font-semibold uppercase tracking-wider text-slate-500 mb-3">Voucher History</h2>
+  <div class="overflow-x-auto journal-table-wrap">
+    <table class="w-full text-sm">
+      <thead>
+        <tr class="text-slate-500 text-left text-xs uppercase tracking-wider">
+          <th class="px-3 py-2 font-medium">Date</th>
+          <th class="px-3 py-2 font-medium">Ref</th>
+          <th class="px-3 py-2 font-medium">Debit</th>
+          <th class="px-3 py-2 font-medium">Credit</th>
+          <th class="px-3 py-2 font-medium text-right">Amount</th>
+          <th class="px-3 py-2 font-medium">Narration</th>
+          <th class="px-3 py-2 font-medium text-right no-print">Actions</th>
+        </tr>
+      </thead>
+      <tbody id="jv-list" class="divide-y divide-white/5"></tbody>
+    </table>
+  </div>
+</section>
+{% endblock %}
+
+{% block scripts %}
+<script>
+  let jvAccounts = [];
+  let jvDebitPicker;
+  let jvCreditPicker;
+
+  async function loadJvAccounts() {
+    jvAccounts = await apiFetch('/api/accounts/expense-categories');
+    if (!jvDebitPicker) {
+      jvDebitPicker = createSearchableAccountSelect('jv-debit-wrap', { placeholder: 'Search debit account…' });
+      jvCreditPicker = createSearchableAccountSelect('jv-credit-wrap', { placeholder: 'Search credit account…' });
+    }
+    jvDebitPicker.setAccounts(jvAccounts);
+    jvCreditPicker.setAccounts(jvAccounts);
+  }
+
+  async function loadJournalVouchers() {
+    const rows = await apiFetch('/api/journal-vouchers');
+    const tbody = document.getElementById('jv-list');
+    if (!rows.length) {
+      tbody.innerHTML = '<tr><td colspan="7" class="px-3 py-4 text-slate-500 text-sm">No journal vouchers yet</td></tr>';
+      return;
+    }
+    tbody.innerHTML = rows.map(v => `
+      <tr class="table-row">
+        <td class="px-3 py-2.5 text-slate-400">${esc(v.voucher_date)}</td>
+        <td class="px-3 py-2.5 text-slate-300">${esc(v.reference) || '—'}</td>
+        <td class="px-3 py-2.5 text-red-300">${esc(v.debit_account_name)}</td>
+        <td class="px-3 py-2.5 text-emerald-300">${esc(v.credit_account_name)}</td>
+        <td class="px-3 py-2.5 text-right font-semibold text-white">${fmt(v.amount)}</td>
+        <td class="px-3 py-2.5 text-slate-400">${esc(v.narration) || '—'}</td>
+        <td class="px-3 py-2.5 text-right no-print">
+          <button onclick="deleteJv(${v.id})" class="action-pill delete">Delete</button>
+        </td>
+      </tr>`).join('');
+  }
+
+  window.deleteJv = async (id) => {
+    if (!confirm('Delete this journal voucher? Both account entries will also be removed.')) return;
+    await apiFetch(`/api/journal-vouchers/${id}`, { method: 'DELETE' });
+    toast('Voucher deleted');
+    loadJournalVouchers();
+  };
+
+  document.getElementById('jv-form').addEventListener('submit', async (e) => {
+    e.preventDefault();
+    if (!jvDebitPicker.requireSelection('Select a debit account from the list')) return;
+    if (!jvCreditPicker.requireSelection('Select a credit account from the list')) return;
+    await apiFetch('/api/journal-vouchers', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        voucher_date: document.getElementById('jv-date').value,
+        reference: document.getElementById('jv-ref').value.trim(),
+        narration: document.getElementById('jv-narration').value.trim(),
+        debit_account_id: jvDebitPicker.getValue(),
+        credit_account_id: jvCreditPicker.getValue(),
+        amount: document.getElementById('jv-amount').value,
+      }),
+    });
+    document.getElementById('jv-form').reset();
+    document.getElementById('jv-date').value = new Date().toISOString().slice(0, 10);
+    jvDebitPicker.reset();
+    jvCreditPicker.reset();
+    toast('Journal voucher posted');
+    loadJournalVouchers();
+  });
+
+  document.getElementById('jv-date').value = new Date().toISOString().slice(0, 10);
+  loadJvAccounts();
+  loadJournalVouchers();
+</script>
+{% endblock %}
