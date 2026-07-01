@@ -4,20 +4,24 @@ Build macOS Customer Copy for a specific CPU architecture.
 
 Output folders (repo root):
   Customer Copy Apple Silicon/   — M1/M2/M3/M4 Macs (arm64)
-  Customer Copy Intel Mac/     — Intel Macs (x86_64)
+  Customer Copy Intel Mac/       — Intel Macs (x86_64)
+  Customer Copy Universal Mac/   — Intel + Apple Silicon (universal2)
 
 Usage (from Source folder on macOS):
   python3 build_customer_mac.py --arch arm64
   python3 build_customer_mac.py --arch x86_64
+  python3 build_customer_mac.py --arch universal
 """
 
 from __future__ import annotations
 
 import argparse
 import os
+import platform
 import shutil
 import subprocess
 import sys
+import tempfile
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent
@@ -26,6 +30,7 @@ REPO = ROOT.parent
 ARCH_OUTPUT = {
     "arm64": REPO / "Customer Copy Apple Silicon",
     "x86_64": REPO / "Customer Copy Intel Mac",
+    "universal": REPO / "Customer Copy Universal Mac",
 }
 
 SOURCE_NAMES = {
@@ -53,16 +58,167 @@ def run_build(spec: str, arch: str) -> None:
         "CRM_BUILD_PLATFORM": "mac",
         "CRM_MAC_ARCH": arch,
     }
+    cmd = [*_python_for_arch(arch), "-m", "PyInstaller", "--noconfirm", "--clean", spec]
     subprocess.run(
-        [sys.executable, "-m", "PyInstaller", "--noconfirm", "--clean", spec],
+        cmd,
         cwd=str(ROOT),
         check=True,
         env=env,
     )
 
 
+def is_macho(path: Path) -> bool:
+    try:
+        result = subprocess.run(
+            ["file", "-b", str(path)],
+            capture_output=True,
+            text=True,
+            check=True,
+        )
+        return "Mach-O" in result.stdout
+    except (OSError, subprocess.CalledProcessError):
+        return False
+
+
+def merge_macho_binary(arm_path: Path, intel_path: Path, out_path: Path) -> None:
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    subprocess.run(
+        ["lipo", "-create", str(arm_path), str(intel_path), "-output", str(out_path)],
+        check=True,
+    )
+    shutil.copystat(arm_path, out_path, follow_symlinks=False)
+
+
+def merge_app_bundles(arm_app: Path, intel_app: Path, out_app: Path) -> None:
+    if out_app.exists():
+        shutil.rmtree(out_app)
+    shutil.copytree(arm_app, out_app, symlinks=True)
+
+    for arm_file in arm_app.rglob("*"):
+        if not arm_file.is_file() or arm_file.is_symlink():
+            continue
+        rel = arm_file.relative_to(arm_app)
+        intel_file = intel_app / rel
+        out_file = out_app / rel
+        if not intel_file.is_file():
+            continue
+        if is_macho(arm_file) and is_macho(intel_file):
+            merge_macho_binary(arm_file, intel_file, out_file)
+
+
+def verify_universal(app_binary: Path) -> None:
+    result = subprocess.run(
+        ["lipo", "-info", str(app_binary)],
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    info = result.stdout.lower()
+    if "x86_64" not in info or "arm64" not in info:
+        raise RuntimeError(
+            f"Expected universal2 binary but lipo reports:\n{result.stdout}"
+        )
+
+
+def _python_for_arch(arch: str) -> list[str]:
+    """Return argv prefix to run Python for the requested architecture."""
+    if arch == "x86_64" and platform.machine() == "arm64":
+        return ["arch", "-x86_64", sys.executable]
+    if arch == "arm64" and platform.machine() == "x86_64":
+        return ["arch", "-arm64", sys.executable]
+    return [sys.executable]
+
+
+def _build_to_temp(arch: str) -> Path:
+    with tempfile.TemporaryDirectory(prefix=f"crm-mac-{arch}-") as tmp:
+        tmp_path = Path(tmp)
+        out = tmp_path / "out"
+        build_mac_copy(arch, out=out)
+        staged = tmp_path / "staged"
+        shutil.copytree(out / "Phone Reseller CRM.app", staged / "Phone Reseller CRM.app")
+        picker = out / "FolderPicker"
+        if picker.is_file():
+            shutil.copy2(picker, staged / "FolderPicker")
+        persist = tempfile.mkdtemp(prefix=f"crm-mac-{arch}-persist-")
+        shutil.copytree(staged, persist)
+        return Path(persist) / "Phone Reseller CRM.app"
+
+
+def build_universal_copy(out: Path | None = None) -> Path:
+    if sys.platform != "darwin":
+        raise SystemExit(
+            "macOS customer builds must run on macOS.\n"
+            "Use GitHub Actions or a Mac to build."
+        )
+
+    machine = platform.machine()
+    if machine not in ("arm64", "x86_64"):
+        raise SystemExit(f"Unsupported Mac architecture: {machine}")
+
+    out = out or ARCH_OUTPUT["universal"]
+    ensure_pyinstaller()
+
+    print("Building arm64 slice …")
+    try:
+        arm_app = _build_to_temp("arm64")
+    except Exception as exc:
+        raise SystemExit(
+            "Could not build the Apple Silicon (arm64) slice.\n"
+            "Run this on an Apple Silicon Mac, or build arm64 and x86_64 copies separately and merge with CI.\n"
+            f"Details: {exc}"
+        ) from exc
+
+    print("Building x86_64 slice …")
+    try:
+        intel_app = _build_to_temp("x86_64")
+    except Exception as exc:
+        raise SystemExit(
+            "Could not build the Intel (x86_64) slice.\n"
+            "On Apple Silicon, install Rosetta and an x64 Python wheel set.\n"
+            f"Details: {exc}"
+        ) from exc
+
+    if out.exists():
+        shutil.rmtree(out)
+    out.mkdir(parents=True)
+
+    print("Merging universal Phone Reseller CRM.app …")
+    merged_app = out / "Phone Reseller CRM.app"
+    merge_app_bundles(arm_app, intel_app, merged_app)
+
+    main_binary = merged_app / "Contents" / "MacOS" / "PhoneResellerCRM"
+    verify_universal(main_binary)
+
+    arm_picker = arm_app.parent / "FolderPicker"
+    intel_picker = intel_app.parent / "FolderPicker"
+    if arm_picker.is_file() and intel_picker.is_file():
+        universal_picker = out / "FolderPicker"
+        merge_macho_binary(arm_picker, intel_picker, universal_picker)
+        universal_picker.chmod(0o755)
+        macos = merged_app / "Contents" / "MacOS"
+        shutil.copy2(universal_picker, macos / "FolderPicker")
+        (macos / "FolderPicker").chmod(0o755)
+
+    write_start_here(out, "universal")
+    (out / "license.json").write_text("{}\n", encoding="utf-8")
+    verify_no_source(out)
+
+    print(f"\n✓ Universal Customer Copy ready:\n  {out}\n")
+    return out
+
+
 def write_start_here(out: Path, arch: str) -> None:
-    chip_label = "Apple Silicon (M1/M2/M3/M4)" if arch == "arm64" else "Intel Mac"
+    if arch == "universal":
+        chip_label = "Universal (Intel + Apple Silicon)"
+        wrong_chip = """  This build runs on BOTH:
+  • Intel Mac
+  • Apple Silicon (M1/M2/M3/M4)"""
+    else:
+        chip_label = "Apple Silicon (M1/M2/M3/M4)" if arch == "arm64" else "Intel Mac"
+        wrong_chip = """  • M1/M2/M3/M4 Mac → use "Customer Copy Apple Silicon" folder
+  • Intel Mac       → use "Customer Copy Intel Mac" folder
+  • Both chip types → use "Customer Copy Universal Mac" folder
+  • Windows PC      → use "Customer Windows Copy" folder"""
     (out / "START HERE.txt").write_text(
         f"""Phone Reseller CRM — Customer Edition v2.3 (Mac — {chip_label})
 {'=' * (52 + len(chip_label))}
@@ -74,13 +230,12 @@ HOW TO START
 ────────────
   1. Double-click:  Phone Reseller CRM.app
   2. Browser opens at http://localhost:5050
-  3. If it does not open, wait 10 seconds and visit http://localhost:5050
+  3. If CRM is already running, the browser opens to the existing session
+  4. If it does not open, wait 10 seconds and visit http://localhost:5050
 
 WRONG CHIP?
 ───────────
-  • M1/M2/M3/M4 Mac → use "Customer Copy Apple Silicon" folder
-  • Intel Mac       → use "Customer Copy Intel Mac" folder
-  • Windows PC      → use "Customer Windows Copy" folder
+{wrong_chip}
 
 FIRST TIME ON MAC
 ─────────────────
@@ -148,7 +303,9 @@ def build_mac_copy(arch: str, out: Path | None = None) -> Path:
             "macOS customer builds must run on macOS.\n"
             "Use GitHub Actions or a Mac to build."
         )
-    if arch not in ARCH_OUTPUT:
+    if arch == "universal":
+        return build_universal_copy(out)
+    if arch not in ("arm64", "x86_64"):
         raise ValueError(f"arch must be one of {list(ARCH_OUTPUT)}")
 
     out = out or ARCH_OUTPUT[arch]
@@ -194,7 +351,7 @@ def main() -> None:
         "--arch",
         required=True,
         choices=sorted(ARCH_OUTPUT),
-        help="Target Mac CPU: arm64 (Apple Silicon) or x86_64 (Intel)",
+        help="Target Mac CPU: arm64, x86_64, or universal (Intel + Apple Silicon)",
     )
     args = parser.parse_args()
     build_mac_copy(args.arch)

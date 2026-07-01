@@ -8,6 +8,7 @@ from flask import Flask, jsonify, redirect, render_template, request, session, u
 
 import database as db
 import license_guard as lic
+import update_service as updates
 
 if getattr(sys, "frozen", False):
     _BASE = Path(sys._MEIPASS)
@@ -88,6 +89,22 @@ def _validate_entry_type(entry_type):
     if entry_type not in ENTRY_TYPES:
         return "Entry type must be credit or debit"
     return None
+
+
+def _require_amount(data, field="amount"):
+    """Parse amount; rejects missing/blank/negative values. Zero is allowed only for balances, not here."""
+    if field not in data or data[field] is None:
+        return None, "Amount is required"
+    text = str(data[field]).strip()
+    if text == "":
+        return None, "Amount is required"
+    try:
+        value = float(text)
+    except (TypeError, ValueError):
+        return None, "Amount must be a number"
+    if value <= 0:
+        return None, "Amount must be greater than zero"
+    return value, None
 
 
 @app.before_request
@@ -432,40 +449,31 @@ def update_email_settings_api():
 
 @app.route("/api/update/check")
 def update_check_api():
-    """Compare local VERSION with remote GitHub VERSION file."""
-    remote_version = None
-    update_available = False
+    """Compare local VERSION with remote manifest (version.json) or legacy VERSION file."""
+    return jsonify(updates.check_for_updates())
+
+
+@app.route("/api/update/status")
+def update_status_api():
+    return jsonify(updates.get_update_state())
+
+
+@app.route("/api/update/install", methods=["POST"])
+def update_install_api():
+    if not session.get("logged_in") or not session.get("user_id"):
+        return jsonify({"error": "Unauthorized"}), 401
+    data = request.get_json(silent=True) or {}
     try:
-        req = urllib.request.Request(
-            GITHUB_VERSION_URL,
-            headers={"User-Agent": "PhoneResellerCRM-UpdateChecker/1.0"},
-        )
-        with urllib.request.urlopen(req, timeout=6) as resp:
-            remote_version = resp.read().decode("utf-8").strip()
-        if remote_version and remote_version != APP_VERSION:
-            update_available = _version_newer(remote_version, APP_VERSION)
-    except Exception:
-        pass
-    return jsonify({
-        "current_version": APP_VERSION,
-        "remote_version": remote_version,
-        "update_available": update_available,
-        "download_hint": "https://github.com/HeavyGod-hehe/MobileCRM/tree/Version007",
-    })
+        return jsonify(updates.start_install(data.get("download_url")))
+    except RuntimeError as exc:
+        return jsonify({"error": str(exc)}), 400
+    except Exception as exc:
+        return jsonify({"error": str(exc)}), 500
 
 
 @app.route("/api/app/version")
 def app_version_api():
-    return jsonify({"version": APP_VERSION})
-
-
-def _version_newer(remote, current):
-    def parts(v):
-        return [int(x) for x in v.split(".") if x.isdigit()]
-    try:
-        return parts(remote) > parts(current)
-    except (ValueError, TypeError):
-        return remote != current
+    return jsonify({"version": APP_VERSION or updates.get_current_version()})
 
 
 # --- Returns ---
@@ -676,8 +684,10 @@ def delete_phone(phone_id):
 def add_phone_expense(phone_id):
     user_id = _current_user_id()
     data = request.get_json(force=True)
-    if not data.get("amount"):
-        return jsonify({"error": "Amount is required"}), 400
+    amount, err = _require_amount(data)
+    if err:
+        return jsonify({"error": err}), 400
+    data["amount"] = amount
     with db.db_session() as conn:
         try:
             expense = db.add_phone_expense(conn, user_id, phone_id, data)
@@ -692,8 +702,11 @@ def add_phone_expense(phone_id):
 def update_phone_expense(phone_id, expense_id):
     user_id = _current_user_id()
     data = request.get_json(force=True)
-    if not data.get("amount"):
-        return jsonify({"error": "Amount is required"}), 400
+    if "amount" in data:
+        amount, err = _require_amount(data)
+        if err:
+            return jsonify({"error": err}), 400
+        data["amount"] = amount
     with db.db_session() as conn:
         try:
             expense = db.update_phone_expense(conn, user_id, phone_id, expense_id, data)
@@ -965,8 +978,10 @@ def reinvest_profit_api():
     data = request.get_json(force=True)
     if not data.get("partner_id"):
         return jsonify({"error": "Partner is required"}), 400
-    if not data.get("amount"):
-        return jsonify({"error": "Amount is required"}), 400
+    amount, err = _require_amount(data)
+    if err:
+        return jsonify({"error": err}), 400
+    data["amount"] = amount
     try:
         with db.db_session() as conn:
             result = db.reinvest_profit(conn, user_id, data)
@@ -988,8 +1003,12 @@ def list_fixed_expenses_api():
 def create_fixed_expense_api():
     user_id = _current_user_id()
     data = request.get_json(force=True)
-    if not data.get("purpose") or not data.get("amount"):
-        return jsonify({"error": "Purpose and amount are required"}), 400
+    if not data.get("purpose"):
+        return jsonify({"error": "Purpose is required"}), 400
+    amount, err = _require_amount(data)
+    if err:
+        return jsonify({"error": err}), 400
+    data["amount"] = amount
     with db.db_session() as conn:
         return jsonify(db.create_fixed_expense(conn, user_id, data)), 201
 
@@ -1056,22 +1075,32 @@ def list_bank_transactions_api(bank_id):
 def create_bank_transaction_api(bank_id):
     user_id = _current_user_id()
     data = request.get_json(force=True)
-    if not data.get("amount"):
-        return jsonify({"error": "Amount is required"}), 400
+    amount, err = _require_amount(data)
+    if err:
+        return jsonify({"error": err}), 400
+    data["amount"] = amount
     if data.get("transaction_type") not in db.BANK_TX_TYPES:
         return jsonify({"error": "Transaction type must be credit or debit"}), 400
     with db.db_session() as conn:
         if not db.get_bank(conn, user_id, bank_id):
             return jsonify({"error": "Bank not found"}), 404
-        entry = db.create_bank_transaction(conn, bank_id, data)
+        entry = db.create_bank_transaction(
+            conn, bank_id, data, user_id=user_id, mirror_cash_book=True,
+        )
         return jsonify(entry), 201
 
 
 @app.route("/api/banks/<int:bank_id>/transactions/<int:tx_id>", methods=["PUT"])
 def update_bank_transaction_api(bank_id, tx_id):
+    user_id = _current_user_id()
     data = request.get_json(force=True)
+    if "amount" in data:
+        amount, err = _require_amount(data)
+        if err:
+            return jsonify({"error": err}), 400
+        data["amount"] = amount
     with db.db_session() as conn:
-        entry = db.update_bank_transaction(conn, tx_id, data)
+        entry = db.update_bank_transaction(conn, tx_id, data, user_id=user_id)
         if not entry:
             return jsonify({"error": "Transaction not found"}), 404
         return jsonify(entry)
@@ -1079,8 +1108,9 @@ def update_bank_transaction_api(bank_id, tx_id):
 
 @app.route("/api/banks/<int:bank_id>/transactions/<int:tx_id>", methods=["DELETE"])
 def delete_bank_transaction_api(bank_id, tx_id):
+    user_id = _current_user_id()
     with db.db_session() as conn:
-        db.delete_bank_transaction(conn, tx_id)
+        db.delete_bank_transaction(conn, tx_id, user_id=user_id)
         return jsonify({"ok": True})
 
 
@@ -1101,12 +1131,17 @@ def list_cash_book_api():
 def create_cash_book_entry_api():
     user_id = _current_user_id()
     data = request.get_json(force=True)
-    if not data.get("amount"):
-        return jsonify({"error": "Amount is required"}), 400
+    amount, err = _require_amount(data)
+    if err:
+        return jsonify({"error": err}), 400
+    data["amount"] = amount
     if data.get("entry_type") not in db.CASH_BOOK_TYPES:
         return jsonify({"error": "Entry type must be in or out"}), 400
-    with db.db_session() as conn:
-        return jsonify(db.create_cash_book_entry(conn, user_id, data)), 201
+    try:
+        with db.db_session() as conn:
+            return jsonify(db.create_cash_book_entry(conn, user_id, data)), 201
+    except ValueError as exc:
+        return jsonify({"error": str(exc)}), 400
 
 
 @app.route("/api/cash-book/<int:entry_id>", methods=["PUT"])
@@ -1141,8 +1176,10 @@ def list_journal_vouchers_api():
 def create_journal_voucher_api():
     user_id = _current_user_id()
     data = request.get_json(force=True)
-    if not data.get("amount"):
-        return jsonify({"error": "Amount is required"}), 400
+    amount, err = _require_amount(data)
+    if err:
+        return jsonify({"error": err}), 400
+    data["amount"] = amount
     if not data.get("debit_account_id") or not data.get("credit_account_id"):
         return jsonify({"error": "Debit and credit accounts are required"}), 400
     try:
@@ -1230,16 +1267,21 @@ def account_statement(account_id):
 def create_entry_api(account_id):
     user_id = _current_user_id()
     data = request.get_json(force=True)
-    if not data.get("amount"):
-        return jsonify({"error": "Amount is required"}), 400
+    amount, err = _require_amount(data)
+    if err:
+        return jsonify({"error": err}), 400
+    data["amount"] = amount
     err = _validate_entry_type(data.get("entry_type"))
     if err:
         return jsonify({"error": err}), 400
-    with db.db_session() as conn:
-        if not db.get_account(conn, user_id, account_id):
-            return jsonify({"error": "Account not found"}), 404
-        entry = db.create_entry(conn, account_id, data, user_id=user_id)
-        return jsonify(entry), 201
+    try:
+        with db.db_session() as conn:
+            if not db.get_account(conn, user_id, account_id):
+                return jsonify({"error": "Account not found"}), 404
+            entry = db.create_entry(conn, account_id, data, user_id=user_id)
+            return jsonify(entry), 201
+    except ValueError as exc:
+        return jsonify({"error": str(exc)}), 400
 
 
 @app.route("/api/accounts/<int:account_id>/entries/<int:entry_id>", methods=["PUT"])
@@ -1250,6 +1292,11 @@ def update_entry_api(account_id, entry_id):
         err = _validate_entry_type(data["entry_type"])
         if err:
             return jsonify({"error": err}), 400
+    if "amount" in data:
+        amount, err = _require_amount(data)
+        if err:
+            return jsonify({"error": err}), 400
+        data["amount"] = amount
     with db.db_session() as conn:
         if not db.get_account(conn, user_id, account_id):
             return jsonify({"error": "Account not found"}), 404
@@ -1259,7 +1306,7 @@ def update_entry_api(account_id, entry_id):
         ).fetchone()
         if not row:
             return jsonify({"error": "Entry not found"}), 404
-        entry = db.update_entry(conn, entry_id, data)
+        entry = db.update_entry(conn, entry_id, data, user_id=user_id)
         return jsonify(entry)
 
 

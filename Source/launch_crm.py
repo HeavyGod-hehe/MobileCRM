@@ -9,6 +9,8 @@ import sys
 import threading
 import time
 import traceback
+import urllib.error
+import urllib.request
 import webbrowser
 from datetime import datetime
 from pathlib import Path
@@ -42,6 +44,19 @@ def _log(message: str) -> None:
         handle.write(f"[{stamp}] {message}\n")
 
 
+def find_running_crm(host: str = HOST, start: int = DEFAULT_PORT, max_attempts: int = 20) -> int | None:
+    """Return the port if a CRM server is already listening."""
+    for port in range(start, start + max_attempts):
+        url = f"http://{host}:{port}/api/auth/status"
+        try:
+            with urllib.request.urlopen(url, timeout=0.4) as resp:
+                if resp.status == 200:
+                    return port
+        except (OSError, urllib.error.URLError, ValueError):
+            continue
+    return None
+
+
 def find_free_port(start: int, host: str = HOST, max_attempts: int = 20) -> int:
     for port in range(start, start + max_attempts):
         with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
@@ -70,6 +85,13 @@ def main() -> None:
     root = _project_root()
     os.chdir(root)
     _log(f"Starting CRM from {root}")
+
+    existing_port = find_running_crm()
+    if existing_port is not None:
+        url = f"http://{HOST}:{existing_port}"
+        _log(f"CRM already running at {url} — opening browser")
+        webbrowser.open(url)
+        return
 
     port = find_free_port(DEFAULT_PORT)
     os.environ["CRM_PORT"] = str(port)

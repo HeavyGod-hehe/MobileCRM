@@ -1,0 +1,162 @@
+# Push Source/VERSION (or click "Run workflow") → builds apps → GitHub Release → updates version.json
+# Customer apps read version.json and show "Install update" in Settings.
+
+name: Release CRM Update
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [Version007, main]
+    paths:
+      - 'Source/VERSION'
+
+permissions:
+  contents: write
+
+jobs:
+  build-mac-arm64:
+    name: Build Apple Silicon
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: |
+          python -m pip install --upgrade pip
+          pip install -r Source/requirements.txt pyinstaller
+          python Source/build_customer_mac.py --arch arm64
+      - uses: actions/upload-artifact@v4
+        with:
+          name: mac-arm64
+          path: Customer Copy Apple Silicon/
+          retention-days: 5
+
+  build-mac-intel:
+    name: Build Intel Mac
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: softwareupdate --install-rosetta --agree-to-license || true
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          architecture: x64
+      - run: |
+          arch -x86_64 python -m pip install --upgrade pip
+          arch -x86_64 python -m pip install --no-cache-dir -r Source/requirements.txt pyinstaller
+          arch -x86_64 python Source/build_customer_mac.py --arch x86_64
+      - uses: actions/upload-artifact@v4
+        with:
+          name: mac-intel
+          path: Customer Copy Intel Mac/
+          retention-days: 5
+
+  build-mac-universal:
+    name: Build Universal Mac
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: softwareupdate --install-rosetta --agree-to-license || true
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: |
+          python -m pip install --upgrade pip
+          pip install -r Source/requirements.txt pyinstaller
+          arch -x86_64 python -m pip install --no-cache-dir -r Source/requirements.txt pyinstaller
+          python Source/build_customer_mac.py --arch universal
+      - uses: actions/upload-artifact@v4
+        with:
+          name: mac-universal
+          path: Customer Copy Universal Mac/
+          retention-days: 5
+
+  build-windows:
+    name: Build Windows
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: |
+          python -m pip install --upgrade pip
+          pip install -r Source/requirements.txt pyinstaller
+          python Source/build_customer_windows_copy.py
+      - uses: actions/upload-artifact@v4
+        with:
+          name: windows
+          path: Customer Windows Copy/
+          retention-days: 5
+
+  publish:
+    name: Publish release + version.json
+    needs: [build-mac-arm64, build-mac-intel, build-mac-universal, build-windows]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      - name: Read version
+        id: ver
+        run: echo "version=$(tr -d '[:space:]' < Source/VERSION)" >> "$GITHUB_OUTPUT"
+
+      - name: Package release zips
+        run: |
+          set -euo pipefail
+          VERSION="${{ steps.ver.outputs.version }}"
+          mkdir -p dist
+          cd artifacts/mac-intel
+          zip -ry "../../dist/PhoneResellerCRM-IntelMac-${VERSION}.zip" "Phone Reseller CRM.app"
+          cd ../mac-arm64
+          zip -ry "../../dist/PhoneResellerCRM-AppleSilicon-${VERSION}.zip" "Phone Reseller CRM.app"
+          cd ../mac-universal
+          zip -ry "../../dist/PhoneResellerCRM-UniversalMac-${VERSION}.zip" "Phone Reseller CRM.app"
+          cd ../windows
+          zip -ry "../../dist/PhoneResellerCRM-Windows-${VERSION}.zip" "Phone Reseller CRM"
+          ls -la ../../dist/
+
+      - name: Create or update GitHub Release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          VERSION="${{ steps.ver.outputs.version }}"
+          TAG="v${VERSION}"
+          NOTES="Phone Reseller CRM ${VERSION}
+
+          Customer apps: open **Settings → Software Update → Install update**.
+          Your **Data** folder (database & backups) is not touched."
+
+          if gh release view "$TAG" --repo "${{ github.repository }}" >/dev/null 2>&1; then
+            gh release upload "$TAG" dist/*.zip --clobber --repo "${{ github.repository }}"
+            gh release edit "$TAG" --notes "$NOTES" --repo "${{ github.repository }}"
+          else
+            gh release create "$TAG" dist/*.zip \
+              --title "Phone Reseller CRM ${VERSION}" \
+              --notes "$NOTES" \
+              --repo "${{ github.repository }}"
+          fi
+
+      - name: Update version.json manifest
+        run: |
+          python Source/scripts/generate_version_manifest.py \
+            --version "${{ steps.ver.outputs.version }}" \
+            --repo "${{ github.repository }}" \
+            --tag "v${{ steps.ver.outputs.version }}"
+
+      - name: Commit manifest for auto-updater
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add Source/releases/version.json
+          if git diff --staged --quiet; then
+            echo "version.json unchanged"
+          else
+            git commit -m "chore: update release manifest v${{ steps.ver.outputs.version }}"
+            git push
+          fi

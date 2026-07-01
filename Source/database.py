@@ -2685,14 +2685,16 @@ def create_bank(conn, user_id, data):
         (data["name"], user_id),
     )
     bank_id = cursor.lastrowid
-    if data.get("initial_balance"):
-        conn.execute(
-            """
-            INSERT INTO bank_transactions (bank_account_id, transaction_type, amount, note)
-            VALUES (?, 'credit', ?, 'Opening balance')
-            """,
-            (bank_id, float(data["initial_balance"])),
-        )
+    if "initial_balance" in data and data["initial_balance"] is not None and str(data["initial_balance"]).strip() != "":
+        initial = float(data["initial_balance"])
+        if initial != 0:
+            conn.execute(
+                """
+                INSERT INTO bank_transactions (bank_account_id, transaction_type, amount, note)
+                VALUES (?, 'credit', ?, 'Opening balance')
+                """,
+                (bank_id, initial),
+            )
     return get_bank(conn, user_id, bank_id)
 
 
@@ -2708,6 +2710,17 @@ def update_bank(conn, user_id, bank_id, data):
 
 
 def delete_bank(conn, user_id, bank_id):
+    if not get_bank(conn, user_id, bank_id):
+        return
+    linked_cash = conn.execute(
+        """
+        SELECT id FROM cash_book_entries
+        WHERE user_id = ? AND bank_account_id = ?
+        """,
+        (user_id, bank_id),
+    ).fetchall()
+    for row in linked_cash:
+        _delete_cash_book_entry_cascade(conn, user_id, row["id"])
     conn.execute(
         "DELETE FROM bank_accounts WHERE id = ? AND user_id = ?",
         (bank_id, user_id),
@@ -2736,24 +2749,67 @@ def list_bank_transactions(conn, bank_id):
     return list(reversed(entries))
 
 
-def create_bank_transaction(conn, bank_id, data):
+def _mirror_bank_tx_to_cash_book(
+    conn, user_id, bank_id, bank_tx_id, tx_type, amount, note, *,
+    entry_date=None, source_type=None, source_id=None,
+):
+    """Record a bank movement in the daily cash book without creating a duplicate bank row."""
+    entry_type = "in" if tx_type == "credit" else "out"
+    cursor = conn.execute(
+        """
+        INSERT INTO cash_book_entries (
+            entry_type, amount, note, entry_date, user_id,
+            payment_source, bank_account_id, linked_bank_transaction_id
+        ) VALUES (?, ?, ?, ?, ?, 'bank', ?, ?)
+        """,
+        (
+            entry_type,
+            float(amount),
+            note,
+            entry_date or _local_date(conn),
+            user_id,
+            bank_id,
+            bank_tx_id,
+        ),
+    )
+    entry_id = cursor.lastrowid
+    if source_type and source_id is not None:
+        _record_ledger_link(
+            conn, user_id, source_type, source_id,
+            cash_book_entry_id=entry_id,
+            bank_transaction_id=bank_tx_id,
+        )
+    return entry_id
+
+
+def create_bank_transaction(conn, bank_id, data, user_id=None, *, mirror_cash_book=False):
     tx_type = data["transaction_type"]
     if tx_type not in BANK_TX_TYPES:
         raise ValueError("Invalid transaction type")
+    amount = float(data["amount"])
+    note = data.get("note", "")
     cursor = conn.execute(
         """
         INSERT INTO bank_transactions (bank_account_id, transaction_type, amount, note)
         VALUES (?, ?, ?, ?)
         """,
-        (bank_id, tx_type, float(data["amount"]), data.get("note", "")),
+        (bank_id, tx_type, amount, note),
     )
+    tx_id = cursor.lastrowid
+    if mirror_cash_book and user_id is not None:
+        _mirror_bank_tx_to_cash_book(
+            conn, user_id, bank_id, tx_id, tx_type, amount, note,
+            entry_date=data.get("entry_date"),
+            source_type="bank_transaction",
+            source_id=tx_id,
+        )
     row = conn.execute(
-        "SELECT * FROM bank_transactions WHERE id = ?", (cursor.lastrowid,)
+        "SELECT * FROM bank_transactions WHERE id = ?", (tx_id,)
     ).fetchone()
     return dict(row)
 
 
-def update_bank_transaction(conn, tx_id, data):
+def update_bank_transaction(conn, tx_id, data, user_id=None):
     existing = conn.execute(
         "SELECT * FROM bank_transactions WHERE id = ?", (tx_id,)
     ).fetchone()
@@ -2776,11 +2832,39 @@ def update_bank_transaction(conn, tx_id, data):
     row = conn.execute(
         "SELECT * FROM bank_transactions WHERE id = ?", (tx_id,)
     ).fetchone()
-    return dict(row)
+    if user_id and row:
+        cb = conn.execute(
+            """
+            SELECT id FROM cash_book_entries
+            WHERE linked_bank_transaction_id = ? AND user_id = ?
+            """,
+            (tx_id, user_id),
+        ).fetchone()
+        if cb and ("amount" in data or "transaction_type" in data or "note" in data):
+            cb_update = {}
+            if "amount" in data:
+                cb_update["amount"] = float(data["amount"])
+            if "note" in data:
+                cb_update["note"] = data["note"]
+            if "transaction_type" in data:
+                cb_update["entry_type"] = "in" if data["transaction_type"] == "credit" else "out"
+            update_cash_book_entry(conn, user_id, cb["id"], cb_update, _sync_linked=False)
+    return dict(row) if row else None
 
 
-def delete_bank_transaction(conn, tx_id):
-    conn.execute("DELETE FROM bank_transactions WHERE id = ?", (tx_id,))
+def delete_bank_transaction(conn, tx_id, user_id=None):
+    if user_id is not None:
+        cb = conn.execute(
+            """
+            SELECT id FROM cash_book_entries
+            WHERE linked_bank_transaction_id = ? AND user_id = ?
+            """,
+            (tx_id, user_id),
+        ).fetchone()
+        if cb:
+            _delete_cash_book_entry_cascade(conn, user_id, cb["id"])
+            return
+    _delete_bank_tx_raw(conn, tx_id)
 
 
 def total_bank_balance(conn, user_id):
@@ -2789,6 +2873,12 @@ def total_bank_balance(conn, user_id):
 
 
 # --- Cash Book ---
+
+def _cash_base_opening(conn, user_id) -> float:
+    """Starting cash in hand from settings (used before the first cash-book row)."""
+    settings = get_user_settings(conn, user_id)
+    return float(settings.get("cash_in_hand") or 0)
+
 
 def _cash_book_running(conn, user_id):
     rows = conn.execute(
@@ -2802,7 +2892,7 @@ def _cash_book_running(conn, user_id):
         """,
         (user_id,),
     ).fetchall()
-    balance = 0.0
+    balance = _cash_base_opening(conn, user_id)
     entries = []
     for row in rows:
         d = dict(row)
@@ -2812,13 +2902,15 @@ def _cash_book_running(conn, user_id):
                 balance += d["amount"]
             else:
                 balance -= d["amount"]
-            d["balance"] = round(balance, 2)
-        else:
-            d["balance"] = None
+        d["balance"] = round(balance, 2)
         d["payment_label"] = (
             f"Bank: {d['bank_name']}" if source == "bank" and d.get("bank_name")
-            else "Cash"
+            else ("Bank" if source == "bank" else "Cash")
         )
+        if source == "bank":
+            d["entry_type_label"] = "Bank In" if d["entry_type"] == "in" else "Bank Out"
+        else:
+            d["entry_type_label"] = "Cash In" if d["entry_type"] == "in" else "Cash Out"
         entries.append(d)
     return list(reversed(entries))
 
@@ -2843,13 +2935,14 @@ def create_cash_book_entry(conn, user_id, data):
     return result
 
 
-def update_cash_book_entry(conn, user_id, entry_id, data):
+def update_cash_book_entry(conn, user_id, entry_id, data, *, _sync_linked=True):
     existing = conn.execute(
         "SELECT * FROM cash_book_entries WHERE id = ? AND user_id = ?",
         (entry_id, user_id),
     ).fetchone()
     if not existing:
         return None
+
     fields, values = [], []
     for field in ("entry_type", "amount", "note", "entry_date"):
         if field in data:
@@ -2864,6 +2957,36 @@ def update_cash_book_entry(conn, user_id, entry_id, data):
             f"UPDATE cash_book_entries SET {', '.join(fields)} WHERE id = ? AND user_id = ?",
             values,
         )
+
+    if _sync_linked:
+        row = conn.execute(
+            "SELECT * FROM cash_book_entries WHERE id = ?", (entry_id,)
+        ).fetchone()
+        if row:
+            entry_type = row["entry_type"]
+            amount = float(row["amount"])
+            note = row["note"]
+            if row["linked_bank_transaction_id"]:
+                tx_type = "credit" if entry_type == "in" else "debit"
+                conn.execute(
+                    """
+                    UPDATE bank_transactions
+                    SET transaction_type = ?, amount = ?, note = ?
+                    WHERE id = ?
+                    """,
+                    (tx_type, amount, note, row["linked_bank_transaction_id"]),
+                )
+            if row["linked_account_entry_id"]:
+                acct_type = "credit" if entry_type == "out" else "debit"
+                conn.execute(
+                    """
+                    UPDATE account_entries
+                    SET entry_type = ?, amount = ?, note = ?
+                    WHERE id = ?
+                    """,
+                    (acct_type, amount, note, row["linked_account_entry_id"]),
+                )
+
     row = conn.execute(
         "SELECT * FROM cash_book_entries WHERE id = ?", (entry_id,)
     ).fetchone()
@@ -2875,6 +2998,7 @@ def delete_cash_book_entry(conn, user_id, entry_id):
 
 
 def cash_book_daily_summary(conn, user_id):
+    settings_opening = _cash_base_opening(conn, user_id)
     rows = conn.execute(
         """
         SELECT entry_date,
@@ -2889,47 +3013,35 @@ def cash_book_daily_summary(conn, user_id):
         FROM cash_book_entries
         WHERE user_id = ?
         GROUP BY entry_date
-        ORDER BY entry_date DESC
+        ORDER BY entry_date ASC
         """,
         (user_id,),
     ).fetchall()
-    summaries = []
-    all_entries = conn.execute(
-        """
-        SELECT entry_date, entry_type, amount, payment_source
-        FROM cash_book_entries
-        WHERE user_id = ? AND COALESCE(payment_source, 'cash') = 'cash'
-        ORDER BY entry_date ASC, created_at ASC, id ASC
-        """,
-        (user_id,),
-    ).fetchall()
-    daily_closing = {}
-    bal = 0.0
-    for e in all_entries:
-        if e["entry_type"] == "in":
-            bal += e["amount"]
-        else:
-            bal -= e["amount"]
-        daily_closing[e["entry_date"]] = round(bal, 2)
 
+    summaries = []
+    prev_closing = settings_opening
     for r in rows:
         d = dict(r)
-        d["closing_balance"] = daily_closing.get(d["entry_date"], 0)
-        d["cash_in"] = round(d["cash_in"] or 0, 2)
-        d["cash_out"] = round(d["cash_out"] or 0, 2)
+        opening = round(prev_closing, 2)
+        cash_in = round(d["cash_in"] or 0, 2)
+        cash_out = round(d["cash_out"] or 0, 2)
+        closing = round(opening + cash_in - cash_out, 2)
+        d["opening_balance"] = opening
+        d["closing_balance"] = closing
+        d["cash_in"] = cash_in
+        d["cash_out"] = cash_out
         d["bank_in"] = round(d.get("bank_in") or 0, 2)
         d["bank_out"] = round(d.get("bank_out") or 0, 2)
         summaries.append(d)
-    return summaries
+        prev_closing = closing
+    return list(reversed(summaries))
 
 
 def cash_in_hand_balance(conn, user_id):
-    settings = get_user_settings(conn, user_id)
-    manual = float(settings.get("cash_in_hand", 0))
     entries = _cash_book_running(conn, user_id)
     if entries:
-        return entries[0]["balance"]
-    return manual
+        return float(entries[0]["balance"] or 0)
+    return round(_cash_base_opening(conn, user_id), 2)
 
 
 # --- Dashboard ---
@@ -3138,6 +3250,21 @@ def update_account(conn, user_id, account_id, data):
 
 
 def delete_account(conn, user_id, account_id):
+    if not get_account(conn, user_id, account_id):
+        return
+    for row in conn.execute(
+        "SELECT id FROM account_entries WHERE account_id = ?",
+        (account_id,),
+    ).fetchall():
+        _delete_account_entry_cascade(conn, user_id, row["id"])
+    for row in conn.execute(
+        """
+        SELECT id FROM cash_book_entries
+        WHERE user_id = ? AND account_id = ?
+        """,
+        (user_id, account_id),
+    ).fetchall():
+        _delete_cash_book_entry_cascade(conn, user_id, row["id"])
     conn.execute(
         "DELETE FROM accounts WHERE id = ? AND user_id = ?",
         (account_id, user_id),
@@ -3239,19 +3366,21 @@ def create_entry(conn, account_id, data, user_id=None):
     return dict(row)
 
 
-def update_entry(conn, entry_id, data):
+def update_entry(conn, entry_id, data, user_id=None):
     existing = conn.execute(
         "SELECT * FROM account_entries WHERE id = ?", (entry_id,)
     ).fetchone()
     if not existing:
         return None
+
+    entry_type = data.get("entry_type", existing["entry_type"])
+    amount = float(data["amount"]) if "amount" in data else float(existing["amount"])
+    note = data.get("note", existing["note"])
+
     fields, values = [], []
-    for field in ("entry_type", "amount", "note"):
+    for field, val in (("entry_type", entry_type), ("amount", amount), ("note", note)):
         if field in data:
             fields.append(f"{field} = ?")
-            val = data[field]
-            if field == "amount":
-                val = float(val)
             values.append(val)
     if fields:
         values.append(entry_id)
@@ -3259,6 +3388,32 @@ def update_entry(conn, entry_id, data):
             f"UPDATE account_entries SET {', '.join(fields)} WHERE id = ?",
             values,
         )
+
+    cb_id = existing["linked_cash_book_entry_id"]
+    if user_id and cb_id:
+        cash_direction = "in" if entry_type == "debit" else "out"
+        update_cash_book_entry(
+            conn, user_id, cb_id,
+            {"entry_type": cash_direction, "amount": amount, "note": note},
+            _sync_linked=False,
+        )
+        bank_id = existing["bank_account_id"]
+        if bank_id and existing["payment_source"] == "bank":
+            cb_row = conn.execute(
+                "SELECT linked_bank_transaction_id FROM cash_book_entries WHERE id = ?",
+                (cb_id,),
+            ).fetchone()
+            if cb_row and cb_row["linked_bank_transaction_id"]:
+                tx_type = "credit" if cash_direction == "in" else "debit"
+                conn.execute(
+                    """
+                    UPDATE bank_transactions
+                    SET transaction_type = ?, amount = ?, note = ?
+                    WHERE id = ?
+                    """,
+                    (tx_type, amount, note, cb_row["linked_bank_transaction_id"]),
+                )
+
     row = conn.execute(
         "SELECT * FROM account_entries WHERE id = ?", (entry_id,)
     ).fetchone()

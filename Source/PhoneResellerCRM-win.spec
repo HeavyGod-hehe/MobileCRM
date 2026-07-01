@@ -24,6 +24,7 @@ a = Analysis(
         "database",
         "license_guard",
         "email_service",
+        "update_service",
     ],
     hookspath=[],
     hooksconfig={},

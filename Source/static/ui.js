@@ -88,13 +88,16 @@ function bumpBadge(id) {
 
 function animateValue(el, end, formatter, duration = 600) {
   if (!el) return;
-  const start = parseFloat(el.dataset.value) || 0;
-  if (start === end) { el.textContent = formatter(end); return; }
+  const parsed = Number(end);
+  end = Number.isFinite(parsed) ? parsed : 0;
+  const start = Number(el.dataset.value);
+  const from = Number.isFinite(start) ? start : 0;
+  if (from === end) { el.textContent = formatter(end); el.dataset.value = end; return; }
   const t0 = performance.now();
   function step(now) {
     const p = Math.min((now - t0) / duration, 1);
     const eased = 1 - Math.pow(1 - p, 3);
-    const val = start + (end - start) * eased;
+    const val = from + (end - from) * eased;
     el.textContent = formatter(Math.round(val));
     if (p < 1) requestAnimationFrame(step);
     else { el.dataset.value = end; el.textContent = formatter(end); }
@@ -206,7 +209,8 @@ async function initSettingsPage() {
   if (!authForm) return;
 
   loadAppVersion();
-  checkForUpdates();
+  initUpdateUi();
+  checkForUpdates({ banner: Boolean(document.getElementById('update-banner')) });
 
   try {
     const shop = await apiFetch('/api/settings/shop');
@@ -447,18 +451,136 @@ function collectShopPhones() {
     .filter(Boolean);
 }
 
-async function checkForUpdates() {
-  const banner = document.getElementById('update-banner');
-  const text = document.getElementById('update-banner-text');
-  if (!banner) return;
-  try {
-    const data = await apiFetch('/api/update/check');
+let _updatePollTimer = null;
+
+function renderUpdatePanel(data, { banner = false } = {}) {
+  const statusEl = document.getElementById('update-status-text');
+  const notesEl = document.getElementById('update-notes');
+  const installBtn = document.getElementById('btn-install-update');
+  const manualBtn = document.getElementById('btn-update-manual');
+  const bannerEl = document.getElementById('update-banner');
+  const bannerText = document.getElementById('update-banner-text');
+  const bannerInstall = document.getElementById('update-banner-install');
+  const settingsVer = document.getElementById('settings-app-version');
+
+  if (settingsVer && data.current_version) settingsVer.textContent = data.current_version;
+
+  const upToDate = !data.update_available;
+  let statusText = upToDate
+    ? `You're up to date (version ${data.current_version}).`
+    : `New version ${data.remote_version} is ready! You have ${data.current_version}.`;
+
+  if (!data.frozen && data.update_available) {
+    statusText += ' Use the compiled desktop app to install in one click.';
+  } else if (data.update_available && data.can_auto_install) {
+    statusText += ' Click Install update now — takes about a minute.';
+  }
+
+  if (statusEl) statusEl.textContent = statusText;
+
+  if (notesEl) {
+    if (data.release_notes && data.update_available) {
+      notesEl.textContent = data.release_notes;
+      notesEl.classList.remove('hidden');
+    } else {
+      notesEl.classList.add('hidden');
+    }
+  }
+
+  const showInstall = Boolean(data.update_available && data.can_auto_install);
+  if (installBtn) installBtn.classList.toggle('hidden', !showInstall);
+  if (bannerInstall) bannerInstall.classList.toggle('hidden', !showInstall);
+
+  const manualUrl = data.download_hint || data.download_url;
+  if (manualBtn) {
+    manualBtn.classList.toggle('hidden', !(data.update_available && manualUrl));
+    if (manualUrl) manualBtn.href = manualUrl;
+  }
+
+  if (banner && bannerEl && bannerText) {
     if (data.update_available) {
-      banner.classList.remove('hidden');
-      const link = data.download_hint || 'GitHub';
-      text.innerHTML = `Version <strong>${data.remote_version}</strong> is available (you have ${data.current_version}). <a href="${link}" target="_blank" rel="noopener" class="underline text-amber-200">Download the latest build</a> — keep your Data folder when updating.`;
+      bannerEl.classList.remove('hidden');
+      if (data.can_auto_install) {
+        bannerText.innerHTML = `Update ready: version <strong>${data.remote_version}</strong> (you have ${data.current_version}). Click <strong>Install update</strong> — your Data folder stays safe.`;
+      } else {
+        bannerText.innerHTML = `Version <strong>${data.remote_version}</strong> is available (you have ${data.current_version}).`;
+      }
+    } else {
+      bannerEl.classList.add('hidden');
+    }
+  }
+}
+
+async function pollUpdateProgress() {
+  try {
+    const state = await apiFetch('/api/update/status');
+    const wrap = document.getElementById('update-progress-wrap');
+    const bar = document.getElementById('update-progress-bar');
+    const text = document.getElementById('update-progress-text');
+    const installBtn = document.getElementById('btn-install-update');
+    const checkBtn = document.getElementById('btn-check-updates');
+
+    if (wrap && ['downloading', 'extracting', 'applying', 'restarting', 'checking'].includes(state.status)) {
+      wrap.classList.remove('hidden');
+      if (bar) bar.style.width = `${state.progress || 0}%`;
+      if (text) text.textContent = state.message || 'Working…';
+      if (installBtn) installBtn.disabled = true;
+      if (checkBtn) checkBtn.disabled = true;
+    }
+
+    if (state.status === 'error') {
+      if (wrap) wrap.classList.add('hidden');
+      if (installBtn) installBtn.disabled = false;
+      if (checkBtn) checkBtn.disabled = false;
+      toast(state.error || 'Update failed', 'error');
+      clearInterval(_updatePollTimer);
+      _updatePollTimer = null;
+      return;
+    }
+
+    if (state.status === 'restarting') {
+      if (text) text.textContent = 'Restarting… the app will reopen in a few seconds.';
+      clearInterval(_updatePollTimer);
+      _updatePollTimer = null;
     }
   } catch (_) {}
+}
+
+async function startUpdateInstall() {
+  if (!confirm('Install the new version now?\n\n• The app will close for about a minute\n• It will reopen automatically\n• Your shop data (Data folder) is kept safe')) {
+    return;
+  }
+  try {
+    await apiFetch('/api/update/install', { method: 'POST' });
+    const wrap = document.getElementById('update-progress-wrap');
+    if (wrap) wrap.classList.remove('hidden');
+    if (!_updatePollTimer) {
+      _updatePollTimer = setInterval(pollUpdateProgress, 600);
+    }
+    pollUpdateProgress();
+    toast('Downloading update…', 'success');
+  } catch (err) {
+    toast(err.message, 'error');
+  }
+}
+
+async function checkForUpdates(options = {}) {
+  const { banner = false } = options;
+  try {
+    const data = await apiFetch('/api/update/check');
+    renderUpdatePanel(data, { banner });
+    return data;
+  } catch (_) {
+    const statusEl = document.getElementById('update-status-text');
+    if (statusEl) statusEl.textContent = 'Could not check for updates. Try again later.';
+    return null;
+  }
+}
+
+function initUpdateUi() {
+  document.getElementById('btn-check-updates')?.addEventListener('click', () => checkForUpdates());
+  document.getElementById('btn-install-update')?.addEventListener('click', startUpdateInstall);
+  document.getElementById('update-banner-install')?.addEventListener('click', startUpdateInstall);
 }
 
 async function loadAppVersion() {
@@ -520,7 +642,7 @@ async function initApp() {
   initWelcome();
   initThemePicker();
   initSettingsNav();
-  checkForUpdates();
+  checkForUpdates({ banner: true });
   const auth = await loadAppBranding();
   if (auth?.show_welcome) {
     showWelcomeModal(auth.session_username || auth.username, auth.shop_name);

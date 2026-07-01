@@ -1,0 +1,19 @@
+{
+  "version": "2.3.0",
+  "release_notes": "Phone Reseller CRM 2.3.0 — ledger sync, cash book fixes, and in-app updates. Open Settings → Software Update → Install update.",
+  "page_url": "https://github.com/HeavyGod-hehe/MobileCRM/releases",
+  "downloads": {
+    "windows": {
+      "url": "https://github.com/HeavyGod-hehe/MobileCRM/releases/download/v2.3.0/PhoneResellerCRM-Windows-2.3.0.zip"
+    },
+    "mac_intel": {
+      "url": "https://github.com/HeavyGod-hehe/MobileCRM/releases/download/v2.3.0/PhoneResellerCRM-IntelMac-2.3.0.zip"
+    },
+    "mac_arm64": {
+      "url": "https://github.com/HeavyGod-hehe/MobileCRM/releases/download/v2.3.0/PhoneResellerCRM-AppleSilicon-2.3.0.zip"
+    },
+    "mac_universal": {
+      "url": "https://github.com/HeavyGod-hehe/MobileCRM/releases/download/v2.3.0/PhoneResellerCRM-UniversalMac-2.3.0.zip"
+    }
+  }
+}

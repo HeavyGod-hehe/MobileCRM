@@ -445,6 +445,50 @@ def main():
             assert exp.get("cash_book_entry_id")
             assert cash_after == round(cash_before - 25000, 2)
 
+    def test_zero_cash_balance_and_new_account():
+        with db.db_session() as conn:
+            balance_before = db.cash_in_hand_balance(conn, user_id)
+            db.create_cash_book_entry(conn, user_id, {
+                "entry_type": "in",
+                "amount": 100,
+                "note": "Zero-balance probe in",
+                "payment_source": "cash",
+            })
+            db.create_cash_book_entry(conn, user_id, {
+                "entry_type": "out",
+                "amount": 100,
+                "note": "Zero-balance probe out",
+                "payment_source": "cash",
+            })
+            balance_after = db.cash_in_hand_balance(conn, user_id)
+            entries = db.list_cash_book(conn, user_id)
+            assert balance_after == balance_before
+            assert float(entries[0]["balance"]) == balance_before
+            acct = db.create_account(conn, user_id, {"name": "Zero Cash Customer", "contact": "0300"})
+            assert acct["balance"] == 0
+            bank = db.create_bank(conn, user_id, {
+                "name": "Zero Opening Bank",
+                "initial_balance": 0,
+            })
+            assert bank["balance"] == 0
+            db.create_bank_transaction(
+                conn, bank["id"],
+                {"transaction_type": "credit", "amount": 5000, "note": "Test deposit"},
+                user_id=user_id,
+                mirror_cash_book=True,
+            )
+            daily = db.cash_book_daily_summary(conn, user_id)
+            assert daily[0]["opening_balance"] is not None
+            # Explicit zero balance must display as numeric zero, not null
+            db.create_cash_book_entry(conn, user_id, {
+                "entry_type": "out",
+                "amount": balance_after,
+                "note": "Drain to exact zero",
+                "payment_source": "cash",
+            })
+            assert db.cash_in_hand_balance(conn, user_id) == 0
+            assert float(db.list_cash_book(conn, user_id)[0]["balance"]) == 0
+
     run_test("Purchase + udhar ledger sync", test_purchase_with_udhar)
     run_test("Borrow phone ledger sync", test_borrow_phone)
     run_test("Sale + receivable ledger sync", test_sell_with_receivable)
@@ -463,6 +507,7 @@ def main():
     run_test("Sale price edit re-syncs cash book", test_sale_edit_resyncs_ledger)
     run_test("Bulk sold udhar requires buyer account", test_bulk_sold_udhar_requires_buyer)
     run_test("Fixed expense posts to cash book", test_fixed_expense_cash_out)
+    run_test("Zero cash balance + new account", test_zero_cash_balance_and_new_account)
 
     # --- Stress load ---
     STRESS_PHONES = 200

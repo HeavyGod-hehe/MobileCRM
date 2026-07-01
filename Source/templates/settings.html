@@ -159,6 +159,34 @@
 
   <section class="glass-card rounded-xl p-6 lg:col-span-2">
     <div class="flex items-center gap-3 mb-5">
+      <div class="w-9 h-9 rounded-lg bg-cyan-500/15 flex items-center justify-center">
+        <svg class="w-5 h-5 text-cyan-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.75" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4"/></svg>
+      </div>
+      <div>
+        <h2 class="text-lg font-semibold text-white">Software Update</h2>
+        <p class="text-xs text-slate-500">Version <span id="settings-app-version">…</span> — updates install in one click</p>
+      </div>
+    </div>
+    <div class="max-w-2xl space-y-4">
+      <p id="update-status-text" class="text-sm text-slate-400">Checking for updates…</p>
+      <div id="update-notes" class="hidden text-sm text-slate-300 bg-slate-900/50 border border-white/8 rounded-lg p-4 whitespace-pre-wrap"></div>
+      <div id="update-progress-wrap" class="hidden">
+        <div class="update-progress-track">
+          <div id="update-progress-bar" class="update-progress-bar" style="width:0%"></div>
+        </div>
+        <p id="update-progress-text" class="text-xs text-slate-500 mt-2">Downloading…</p>
+      </div>
+      <div class="flex flex-wrap gap-3">
+        <button type="button" id="btn-check-updates" class="btn btn-ghost btn-sm">Check for updates</button>
+        <button type="button" id="btn-install-update" class="btn btn-primary btn-sm hidden">Install update now</button>
+        <a id="btn-update-manual" href="#" target="_blank" rel="noopener" class="btn btn-ghost btn-sm hidden">Download from website</a>
+      </div>
+      <p class="text-xs text-slate-600">Safe update — your shop data in the <strong class="text-slate-500">Data</strong> folder is kept. Only the app program is replaced.</p>
+    </div>
+  </section>
+
+  <section class="glass-card rounded-xl p-6 lg:col-span-2">
+    <div class="flex items-center gap-3 mb-5">
       <div class="w-9 h-9 rounded-lg bg-rose-500/15 flex items-center justify-center">
         <svg class="w-5 h-5 text-rose-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.75" d="M6 18L18 6M6 6l12 12"/></svg>
       </div>
