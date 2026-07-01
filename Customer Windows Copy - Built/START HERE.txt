@@ -1,0 +1,8 @@
+﻿Phone Reseller CRM — Customer Edition (Windows)
+==============================================
+
+HOW TO START
+  Double-click: Phone Reseller CRM\Phone Reseller CRM.exe
+  Browser opens at http://localhost:5050
+
+Support: contact your CRM vendor.
