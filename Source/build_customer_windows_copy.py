@@ -126,7 +126,7 @@ def main() -> None:
 
     shutil.copytree(app_src, OUT / "Phone Reseller CRM")
 
-    print("Building FolderPicker …")
+    print("Building FolderPicker ...")
     run_build("FolderPicker.spec")
     picker_src = ROOT / "dist" / "FolderPicker.exe"
     if not picker_src.is_file():
