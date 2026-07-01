@@ -3,20 +3,21 @@
 
 from __future__ import annotations
 
+import atexit
 import os
 import socket
 import sys
 import threading
 import time
 import traceback
-import webbrowser
 from datetime import datetime
 from pathlib import Path
 
+import crm_instance
 from app_paths import customer_data_dir, customer_install_dir
 
 DEFAULT_PORT = int(os.environ.get("CRM_PORT", "5050"))
-HOST = os.environ.get("CRM_HOST", "127.0.0.1")
+HOST = crm_instance.HOST
 
 
 def _project_root() -> Path:
@@ -63,7 +64,7 @@ def open_browser_when_ready(host: str, port: int) -> None:
                 break
         except OSError:
             continue
-    webbrowser.open(url)
+    crm_instance.open_browser(url)
 
 
 def main() -> None:
@@ -71,9 +72,15 @@ def main() -> None:
     os.chdir(root)
     _log(f"Starting CRM from {root}")
 
+    if crm_instance.focus_existing_instance(_log):
+        return
+
     port = find_free_port(DEFAULT_PORT)
     os.environ["CRM_PORT"] = str(port)
     url = f"http://{HOST}:{port}"
+
+    crm_instance.write_instance(port)
+    atexit.register(crm_instance.clear_instance)
 
     threading.Thread(target=open_browser_when_ready, args=(HOST, port), daemon=True).start()
 
@@ -92,6 +99,7 @@ if __name__ == "__main__":
     try:
         main()
     except Exception as exc:
+        crm_instance.clear_instance()
         _log("Startup failed:\n" + traceback.format_exc())
         if getattr(sys, "frozen", False):
             import tkinter as tk

@@ -174,6 +174,9 @@ def shutdown_system():
         return jsonify({"error": "Unauthorized"}), 401
 
     def _shutdown() -> None:
+        import crm_instance
+
+        crm_instance.clear_instance()
         os._exit(0)
 
     import threading

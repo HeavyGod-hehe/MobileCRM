@@ -26,6 +26,7 @@ a = Analysis(
         "app_paths",
         "app",
         "backup_service",
+        "crm_instance",
         "database",
         "license_guard",
         "email_service",

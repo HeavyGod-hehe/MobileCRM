@@ -9,6 +9,7 @@ on:
       - '.github/workflows/build-mac.yml'
       - 'Customer Copy Apple Silicon/**'
       - 'Customer Copy Intel Mac/**'
+      - 'Customer Copy Universal Mac/**'
 
 jobs:
   build-mac-arm64:
@@ -74,4 +75,43 @@ jobs:
         with:
           name: Customer-Copy-Intel-Mac
           path: Customer Copy Intel Mac/
+          retention-days: 30
+
+  build-mac-universal:
+    name: Universal Mac (Intel + Apple Silicon)
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r Source/requirements.txt pyinstaller
+
+      - name: Install Rosetta (for Intel slice tooling)
+        run: softwareupdate --install-rosetta --agree-to-license || true
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          architecture: x64
+
+      - name: Install x86_64 dependencies
+        run: |
+          arch -x86_64 python -m pip install --upgrade pip
+          arch -x86_64 python -m pip install --no-cache-dir --force-reinstall \
+            -r Source/requirements.txt pyinstaller
+
+      - name: Build Universal Customer Copy
+        run: python Source/build_customer_universal_mac.py
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: Customer-Copy-Universal-Mac
+          path: Customer Copy Universal Mac/
           retention-days: 30
