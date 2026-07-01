@@ -70,6 +70,10 @@
   </nav>
 
   <main class="max-w-7xl mx-auto px-4 py-6 sm:px-6 lg:px-8 page-enter">
+    <div id="update-banner" class="update-banner hidden mb-4 no-print" role="status">
+      <svg class="w-5 h-5 shrink-0 mt-0.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
+      <p id="update-banner-text" class="flex-1"></p>
+    </div>
     {% block content %}{% endblock %}
   </main>
 

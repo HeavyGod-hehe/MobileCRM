@@ -85,7 +85,7 @@ def main() -> None:
     from app import app
 
     _log(f"Server ready at {url}")
-    app.run(host="0.0.0.0", port=port, debug=False, use_reloader=False, threaded=True)
+    app.run(host=HOST, port=port, debug=False, use_reloader=False, threaded=True)
 
 
 if __name__ == "__main__":

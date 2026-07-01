@@ -213,6 +213,7 @@ def init_db():
         _migrate_account_entry_payments(conn)
         _migrate_more_fixes(conn)
         _migrate_ledger_sync(conn)
+        _migrate_fixed_expense_ledger(conn)
 
         for key, value in DEFAULT_SETTINGS.items():
             conn.execute(
@@ -482,9 +483,11 @@ def _migrate_more_fixes(conn):
         )
 
 
-    if not _column_exists(conn, "return_logs", "account_id"):
+def _migrate_fixed_expense_ledger(conn):
+    """Link fixed expenses to cash book for overview shop costs."""
+    if not _column_exists(conn, "fixed_expenses", "cash_book_entry_id"):
         conn.execute(
-            "ALTER TABLE return_logs ADD COLUMN account_id INTEGER REFERENCES accounts(id)"
+            "ALTER TABLE fixed_expenses ADD COLUMN cash_book_entry_id INTEGER REFERENCES cash_book_entries(id)"
         )
 
 
@@ -1843,6 +1846,87 @@ def _post_sale_ledger(conn, user_id, phone_id, data):
     )
 
 
+def _normalize_imei(value) -> str:
+    return re.sub(r"\D", "", str(value or "").strip())
+
+
+def _check_imei_duplicate(conn, user_id, imei, imei2, *, exclude_phone_id=None):
+    """Reject duplicate IMEI across active inventory (not returned-to-supplier)."""
+    for raw in (imei, imei2):
+        normalized = _normalize_imei(raw)
+        if not normalized:
+            continue
+        row = conn.execute(
+            """
+            SELECT id FROM phones
+            WHERE user_id = ?
+              AND id != COALESCE(?, -1)
+              AND status != 'Returned to Supplier'
+              AND (
+                replace(replace(replace(imei, '-', ''), ' ', ''), '.', '') = ?
+                OR replace(replace(replace(imei2, '-', ''), ' ', ''), '.', '') = ?
+              )
+            LIMIT 1
+            """,
+            (user_id, exclude_phone_id, normalized, normalized),
+        ).fetchone()
+        if row:
+            raise ValueError(f"IMEI {raw} is already used on phone #{row['id']}")
+
+
+def _field_changed(old, new, field):
+    numeric = {
+        "purchase_price", "payable_amount", "advance_received",
+        "sale_price", "receivable_amount",
+    }
+    int_fields = {"purchase_bank_id", "sale_bank_id", "supplier_account_id", "buyer_account_id"}
+    if field in int_fields:
+        old_v = int(old) if old not in (None, "", 0) else None
+        new_v = int(new) if new not in (None, "", 0) else None
+        return old_v != new_v
+    if field in numeric:
+        return round(float(old or 0), 2) != round(float(new or 0), 2)
+    return (old or "") != (new or "")
+
+
+PURCHASE_LEDGER_FIELDS = frozenset({
+    "purchase_price", "payable_amount", "purchase_payment_method", "purchase_bank_id",
+    "supplier_account_id", "acquisition_type", "purchase_date",
+})
+SALE_LEDGER_FIELDS = frozenset({
+    "sale_price", "receivable_amount", "sale_payment_method", "sale_bank_id",
+    "buyer_account_id", "sold_at",
+})
+
+
+def _reverse_phone_sale_ledger(conn, user_id, phone_id):
+    for source in ("phone_sale", "phone_receivable"):
+        _reverse_ledger_for_source(conn, user_id, source, phone_id)
+    conn.execute(
+        """
+        UPDATE phones SET
+            sale_cash_book_entry_id = NULL,
+            sale_account_entry_id = NULL
+        WHERE id = ? AND user_id = ?
+        """,
+        (phone_id, user_id),
+    )
+
+
+def _reverse_phone_purchase_ledger(conn, user_id, phone_id):
+    for source in ("phone_purchase", "phone_borrow", "phone_payable"):
+        _reverse_ledger_for_source(conn, user_id, source, phone_id)
+    conn.execute(
+        """
+        UPDATE phones SET
+            purchase_cash_book_entry_id = NULL,
+            purchase_account_entry_id = NULL
+        WHERE id = ? AND user_id = ?
+        """,
+        (phone_id, user_id),
+    )
+
+
 def _validate_phone_payments(conn, user_id, data, status):
     if status in ("Bought", "In Repair"):
         acquisition = (data.get("acquisition_type") or "purchase").strip().lower()
@@ -1863,11 +1947,18 @@ def _validate_phone_payments(conn, user_id, data, status):
             raise ValueError("Select a bank account for sale payment")
         if method == "bank" and not get_bank(conn, user_id, int(data["sale_bank_id"])):
             raise ValueError("Selected bank account not found")
+        receivable = float(data.get("receivable_amount") or 0)
+        sale_price = float(data.get("sale_price") or 0)
+        if receivable > sale_price:
+            raise ValueError("Receivable cannot exceed sale price")
+        if receivable > 0 and not data.get("buyer_account_id"):
+            raise ValueError("Select a buyer account when recording sale udhar (receivable)")
 
 
 def create_phone(conn, user_id, data):
     status = data.get("status", "Bought")
     _validate_phone_payments(conn, user_id, data, status)
+    _check_imei_duplicate(conn, user_id, data.get("imei"), data.get("imei2"))
     values = _build_phone_insert_values(conn, data)
     purchase_pm = data.get("purchase_payment_method") or "cash"
     purchase_bank = data.get("purchase_bank_id")
@@ -1958,7 +2049,15 @@ def update_phone(conn, user_id, phone_id, data):
         return None
 
     new_status = data.get("status", existing["status"])
-    _validate_phone_payments(conn, user_id, {**dict(existing), **data}, new_status)
+    merged_input = {**dict(existing), **data}
+    _validate_phone_payments(conn, user_id, merged_input, new_status)
+    if "imei" in data or "imei2" in data:
+        _check_imei_duplicate(
+            conn, user_id,
+            data.get("imei", existing["imei"]),
+            data.get("imei2", existing["imei2"]),
+            exclude_phone_id=phone_id,
+        )
     if new_status != "Sold":
         data = {k: v for k, v in data.items() if k not in (
             "buyer_name", "buyer_contact", "sale_price", "receivable_amount"
@@ -2018,6 +2117,26 @@ def update_phone(conn, user_id, phone_id, data):
     if new_status == "Sold" and existing["status"] != "Sold":
         merged = {**dict(existing), **data}
         _post_sale_ledger(conn, user_id, phone_id, merged)
+    elif existing["status"] == "Sold" and new_status != "Sold":
+        _reverse_phone_sale_ledger(conn, user_id, phone_id)
+    elif existing["status"] == "Sold" and new_status == "Sold":
+        if any(_field_changed(existing[f], data.get(f, existing[f]), f) for f in SALE_LEDGER_FIELDS if f in data):
+            refreshed = conn.execute(
+                "SELECT * FROM phones WHERE id = ? AND user_id = ?",
+                (phone_id, user_id),
+            ).fetchone()
+            merged = {**dict(refreshed), **data}
+            _reverse_phone_sale_ledger(conn, user_id, phone_id)
+            _post_sale_ledger(conn, user_id, phone_id, merged)
+    elif existing["status"] in INVENTORY_STATUSES and new_status in INVENTORY_STATUSES:
+        if any(_field_changed(existing[f], data.get(f, existing[f]), f) for f in PURCHASE_LEDGER_FIELDS if f in data):
+            refreshed = conn.execute(
+                "SELECT * FROM phones WHERE id = ? AND user_id = ?",
+                (phone_id, user_id),
+            ).fetchone()
+            merged = {**dict(refreshed), **data}
+            _reverse_phone_purchase_ledger(conn, user_id, phone_id)
+            _post_purchase_ledger(conn, user_id, phone_id, merged)
 
     return get_phone(conn, user_id, phone_id, include_details=True)
 
@@ -2073,8 +2192,16 @@ def bulk_mark_sold(conn, user_id, items, default_sale_price=None):
             "buyer_contact": item.get("buyer_contact") or "",
             "sale_payment_method": item.get("sale_payment_method") or "cash",
             "sale_bank_id": item.get("sale_bank_id"),
+            "buyer_account_id": item.get("buyer_account_id"),
             "sold_at": item.get("sold_at"),
         }
+        receivable = data["receivable_amount"]
+        if receivable > sale_price:
+            errors.append(f"Phone #{phone_id}: receivable cannot exceed sale price")
+            continue
+        if receivable > 0 and not data.get("buyer_account_id"):
+            errors.append(f"Phone #{phone_id}: buyer account required for udhar")
+            continue
         phone = update_phone(conn, user_id, phone_id, data)
         if phone:
             updated.append(phone)
@@ -2474,17 +2601,41 @@ def list_fixed_expenses(conn, user_id):
 
 
 def create_fixed_expense(conn, user_id, data):
+    amount = float(data["amount"])
+    purpose = data["purpose"]
     cursor = conn.execute(
         "INSERT INTO fixed_expenses (purpose, amount, user_id) VALUES (?, ?, ?)",
-        (data["purpose"], float(data["amount"]), user_id),
+        (purpose, amount, user_id),
     )
+    expense_id = cursor.lastrowid
+    cash_book_entry_id = None
+    if amount > 0:
+        cb = _create_cash_book_synced(conn, user_id, {
+            "entry_type": "out",
+            "amount": amount,
+            "note": f"Fixed expense: {purpose}",
+            "entry_date": conn.execute("SELECT date('now','localtime')").fetchone()[0],
+            "payment_source": data.get("payment_source") or "cash",
+            "bank_account_id": data.get("bank_account_id"),
+        }, source_type="fixed_expense", source_id=expense_id)
+        cash_book_entry_id = cb.get("cash_book_entry_id") or cb.get("id")
+        conn.execute(
+            "UPDATE fixed_expenses SET cash_book_entry_id = ? WHERE id = ?",
+            (cash_book_entry_id, expense_id),
+        )
     row = conn.execute(
-        "SELECT * FROM fixed_expenses WHERE id = ?", (cursor.lastrowid,)
+        "SELECT * FROM fixed_expenses WHERE id = ?", (expense_id,)
     ).fetchone()
     return dict(row)
 
 
 def delete_fixed_expense(conn, user_id, expense_id):
+    row = conn.execute(
+        "SELECT * FROM fixed_expenses WHERE id = ? AND user_id = ?",
+        (expense_id, user_id),
+    ).fetchone()
+    if row:
+        _reverse_ledger_for_source(conn, user_id, "fixed_expense", expense_id)
     conn.execute(
         "DELETE FROM fixed_expenses WHERE id = ? AND user_id = ?",
         (expense_id, user_id),
@@ -2808,9 +2959,14 @@ def compute_dashboard(conn, user_id):
     ).fetchall()
 
     total_net_profit = sum(_sold_profit(conn, r) for r in sold)
-    phone_receivables = sum(r["receivable_amount"] or 0 for r in sold)
     acct_summary = accounts_summary(conn, user_id)
-    total_udhar = round(phone_receivables + acct_summary["total_receivable"], 2)
+    # Phone receivables synced to buyer accounts are already in account balances.
+    phone_only_receivables = sum(
+        (r["receivable_amount"] or 0) for r in sold
+        if (r["receivable_amount"] or 0) > 0 and not r["buyer_account_id"]
+    )
+    total_udhar = round(acct_summary["total_receivable"] + phone_only_receivables, 2)
+    phone_receivables = round(phone_only_receivables, 2)
     accounts_payable = acct_summary["total_payable"]
     phone_payables = sum(r["payable_amount"] or 0 for r in payables)
     total_payables_combined = round(accounts_payable + phone_payables, 2)
@@ -3432,6 +3588,7 @@ def _next_invoice_number(conn, user_id):
 
 
 def create_invoice(conn, user_id, data):
+    """Create a printable invoice record (does not post to cash book — sale already synced in inventory)."""
     inv_num = data.get("invoice_number") or _next_invoice_number(conn, user_id)
     cursor = conn.execute(
         """

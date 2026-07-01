@@ -205,6 +205,9 @@ async function initSettingsPage() {
   const emailForm = document.getElementById('email-settings-form');
   if (!authForm) return;
 
+  loadAppVersion();
+  checkForUpdates();
+
   try {
     const shop = await apiFetch('/api/settings/shop');
     document.getElementById('shop-info-name').value = shop.shop_name || '';
@@ -452,8 +455,17 @@ async function checkForUpdates() {
     const data = await apiFetch('/api/update/check');
     if (data.update_available) {
       banner.classList.remove('hidden');
-      text.textContent = `Version ${data.remote_version} is available (you have ${data.current_version}). Download the latest build from GitHub.`;
+      const link = data.download_hint || 'GitHub';
+      text.innerHTML = `Version <strong>${data.remote_version}</strong> is available (you have ${data.current_version}). <a href="${link}" target="_blank" rel="noopener" class="underline text-amber-200">Download the latest build</a> — keep your Data folder when updating.`;
     }
+  } catch (_) {}
+}
+
+async function loadAppVersion() {
+  try {
+    const data = await apiFetch('/api/app/version');
+    const el = document.getElementById('app-version');
+    if (el && data.version) el.textContent = data.version;
   } catch (_) {}
 }
 
@@ -508,6 +520,7 @@ async function initApp() {
   initWelcome();
   initThemePicker();
   initSettingsNav();
+  checkForUpdates();
   const auth = await loadAppBranding();
   if (auth?.show_welcome) {
     showWelcomeModal(auth.session_username || auth.username, auth.shop_name);

@@ -28,11 +28,13 @@ if getattr(sys, "frozen", False):
 
 GITHUB_VERSION_URL = os.environ.get(
     "CRM_GITHUB_VERSION_URL",
-    "https://raw.githubusercontent.com/HeavyGod-hehe/mobileCRM2026/feature/Latest-update/VERSION",
+    "https://raw.githubusercontent.com/HeavyGod-hehe/MobileCRM/Version007/Source/VERSION",
 )
 
 PHONE_STATUSES = db.PHONE_STATUSES
 ENTRY_TYPES = db.ENTRY_TYPES
+
+_DB_READY = False
 
 AUTH_EXEMPT_ENDPOINTS = frozenset({
     "login_page", "auth_status", "auth_login", "auth_signup",
@@ -90,7 +92,10 @@ def _validate_entry_type(entry_type):
 
 @app.before_request
 def ensure_db():
-    db.init_db()
+    global _DB_READY
+    if not _DB_READY:
+        db.init_db()
+        _DB_READY = True
 
 
 @app.before_request
@@ -427,13 +432,7 @@ def update_email_settings_api():
 
 @app.route("/api/update/check")
 def update_check_api():
-    """Version check — disabled in compiled customer builds."""
-    if getattr(sys, "frozen", False):
-        return jsonify({
-            "current_version": APP_VERSION,
-            "remote_version": None,
-            "update_available": False,
-        })
+    """Compare local VERSION with remote GitHub VERSION file."""
     remote_version = None
     update_available = False
     try:
@@ -441,7 +440,7 @@ def update_check_api():
             GITHUB_VERSION_URL,
             headers={"User-Agent": "PhoneResellerCRM-UpdateChecker/1.0"},
         )
-        with urllib.request.urlopen(req, timeout=4) as resp:
+        with urllib.request.urlopen(req, timeout=6) as resp:
             remote_version = resp.read().decode("utf-8").strip()
         if remote_version and remote_version != APP_VERSION:
             update_available = _version_newer(remote_version, APP_VERSION)
@@ -451,7 +450,13 @@ def update_check_api():
         "current_version": APP_VERSION,
         "remote_version": remote_version,
         "update_available": update_available,
+        "download_hint": "https://github.com/HeavyGod-hehe/MobileCRM/tree/Version007",
     })
+
+
+@app.route("/api/app/version")
+def app_version_api():
+    return jsonify({"version": APP_VERSION})
 
 
 def _version_newer(remote, current):
@@ -1328,4 +1333,4 @@ if __name__ == "__main__":
     backup_service.run_startup_backups()
     backup_service.start_auto_backup_thread()
     threading.Thread(target=_open_browser, args=(_HOST, port), daemon=True).start()
-    app.run(host="0.0.0.0", port=port, debug=False, use_reloader=False)
+    app.run(host="127.0.0.1", port=port, debug=False, use_reloader=False)

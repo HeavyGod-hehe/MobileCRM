@@ -1,0 +1,32 @@
+name: CRM Logic Tests
+
+on:
+  push:
+    branches: [main, Version007, 'cursor/**', MoreFixes-update]
+    paths:
+      - 'Source/**'
+      - '.github/workflows/test-crm.yml'
+  pull_request:
+    paths:
+      - 'Source/**'
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r Source/requirements-dev.txt
+
+      - name: Run CRM logic tests
+        run: python -m pytest Source/test_crm.py -v
+
+      - name: Run stress harness (report)
+        run: CRM_SKIP_LICENSE=1 python Source/stress_test_crm.py

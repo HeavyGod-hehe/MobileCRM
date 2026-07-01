@@ -146,10 +146,8 @@ def main():
         db.create_partner(conn, user_id, {"name": "Partner B", "capital": 300000})
         supplier = db.create_account(conn, user_id, {"name": "Supplier Khan", "contact": "0300"})
         buyer = db.create_account(conn, user_id, {"name": "Customer Ali", "contact": "0311"})
-        db.seed_expense_accounts(conn, user_id)
-        food_id = conn.execute(
-            "SELECT id FROM accounts WHERE user_id=? AND name='Food'", (user_id,)
-        ).fetchone()["id"]
+        food = db.create_account(conn, user_id, {"name": "Food", "contact": "expense category"})
+        food_id = food["id"]
         supplier_id, buyer_id = supplier["id"], buyer["id"]
         bank = db.create_bank(conn, user_id, {"name": "HBL Stress", "initial_balance": 1000000})
         bank_id = bank["id"]
@@ -353,12 +351,106 @@ def main():
             phone = db.get_phone(conn, user_id, p["id"], include_details=True)
             assert len(phone["investments"]) == 1
 
+    def test_udhar_no_double_count():
+        with db.db_session() as conn:
+            p = db.create_phone(conn, user_id, {
+                "model": "Udhar Test",
+                "type": "PTA",
+                "purchase_price": 100000,
+                "status": "Sold",
+                "sale_price": 130000,
+                "receivable_amount": 30000,
+                "buyer_account_id": buyer_id,
+                "purchase_payment_method": "cash",
+                "sale_payment_method": "cash",
+            })
+            dash = db.compute_dashboard(conn, user_id)
+            acct = db.accounts_summary(conn, user_id)
+            phone_recv_only = sum(
+                (r["receivable_amount"] or 0) for r in conn.execute(
+                    "SELECT receivable_amount, buyer_account_id FROM phones WHERE user_id=? AND status='Sold'",
+                    (user_id,),
+                ).fetchall()
+                if (r["receivable_amount"] or 0) > 0 and not r["buyer_account_id"]
+            )
+            assert dash["total_udhar"] == round(acct["total_receivable"] + phone_recv_only, 2)
+            assert p["receivable_amount"] == 30000
+
+    def test_imei_duplicate_rejected():
+        with db.db_session() as conn:
+            db.create_phone(conn, user_id, {
+                "model": "IMEI A",
+                "type": "PTA",
+                "purchase_price": 50000,
+                "status": "Bought",
+                "purchase_payment_method": "cash",
+                "imei": "356938035641111",
+            })
+            try:
+                db.create_phone(conn, user_id, {
+                    "model": "IMEI B",
+                    "type": "PTA",
+                    "purchase_price": 50000,
+                    "status": "Bought",
+                    "purchase_payment_method": "cash",
+                    "imei": "356938035641111",
+                })
+                raise AssertionError("Expected duplicate IMEI error")
+            except ValueError as e:
+                assert "IMEI" in str(e)
+
+    def test_sale_edit_resyncs_ledger():
+        with db.db_session() as conn:
+            p = db.create_phone(conn, user_id, {
+                "model": "Edit Sale",
+                "type": "PTA",
+                "purchase_price": 80000,
+                "status": "Sold",
+                "sale_price": 100000,
+                "purchase_payment_method": "cash",
+                "sale_payment_method": "cash",
+            })
+            cash_before = db.cash_in_hand_balance(conn, user_id)
+            db.update_phone(conn, user_id, p["id"], {"sale_price": 110000})
+            cash_after = db.cash_in_hand_balance(conn, user_id)
+            assert cash_after == round(cash_before + 10000, 2)
+
+    def test_bulk_sold_udhar_requires_buyer():
+        with db.db_session() as conn:
+            p = db.create_phone(conn, user_id, {
+                "model": "Bulk Udhar",
+                "type": "PTA",
+                "purchase_price": 60000,
+                "status": "Bought",
+                "purchase_payment_method": "cash",
+            })
+            try:
+                db.bulk_mark_sold(conn, user_id, [{
+                    "phone_id": p["id"],
+                    "sale_price": 80000,
+                    "receivable_amount": 10000,
+                }])
+                raise AssertionError("Expected buyer account required")
+            except ValueError as e:
+                assert "buyer account" in str(e).lower()
+
+    def test_fixed_expense_cash_out():
+        with db.db_session() as conn:
+            cash_before = db.cash_in_hand_balance(conn, user_id)
+            exp = db.create_fixed_expense(conn, user_id, {
+                "purpose": "Shop rent",
+                "amount": 25000,
+            })
+            cash_after = db.cash_in_hand_balance(conn, user_id)
+            assert exp.get("cash_book_entry_id")
+            assert cash_after == round(cash_before - 25000, 2)
+
     run_test("Purchase + udhar ledger sync", test_purchase_with_udhar)
     run_test("Borrow phone ledger sync", test_borrow_phone)
     run_test("Sale + receivable ledger sync", test_sell_with_receivable)
-    run_test("Phone expense → cash book sync", test_phone_expense_sync)
-    run_test("Food expense → cash out sync", test_food_expense_cash_out)
-    run_test("Wasool debit → cash in sync", test_wasool_cash_in)
+    run_test("Phone expense -> cash book sync", test_phone_expense_sync)
+    run_test("Food expense -> cash out sync", test_food_expense_cash_out)
+    run_test("Wasool debit -> cash in sync", test_wasool_cash_in)
     run_test("Delete phone cascades ledger", test_delete_phone_cascade)
     run_test("Delete account entry cascades cash book", test_delete_account_entry_cascade)
     run_test("Journal voucher create/delete", test_journal_voucher)
@@ -366,6 +458,11 @@ def main():
     run_test("Sale return flow", test_sale_return)
     run_test("Today summary includes sold-as-bought", test_today_bought_includes_sold)
     run_test("Update phone investments (bug fix)", test_update_investments)
+    run_test("Udhar dashboard no double-count", test_udhar_no_double_count)
+    run_test("Duplicate IMEI rejected", test_imei_duplicate_rejected)
+    run_test("Sale price edit re-syncs cash book", test_sale_edit_resyncs_ledger)
+    run_test("Bulk sold udhar requires buyer account", test_bulk_sold_udhar_requires_buyer)
+    run_test("Fixed expense posts to cash book", test_fixed_expense_cash_out)
 
     # --- Stress load ---
     STRESS_PHONES = 200
@@ -523,20 +620,9 @@ def main():
     report.stats["db_path"] = db_path
     report.stats["db_size_mb"] = round(Path(db_path).stat().st_size / (1024 * 1024), 2)
 
-    # Known limitations (not test failures)
-    report.warn(
-        "Dashboard udhar may double-count phone receivables already on buyer accounts "
-        "(phone.receivable_amount + accounts receivable)."
-    )
-    report.warn(
-        "update_phone does not re-sync ledgers when purchase/sale amounts change after posting."
-    )
-    report.warn(
-        "bulk_mark_sold fails if receivable_amount > 0 without buyer_account_id."
-    )
-    report.warn(
-        "Invoices and fixed expenses are not linked to cash book or inventory ledgers."
-    )
+    # Resolved in v2.3.0 — kept for historical regression notes only.
+    if False:
+        report.warn("placeholder")
 
     return report
 
@@ -545,10 +631,10 @@ def render_markdown(r: StressReport) -> str:
     passed = sum(1 for t in r.results if t.passed)
     failed = sum(1 for t in r.results if not t.passed)
     lines = [
-        "# Mobile CRM — Logic Review & Stress Test Report",
+        "# Mobile CRM - Logic Review & Stress Test Report",
         "",
         f"**Generated:** {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}",
-        f"**Database:** `{r.stats.get('db_path', '—')}` ({r.stats.get('db_size_mb', 0)} MB)",
+        f"**Database:** `{r.stats.get('db_path', '-')}` ({r.stats.get('db_size_mb', 0)} MB)",
         "",
         "## Summary",
         "",
@@ -570,7 +656,7 @@ def render_markdown(r: StressReport) -> str:
     lines.extend(["", "## Test results", ""])
     for t in r.results:
         icon = "PASS" if t.passed else "**FAIL**"
-        lines.append(f"- [{icon}] **{t.name}** — {t.detail.split(chr(10))[0]}")
+        lines.append(f"- [{icon}] **{t.name}** - {t.detail.split(chr(10))[0]}")
 
     if r.errors:
         lines.extend(["", "## Failures (detail)", ""])
@@ -579,11 +665,11 @@ def render_markdown(r: StressReport) -> str:
 
     lines.extend(["", "## Sync architecture verified", ""])
     lines.extend([
-        "- Inventory purchase/sale/borrow → cash book + accounts via `ledger_links`",
-        "- Phone expenses → cash book out (+ optional account)",
-        "- Account Wasool (debit) → cash book in",
-        "- Expense category credit (Food) → cash book out",
-        "- Delete phone / account entry / cash book / journal → cascade reversal",
+        "- Inventory purchase/sale/borrow -> cash book + accounts via `ledger_links`",
+        "- Phone expenses -> cash book out (+ optional account)",
+        "- Account Wasool (debit) -> cash book in",
+        "- Expense category credit (Food) -> cash book out",
+        "- Delete phone / account entry / cash book / journal -> cascade reversal",
         "- Returns post refunds without duplicate account rows",
     ])
 
@@ -593,14 +679,11 @@ def render_markdown(r: StressReport) -> str:
 
     lines.extend(["", "## Recommendations", ""])
     recs = [
-        "Add automated pytest suite from `stress_test_crm.py` for CI.",
-        "Fix dashboard udhar double-count when receivable is on both phone and account.",
-        "Re-sync ledgers on phone price/payment edits, or block edits after posting.",
-        "Pass `buyer_account_id` in bulk-sold when receivable is used.",
-        "Filter Today cash in/out to cash-only (fixed in this run).",
+        "Keep pytest CI green on every push to Version007.",
+        "Invoices remain print-only records; sales post through inventory.",
     ]
     if failed == 0:
-        recs.insert(0, "All automated sync tests passed under stress load — core ledger logic is consistent.")
+        recs.insert(0, "All automated sync tests passed under stress load - core ledger logic is consistent.")
     for rec in recs:
         lines.append(f"- {rec}")
 
