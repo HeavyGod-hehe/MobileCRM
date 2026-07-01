@@ -80,34 +80,27 @@ jobs:
   build-mac-universal:
     name: Universal Mac (Intel + Apple Silicon)
     runs-on: macos-latest
+    needs: [build-mac-arm64, build-mac-intel]
     steps:
       - uses: actions/checkout@v4
 
-      - uses: actions/setup-python@v5
+      - name: Download Apple Silicon build
+        uses: actions/download-artifact@v4
         with:
-          python-version: '3.12'
+          name: Customer-Copy-Apple-Silicon
+          path: Customer Copy Apple Silicon
 
-      - name: Install dependencies
-        run: |
-          python -m pip install --upgrade pip
-          pip install -r Source/requirements.txt pyinstaller
-
-      - name: Install Rosetta (for Intel slice tooling)
-        run: softwareupdate --install-rosetta --agree-to-license || true
-
-      - uses: actions/setup-python@v5
+      - name: Download Intel build
+        uses: actions/download-artifact@v4
         with:
-          python-version: '3.12'
-          architecture: x64
+          name: Customer-Copy-Intel-Mac
+          path: Customer Copy Intel Mac
 
-      - name: Install x86_64 dependencies
+      - name: Merge into universal Customer Copy
         run: |
-          arch -x86_64 python -m pip install --upgrade pip
-          arch -x86_64 python -m pip install --no-cache-dir --force-reinstall \
-            -r Source/requirements.txt pyinstaller
-
-      - name: Build Universal Customer Copy
-        run: python Source/build_customer_universal_mac.py
+          python Source/build_customer_universal_mac.py \
+            --arm64-dir "Customer Copy Apple Silicon" \
+            --intel-dir "Customer Copy Intel Mac"
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4

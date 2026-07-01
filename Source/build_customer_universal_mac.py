@@ -1,21 +1,19 @@
 #!/usr/bin/env python3
 """
-Build a universal macOS Customer Copy (Intel + Apple Silicon in one .app).
+Build or merge a universal macOS Customer Copy (Intel + Apple Silicon).
 
-Requires macOS with both:
-  - native arm64 Python (for M-chip slice)
-  - x86_64 Python via Rosetta (for Intel slice)
-
-Output folder (repo root):
-  Customer Copy Universal Mac/
-
-Usage (on macOS):
+Mode 1 — full build on macOS (local):
   python3 build_customer_universal_mac.py
+
+Mode 2 — merge existing arch builds (CI / local):
+  python3 build_customer_universal_mac.py \\
+    --arm64-dir "../Customer Copy Apple Silicon" \\
+    --intel-dir "../Customer Copy Intel Mac"
 """
 
 from __future__ import annotations
 
-import os
+import argparse
 import shutil
 import subprocess
 import sys
@@ -87,57 +85,41 @@ Support: contact your CRM vendor.
     )
 
 
-def build_universal_mac_copy(out: Path | None = None) -> Path:
-    if sys.platform != "darwin":
-        raise SystemExit(
-            "Universal macOS builds must run on macOS.\n"
-            "Use GitHub Actions or a Mac to build."
-        )
+def merge_arch_copies(arm_dir: Path, intel_dir: Path, out: Path) -> Path:
+    arm_app = arm_dir / "Phone Reseller CRM.app"
+    intel_app = intel_dir / "Phone Reseller CRM.app"
+    if not arm_app.is_dir():
+        raise FileNotFoundError(f"Missing Apple Silicon app: {arm_app}")
+    if not intel_app.is_dir():
+        raise FileNotFoundError(f"Missing Intel app: {intel_app}")
 
-    from build_customer_mac import build_mac_copy
-
-    out = out or OUT
     if out.exists():
         shutil.rmtree(out)
     out.mkdir(parents=True)
 
-    with tempfile.TemporaryDirectory(prefix="crm-universal-") as tmp:
-        tmp_path = Path(tmp)
-        arm_dir = tmp_path / "arm64"
-        intel_dir = tmp_path / "x86_64"
+    shutil.copytree(arm_app, out / "Phone Reseller CRM.app")
 
-        print("Building Apple Silicon slice …")
-        build_mac_copy("arm64", arm_dir)
+    for rel in (
+        Path("Contents/MacOS/PhoneResellerCRM"),
+        Path("Contents/MacOS/FolderPicker"),
+    ):
+        arm_bin = arm_app / rel
+        intel_bin = intel_app / rel
+        out_bin = out / "Phone Reseller CRM.app" / rel
+        if arm_bin.is_file() and intel_bin.is_file() and out_bin.is_file():
+            _lipo_universal(arm_bin, intel_bin, out_bin)
 
-        print("Building Intel slice …")
-        build_mac_copy("x86_64", intel_dir)
+    arm_picker = arm_dir / "FolderPicker"
+    intel_picker = intel_dir / "FolderPicker"
+    if arm_picker.is_file() and intel_picker.is_file():
+        _lipo_universal(arm_picker, intel_picker, out / "FolderPicker")
+        (out / "FolderPicker").chmod(0o755)
+    elif arm_picker.is_file():
+        shutil.copy2(arm_picker, out / "FolderPicker")
+        (out / "FolderPicker").chmod(0o755)
 
-        arm_app = arm_dir / "Phone Reseller CRM.app"
-        intel_app = intel_dir / "Phone Reseller CRM.app"
-        if not arm_app.is_dir() or not intel_app.is_dir():
-            raise FileNotFoundError("Expected both architecture builds to produce Phone Reseller CRM.app")
-
-        shutil.copytree(arm_app, out / "Phone Reseller CRM.app")
-
-        for rel in (
-            Path("Contents/MacOS/PhoneResellerCRM"),
-            Path("Contents/MacOS/FolderPicker"),
-            Path("FolderPicker"),
-        ):
-            arm_bin = arm_app / rel
-            intel_bin = intel_app / rel
-            out_bin = out / "Phone Reseller CRM.app" / rel
-            if arm_bin.is_file() and intel_bin.is_file() and out_bin.is_file():
-                _lipo_universal(arm_bin, intel_bin, out_bin)
-
-        main_binary = out / "Phone Reseller CRM.app" / "Contents" / "MacOS" / "PhoneResellerCRM"
-        _verify_universal(main_binary)
-
-        arm_picker = arm_dir / "FolderPicker"
-        intel_picker = intel_dir / "FolderPicker"
-        if arm_picker.is_file() and intel_picker.is_file():
-            _lipo_universal(arm_picker, intel_picker, out / "FolderPicker")
-            (out / "FolderPicker").chmod(0o755)
+    main_binary = out / "Phone Reseller CRM.app" / "Contents" / "MacOS" / "PhoneResellerCRM"
+    _verify_universal(main_binary)
 
     _write_start_here(out)
     (out / "license.json").write_text("{}\n", encoding="utf-8")
@@ -150,8 +132,45 @@ def build_universal_mac_copy(out: Path | None = None) -> Path:
     return out
 
 
+def build_universal_mac_copy(out: Path | None = None) -> Path:
+    if sys.platform != "darwin":
+        raise SystemExit(
+            "Universal macOS builds must run on macOS.\n"
+            "Use GitHub Actions or a Mac to build."
+        )
+
+    from build_customer_mac import build_mac_copy
+
+    out = out or OUT
+
+    with tempfile.TemporaryDirectory(prefix="crm-universal-") as tmp:
+        tmp_path = Path(tmp)
+        arm_dir = tmp_path / "arm64"
+        intel_dir = tmp_path / "x86_64"
+
+        print("Building Apple Silicon slice …")
+        build_mac_copy("arm64", arm_dir)
+
+        print("Building Intel slice …")
+        build_mac_copy("x86_64", intel_dir)
+
+        return merge_arch_copies(arm_dir, intel_dir, out)
+
+
 def main() -> None:
-    build_universal_mac_copy()
+    parser = argparse.ArgumentParser(description="Build or merge universal Mac Customer Copy")
+    parser.add_argument("--arm64-dir", type=Path, help="Existing Apple Silicon customer copy folder")
+    parser.add_argument("--intel-dir", type=Path, help="Existing Intel customer copy folder")
+    parser.add_argument("--out", type=Path, default=OUT, help="Output folder")
+    args = parser.parse_args()
+
+    if args.arm64_dir and args.intel_dir:
+        merge_arch_copies(args.arm64_dir.resolve(), args.intel_dir.resolve(), args.out.resolve())
+        return
+    if args.arm64_dir or args.intel_dir:
+        raise SystemExit("Provide both --arm64-dir and --intel-dir to merge existing builds.")
+
+    build_universal_mac_copy(args.out.resolve())
 
 
 if __name__ == "__main__":
