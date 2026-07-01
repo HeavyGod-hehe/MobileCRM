@@ -2013,7 +2013,7 @@ def update_phone(conn, user_id, phone_id, data):
 
     if "investments" in data:
         conn.execute("DELETE FROM phone_investments WHERE phone_id = ?", (phone_id,))
-        _save_phone_extras(conn, phone_id, {"investments": data["investments"]})
+        _save_phone_extras(conn, user_id, phone_id, {"investments": data["investments"]})
 
     if new_status == "Sold" and existing["status"] != "Sold":
         merged = {**dict(existing), **data}
@@ -3356,8 +3356,10 @@ def compute_today_summary(conn, user_id):
     cash = conn.execute(
         """
         SELECT
-            COALESCE(SUM(CASE WHEN entry_type = 'in' THEN amount ELSE 0 END), 0) AS cash_in,
-            COALESCE(SUM(CASE WHEN entry_type = 'out' THEN amount ELSE 0 END), 0) AS cash_out
+            COALESCE(SUM(CASE WHEN entry_type = 'in' AND COALESCE(payment_source, 'cash') = 'cash'
+                THEN amount ELSE 0 END), 0) AS cash_in,
+            COALESCE(SUM(CASE WHEN entry_type = 'out' AND COALESCE(payment_source, 'cash') = 'cash'
+                THEN amount ELSE 0 END), 0) AS cash_out
         FROM cash_book_entries
         WHERE user_id = ? AND entry_date = date('now', 'localtime')
         """,
