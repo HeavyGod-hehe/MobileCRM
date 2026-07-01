@@ -8,6 +8,7 @@ Pakistani phone reseller CRM: inventory, accounts (khata), cash book, billing, W
 |--------|---------|
 | **Source/** | Full Python project — run with `python3 app.py` |
 | **Customer Copy/** | Mac customer build — double-click `Phone Reseller CRM.app` |
+| **Customer Windows Copy/** | Windows customer build — double-click `Phone Reseller CRM\Phone Reseller CRM.exe` |
 | **Source/crm.db** | Sample / dev SQLite database (included) |
 
 ## Quick start (developer)
@@ -26,6 +27,18 @@ cd Source
 python3 build_customer_copy.py
 # → outputs to ../Customer Copy/
 ```
+
+### Windows customer build
+
+On a Windows PC (or via GitHub Actions):
+
+```bash
+cd Source
+python build_customer_windows_copy.py
+# → outputs to ../Customer Windows Copy/
+```
+
+Or double-click `Download Customer Windows Copy.bat` after cloning (requires [GitHub CLI](https://cli.github.com/)).
 
 ## License keys (vendor only)
 

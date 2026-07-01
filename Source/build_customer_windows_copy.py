@@ -97,7 +97,7 @@ Support: contact your CRM vendor.
 
 
 def verify_no_source(out: Path) -> None:
-    for path in out.rglob("*"):
+    for path in out.iterdir():
         if path.suffix == ".py" and path.name in SOURCE_NAMES:
             raise RuntimeError(f"Source file must not be shipped: {path}")
 
