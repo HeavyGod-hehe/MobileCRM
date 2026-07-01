@@ -1,0 +1,467 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="default-dark">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Sign In — Reseller CRM</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <link rel="stylesheet" href="{{ url_for('static', filename='app.css') }}">
+</head>
+<body class="auth-page text-slate-100 antialiased">
+<script>
+  /* Apply saved theme before paint to prevent color flicker */
+  (function () {
+    try {
+      var theme = localStorage.getItem('crm-theme') || 'default-dark';
+      document.documentElement.setAttribute('data-theme', theme);
+    } catch (e) {}
+  })();
+</script>
+  <div class="bg-mesh" aria-hidden="true"></div>
+
+  <div class="auth-layout relative z-10">
+    <!-- Brand panel -->
+    <aside class="auth-brand">
+      <div class="auth-brand-inner">
+        <div class="auth-logo">
+          <div class="auth-logo-mark">
+            <svg class="w-6 h-6 text-white" fill="currentColor" viewBox="0 0 24 24"><path d="M18.71 19.5c-.83 1.24-1.71 2.45-3.05 2.47-1.34.03-1.77-.79-3.29-.79-1.53 0-2 .77-3.27.82-1.31.05-2.3-1.32-3.14-2.53C4.25 17 2.94 12.45 4.7 9.39c.87-1.52 2.43-2.48 4.12-2.51 1.28-.02 2.5.87 3.29.87.78 0 2.26-1.07 3.8-.91.65.03 2.47.26 3.64 1.98-.09.06-2.17 1.28-2.15 3.81.03 3.02 2.65 4.03 2.68 4.04-.03.07-.42 1.44-1.38 2.83M13 3.5c.73-.83 1.94-1.46 2.94-1.5.13 1.17-.34 2.35-1.04 3.19-.69.85-1.83 1.51-2.95 1.42-.15-1.15.41-2.35 1.05-3.11z"/></svg>
+          </div>
+          <div class="auth-logo-text">
+            Reseller CRM
+            <span>Business inventory suite</span>
+          </div>
+        </div>
+
+        <h2 class="auth-headline">Run your shop.<br><em>Your data. Your rules.</em></h2>
+        <p class="auth-tagline">Set up in minutes — customize your shop name, login, and private workspace. Each account gets its own isolated data.</p>
+
+        <div class="auth-features">
+          <div class="auth-feature">
+            <div class="auth-feature-icon">
+              <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z"/></svg>
+            </div>
+            <div>
+              <div class="auth-feature-title">Private workspace</div>
+              <div class="auth-feature-desc">Every signup starts fresh — no access to other users' inventory or accounts.</div>
+            </div>
+          </div>
+          <div class="auth-feature">
+            <div class="auth-feature-icon">
+              <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 7v10c0 2.21 3.582 4 8 4s8-1.79 8-4V7M4 7c0 2.21 3.582 4 8 4s8-1.79 8-4M4 7c0-2.21 3.582-4 8-4s8 1.79 8 4"/></svg>
+            </div>
+            <div>
+              <div class="auth-feature-title">Auto-saved locally</div>
+              <div class="auth-feature-desc">Your CRM data is stored on your machine and tied to your account.</div>
+            </div>
+          </div>
+          <div class="auth-feature">
+            <div class="auth-feature-icon">
+              <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4m5.618-4.016A11.955 11.955 0 0112 2.944a11.955 11.955 0 01-8.618 3.04A12.02 12.02 0 003 9c0 5.591 3.824 10.29 9 11.622 5.176-1.332 9-6.03 9-11.622 0-1.042-.133-2.052-.382-3.016z"/></svg>
+            </div>
+            <div>
+              <div class="auth-feature-title">Encrypted credentials</div>
+              <div class="auth-feature-desc">Passwords are hashed securely — never stored in plain text.</div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <p class="auth-brand-footer">© Reseller CRM — built for phone &amp; electronics resellers</p>
+    </aside>
+
+    <!-- Form panel -->
+    <main class="auth-main">
+      <div class="auth-card">
+        <div class="auth-card-shell">
+          <div id="auth-tabs" class="auth-tabs relative" data-active="login">
+            <span class="auth-tab-indicator" aria-hidden="true"></span>
+            <button type="button" class="auth-tab active" data-mode="login">Sign In</button>
+            <button type="button" class="auth-tab" data-mode="signup">Sign Up</button>
+          </div>
+
+          <div id="auth-header" class="auth-header">
+            <h1 id="auth-heading">Welcome back</h1>
+            <p id="auth-subheading">Sign in to manage inventory, accounts &amp; cash flow</p>
+          </div>
+
+          <div class="auth-panel-wrap">
+            <!-- Login -->
+            <form id="login-form" class="auth-panel active" data-mode="login">
+              <div class="auth-field">
+                <label for="login-username">Username</label>
+                <div class="auth-input-wrap">
+                  <svg class="auth-input-icon" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M16 7a4 4 0 11-8 0 4 4 0 018 0zM12 14a7 7 0 00-7 7h14a7 7 0 00-7-7z"/></svg>
+                  <input type="text" id="login-username" required autocomplete="username" class="input-field" placeholder="e.g. shahir">
+                </div>
+              </div>
+
+              <div class="auth-field">
+                <label for="login-password">Password</label>
+                <div class="auth-input-wrap">
+                  <svg class="auth-input-icon" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z"/></svg>
+                  <input type="password" id="login-password" required autocomplete="current-password" class="input-field" placeholder="Enter your password">
+                  <button type="button" class="auth-toggle-pw" data-target="login-password" aria-label="Show password">
+                    <svg class="w-4 h-4 eye-open" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"/><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z"/></svg>
+                  </button>
+                </div>
+              </div>
+
+              <div class="auth-forgot-row">
+                <button type="button" id="show-forgot" class="auth-link">Forgot password?</button>
+              </div>
+
+              <div id="login-error" class="auth-alert error hidden" role="alert"></div>
+
+              <button type="submit" id="login-btn" class="btn btn-primary auth-submit">
+                <span class="spinner" aria-hidden="true"></span>
+                <span class="btn-label">Sign In</span>
+              </button>
+
+              <div class="auth-footer">
+                <p>New here? <button type="button" id="footer-signup" class="auth-link">Do the Signup</button></p>
+              </div>
+            </form>
+
+            <!-- Signup -->
+            <form id="signup-form" class="auth-panel" data-mode="signup">
+              <div class="auth-field">
+                <label for="signup-shop">Shop name</label>
+                <div class="auth-input-wrap">
+                  <svg class="auth-input-icon" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 21V5a2 2 0 00-2-2H7a2 2 0 00-2 2v16m14 0h2m-2 0h-5m-9 0H3m2 0h5M9 7h1m-1 4h1m4-4h1m-1 4h1m-5 10v-5a1 1 0 011-1h2a1 1 0 011 1v5m-4 0h4"/></svg>
+                  <input type="text" id="signup-shop" class="input-field" placeholder="e.g. City Mobile Shop">
+                </div>
+              </div>
+
+              <div class="auth-field">
+                <label for="signup-username">Username</label>
+                <div class="auth-input-wrap">
+                  <svg class="auth-input-icon" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M16 7a4 4 0 11-8 0 4 4 0 018 0zM12 14a7 7 0 00-7 7h14a7 7 0 00-7-7z"/></svg>
+                  <input type="text" id="signup-username" required autocomplete="username" class="input-field" placeholder="Choose a unique username">
+                </div>
+              </div>
+
+              <div class="auth-field">
+                <label for="signup-email">Email <span class="optional">(for password reset)</span></label>
+                <div class="auth-input-wrap">
+                  <svg class="auth-input-icon" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 8l7.89 5.26a2 2 0 002.22 0L21 8M5 19h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z"/></svg>
+                  <input type="email" id="signup-email" autocomplete="email" class="input-field" placeholder="you@gmail.com">
+                </div>
+              </div>
+
+              <div class="auth-field">
+                <label for="signup-password">Password</label>
+                <div class="auth-input-wrap">
+                  <svg class="auth-input-icon" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z"/></svg>
+                  <input type="password" id="signup-password" required autocomplete="new-password" class="input-field" placeholder="Min. 6 characters">
+                  <button type="button" class="auth-toggle-pw" data-target="signup-password" aria-label="Show password">
+                    <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"/><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z"/></svg>
+                  </button>
+                </div>
+                <div id="pw-strength" class="auth-strength" data-level="0">
+                  <span class="auth-strength-bar"></span>
+                  <span class="auth-strength-bar"></span>
+                  <span class="auth-strength-bar"></span>
+                  <span class="auth-strength-bar"></span>
+                </div>
+                <p id="pw-strength-label" class="auth-strength-label"></p>
+              </div>
+
+              <div class="auth-field auth-storage-field">
+                <label for="signup-data-path">Data storage</label>
+                <input type="text" id="signup-data-path" class="input-field no-icon" readonly value="~/ResellerCRM/data/crm.db">
+                <p class="auth-hint">Saved automatically on your computer — private to your account only.</p>
+              </div>
+
+              <div class="auth-info-box">
+                <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
+                <span>Your new account starts with a blank workspace. You won't see anyone else's data.</span>
+              </div>
+
+              <div id="signup-error" class="auth-alert error hidden" role="alert"></div>
+
+              <button type="submit" id="signup-btn" class="btn btn-primary auth-submit">
+                <span class="spinner" aria-hidden="true"></span>
+                <span class="btn-label">Create Account</span>
+              </button>
+
+              <div class="auth-footer">
+                <p>Already have an account? <button type="button" id="footer-login" class="auth-link">Sign In</button></p>
+              </div>
+            </form>
+
+            <!-- Forgot password -->
+            <form id="forgot-form" class="auth-panel" data-mode="forgot">
+              <button type="button" id="forgot-back" class="auth-back">
+                <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 19l-7-7 7-7"/></svg>
+                Back to Sign In
+              </button>
+
+              <div id="forgot-step-email">
+                <div class="auth-field">
+                  <label for="forgot-email">Gmail / Email address</label>
+                  <div class="auth-input-wrap">
+                    <svg class="auth-input-icon" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 8l7.89 5.26a2 2 0 002.22 0L21 8M5 19h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z"/></svg>
+                    <input type="email" id="forgot-email" required autocomplete="email" class="input-field" placeholder="Enter email linked to your account">
+                  </div>
+                </div>
+
+                <div class="auth-info-box muted">
+                  <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 8l7.89 5.26a2 2 0 002.22 0L21 8M5 19h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z"/></svg>
+                  <span>We'll send a one-time OTP to your Gmail to reset your password.</span>
+                </div>
+
+                <div id="forgot-error" class="auth-alert error hidden" role="alert"></div>
+
+                <button type="submit" id="forgot-btn" class="btn btn-primary auth-submit">
+                  <span class="spinner" aria-hidden="true"></span>
+                  <span class="btn-label">Send OTP to Email</span>
+                </button>
+              </div>
+
+              <div id="forgot-step-otp" class="hidden space-y-4">
+                <div class="auth-info-box success-style auth-alert success">
+                  <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
+                  <span id="forgot-success-msg">Check your email for the OTP.</span>
+                </div>
+                <div id="forgot-vendor-box" class="auth-info-box muted hidden">
+                  <span id="forgot-vendor-msg"></span>
+                </div>
+
+                <div id="forgot-otp-fields">
+                  <div class="auth-field">
+                    <label for="forgot-otp">6-digit OTP</label>
+                    <input type="text" id="forgot-otp" maxlength="6" inputmode="numeric" class="input-field font-mono text-center tracking-widest" placeholder="000000">
+                  </div>
+                  <div class="auth-field">
+                    <label for="forgot-new-pw">New Password</label>
+                    <input type="password" id="forgot-new-pw" minlength="6" class="input-field" placeholder="At least 6 characters">
+                  </div>
+                  <div id="forgot-reset-error" class="auth-alert error hidden" role="alert"></div>
+                  <button type="button" id="forgot-reset-btn" class="btn btn-primary auth-submit w-full">
+                    <span class="btn-label">Set New Password</span>
+                  </button>
+                </div>
+              </div>
+            </form>
+          </div>
+        </div>
+      </div>
+    </main>
+  </div>
+
+  <div id="toast-root"></div>
+  <script src="{{ url_for('static', filename='api-fetch.js') }}"></script>
+  <script src="{{ url_for('static', filename='whatsapp.js') }}"></script>
+  <script src="{{ url_for('static', filename='ui.js') }}"></script>
+  <script>
+    const tabsEl = document.getElementById('auth-tabs');
+    const heading = document.getElementById('auth-heading');
+    const subheading = document.getElementById('auth-subheading');
+    const panels = {
+      login: document.getElementById('login-form'),
+      signup: document.getElementById('signup-form'),
+      forgot: document.getElementById('forgot-form'),
+    };
+
+    const copy = {
+      login: { title: 'Welcome back', sub: 'Sign in to manage inventory, accounts & cash flow' },
+      signup: { title: 'Create your shop', sub: 'Set up a private workspace — your data stays yours' },
+      forgot: { title: 'Reset password', sub: 'Receive an OTP on your Gmail to recover access' },
+    };
+
+    function setLoading(btn, loading) {
+      btn.disabled = loading;
+      btn.classList.toggle('loading', loading);
+    }
+
+    function showAlert(id, message) {
+      const el = document.getElementById(id);
+      if (!el) return;
+      el.textContent = message;
+      el.classList.remove('hidden');
+    }
+
+    function hideAlerts() {
+      document.querySelectorAll('.auth-alert').forEach((el) => {
+        el.classList.add('hidden');
+        el.textContent = '';
+      });
+    }
+
+    function showMode(mode) {
+      hideAlerts();
+      Object.entries(panels).forEach(([name, el]) => {
+        el.classList.toggle('active', name === mode);
+      });
+
+      tabsEl.style.display = mode === 'forgot' ? 'none' : '';
+      tabsEl.dataset.active = mode === 'signup' ? 'signup' : 'login';
+
+      document.querySelectorAll('.auth-tab').forEach((tab) => {
+        tab.classList.toggle('active', tab.dataset.mode === mode);
+      });
+
+      if (copy[mode]) {
+        heading.textContent = copy[mode].title;
+        subheading.textContent = copy[mode].sub;
+      }
+
+      if (mode === 'forgot') {
+        document.getElementById('forgot-step-email').classList.remove('hidden');
+        document.getElementById('forgot-step-otp').classList.add('hidden');
+      }
+    }
+
+    document.querySelectorAll('.auth-tab').forEach((tab) => {
+      tab.addEventListener('click', () => showMode(tab.dataset.mode));
+    });
+
+    document.getElementById('footer-signup').addEventListener('click', () => showMode('signup'));
+    document.getElementById('footer-login').addEventListener('click', () => showMode('login'));
+    document.getElementById('show-forgot').addEventListener('click', () => showMode('forgot'));
+    document.getElementById('forgot-back').addEventListener('click', () => showMode('login'));
+
+    document.querySelectorAll('.auth-toggle-pw').forEach((btn) => {
+      btn.addEventListener('click', () => {
+        const input = document.getElementById(btn.dataset.target);
+        if (!input) return;
+        const show = input.type === 'password';
+        input.type = show ? 'text' : 'password';
+      });
+    });
+
+    document.getElementById('signup-password').addEventListener('input', (e) => {
+      const val = e.target.value;
+      const strength = document.getElementById('pw-strength');
+      const label = document.getElementById('pw-strength-label');
+      let level = 0;
+      let text = '';
+      if (val.length >= 6) level = 1;
+      if (val.length >= 8 && /[A-Z]/.test(val)) level = 2;
+      if (val.length >= 8 && /[0-9]/.test(val) && /[A-Za-z]/.test(val)) level = 3;
+      if (val.length >= 10 && /[^A-Za-z0-9]/.test(val)) level = 4;
+      strength.dataset.level = level;
+      const labels = ['', 'Weak', 'Fair', 'Good', 'Strong'];
+      label.textContent = val ? `Password strength: ${labels[level] || 'Too short'}` : '';
+    });
+
+    document.getElementById('login-form').addEventListener('submit', async (e) => {
+      e.preventDefault();
+      hideAlerts();
+      const btn = document.getElementById('login-btn');
+      setLoading(btn, true);
+      try {
+        await apiFetch('/api/auth/login', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            username: document.getElementById('login-username').value.trim(),
+            password: document.getElementById('login-password').value,
+          }),
+        });
+        window.location.href = '/';
+      } catch (err) {
+        showAlert('login-error', err.message);
+      }
+      setLoading(btn, false);
+    });
+
+    document.getElementById('signup-form').addEventListener('submit', async (e) => {
+      e.preventDefault();
+      hideAlerts();
+      const btn = document.getElementById('signup-btn');
+      setLoading(btn, true);
+      try {
+        await apiFetch('/api/auth/signup', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            username: document.getElementById('signup-username').value.trim(),
+            password: document.getElementById('signup-password').value,
+            email: document.getElementById('signup-email').value.trim(),
+            shop_name: document.getElementById('signup-shop').value.trim(),
+          }),
+        });
+        window.location.href = '/';
+      } catch (err) {
+        showAlert('signup-error', err.message);
+      }
+      setLoading(btn, false);
+    });
+
+    let forgotEmail = '';
+
+    document.getElementById('forgot-form').addEventListener('submit', async (e) => {
+      e.preventDefault();
+      hideAlerts();
+      const btn = document.getElementById('forgot-btn');
+      setLoading(btn, true);
+      forgotEmail = document.getElementById('forgot-email').value.trim();
+      try {
+        const res = await apiFetch('/api/auth/forgot-password', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ email: forgotEmail }),
+        });
+        document.getElementById('forgot-success-msg').textContent = res.message || 'Done.';
+        document.getElementById('forgot-step-email').classList.add('hidden');
+        document.getElementById('forgot-step-otp').classList.remove('hidden');
+        const vendorBox = document.getElementById('forgot-vendor-box');
+        const otpFields = document.getElementById('forgot-otp-fields');
+        if (res.vendor_fallback) {
+          vendorBox.classList.remove('hidden');
+          document.getElementById('forgot-vendor-msg').textContent = res.message;
+          if (res.vendor_whatsapp) {
+            vendorBox.innerHTML = `<p>${esc(res.message)}</p><a href="https://wa.me/${formatPhoneForWhatsApp(res.vendor_whatsapp)}" target="_blank" class="btn btn-primary btn-sm mt-3 inline-block">WhatsApp Vendor</a>`;
+          }
+          otpFields.classList.add('hidden');
+        } else {
+          vendorBox.classList.add('hidden');
+          otpFields.classList.remove('hidden');
+        }
+      } catch (err) {
+        showAlert('forgot-error', err.message);
+      }
+      setLoading(btn, false);
+    });
+
+    document.getElementById('forgot-reset-btn').addEventListener('click', async () => {
+      const errEl = document.getElementById('forgot-reset-error');
+      errEl.classList.add('hidden');
+      const btn = document.getElementById('forgot-reset-btn');
+      setLoading(btn, true);
+      try {
+        await apiFetch('/api/auth/reset-password', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            email: forgotEmail,
+            otp: document.getElementById('forgot-otp').value.trim(),
+            new_password: document.getElementById('forgot-new-pw').value,
+          }),
+        });
+        showMode('login');
+        alert('Password updated — sign in with your new password.');
+      } catch (err) {
+        errEl.textContent = err.message;
+        errEl.classList.remove('hidden');
+      }
+      setLoading(btn, false);
+    });
+
+    (async function initFirstBoot() {
+      try {
+        const status = await apiFetch('/api/auth/status');
+        if (!status.configured) {
+          showMode('signup');
+          heading.textContent = 'Create Admin Account';
+          subheading.textContent = 'First-time setup — create your administrator account to get started';
+          document.getElementById('signup-btn').querySelector('.btn-label').textContent = 'Create Admin Account';
+          tabsEl.style.display = 'none';
+        }
+      } catch (_) {}
+    })();
+  </script>
+</body>
+</html>

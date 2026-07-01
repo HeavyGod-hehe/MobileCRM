@@ -1,28 +1,30 @@
 # -*- mode: python ; coding: utf-8 -*-
-"""PyInstaller spec — macOS Customer .app bundle (no source code)."""
+"""PyInstaller spec — macOS Customer .app (onedir bundle for faster, reliable startup)."""
 
 import platform
 from pathlib import Path
 
 ROOT = Path(SPECPATH)
+VERSION = (ROOT / "VERSION").read_text(encoding="utf-8").strip()
 
 a = Analysis(
-    ['app.py'],
+    ["launch_crm.py"],
     pathex=[str(ROOT)],
     binaries=[],
     datas=[
-        (str(ROOT / 'templates'), 'templates'),
-        (str(ROOT / 'static'), 'static'),
-        (str(ROOT / 'folder_picker.py'), '.'),
-        (str(ROOT / 'VERSION'), '.'),
+        (str(ROOT / "templates"), "templates"),
+        (str(ROOT / "static"), "static"),
+        (str(ROOT / "folder_picker.py"), "."),
+        (str(ROOT / "VERSION"), "."),
     ],
     hiddenimports=[
-        'werkzeug.security',
-        'app_paths',
-        'backup_service',
-        'database',
-        'license_guard',
-        'email_service',
+        "werkzeug.security",
+        "app_paths",
+        "app",
+        "backup_service",
+        "database",
+        "license_guard",
+        "email_service",
     ],
     hookspath=[],
     hooksconfig={},
@@ -39,17 +41,13 @@ pyz = PYZ(a.pure, a.zipped_data, cipher=None)
 exe = EXE(
     pyz,
     a.scripts,
-    a.binaries,
-    a.zipfiles,
-    a.datas,
     [],
-    name='PhoneResellerCRM',
+    exclude_binaries=True,
+    name="PhoneResellerCRM",
     debug=False,
     bootloader_ignore_signals=False,
     strip=False,
-    upx=True,
-    upx_exclude=[],
-    runtime_tmpdir=None,
+    upx=False,
     console=False,
     disable_windowed_traceback=False,
     argv_emulation=False,
@@ -58,16 +56,29 @@ exe = EXE(
     entitlements_file=None,
 )
 
-if platform.system() == 'Darwin':
+coll = COLLECT(
+    exe,
+    a.binaries,
+    a.zipfiles,
+    a.datas,
+    strip=False,
+    upx=False,
+    upx_exclude=[],
+    name="PhoneResellerCRM",
+)
+
+if platform.system() == "Darwin":
     app = BUNDLE(
-        exe,
-        name='Phone Reseller CRM.app',
+        coll,
+        name="Phone Reseller CRM.app",
         icon=None,
-        bundle_identifier='com.phonereseller.crm',
+        bundle_identifier="com.phonereseller.crm",
         info_plist={
-            'NSHighResolutionCapable': True,
-            'CFBundleName': 'Phone Reseller CRM',
-            'CFBundleDisplayName': 'Phone Reseller CRM',
-            'CFBundleShortVersionString': '2.1.0',
+            "NSHighResolutionCapable": True,
+            "CFBundleName": "Phone Reseller CRM",
+            "CFBundleDisplayName": "Phone Reseller CRM",
+            "CFBundleShortVersionString": VERSION,
+            "CFBundleVersion": VERSION,
+            "LSMinimumSystemVersion": "10.13",
         },
     )

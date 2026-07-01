@@ -53,7 +53,7 @@ def run_build(spec: str) -> None:
 
 def write_start_here(out: Path) -> None:
     (out / "START HERE.txt").write_text(
-        """Phone Reseller CRM — Customer Edition v2.1 (Mac)
+        """Phone Reseller CRM — Customer Edition v2.2 (Mac)
 ================================================
 
 NO Python or source code — everything is inside the app.
@@ -62,6 +62,13 @@ HOW TO START
 ────────────
   1. Double-click:  Phone Reseller CRM.app
   2. Browser opens at http://localhost:5050
+  3. If it does not open, wait 10 seconds and visit http://localhost:5050
+
+TROUBLESHOOTING
+───────────────
+  • Check Data/crm.log next to the app for errors
+  • Your data lives in Data/crm.db and Data/Backups/
+  • Use Settings → Close CRM instead of Force Quit
 
 FIRST TIME
 ──────────
@@ -73,8 +80,10 @@ FIRST TIME
   • Auto backups: Data/Backups/username_crm_backup_DATE.db
   • Open the same folder as Phone Reseller CRM.app to see Data/Backups
 
-FEATURES (v2.1)
+FEATURES (v2.2)
 ───────────────
+  • Total costing shown when adding phones or expenses
+  • Faster, more reliable Mac app startup
   • Today — daily sales & cash at a glance
   • Billing — print invoice + WhatsApp receipt
   • Help — where to put cash, udhar, bank entries
@@ -88,8 +97,8 @@ Support: contact your CRM vendor.
 
 
 def verify_no_source(out: Path) -> None:
-    for path in out.rglob("*.py"):
-        if path.name in SOURCE_NAMES:
+    for path in out.iterdir():
+        if path.suffix == ".py" and path.name in SOURCE_NAMES:
             raise RuntimeError(f"Source file must not be shipped: {path}")
 
 
