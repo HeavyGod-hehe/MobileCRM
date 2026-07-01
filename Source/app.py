@@ -641,7 +641,10 @@ def bulk_mark_sold_api():
         return jsonify({"error": "No phones to mark sold"}), 400
     try:
         with db.db_session() as conn:
-            result = db.bulk_mark_sold(conn, user_id, items)
+            result = db.bulk_mark_sold(
+                conn, user_id, items,
+                default_sale_price=data.get("sale_price_per_unit"),
+            )
             return jsonify(result)
     except ValueError as exc:
         return jsonify({"error": str(exc)}), 400
@@ -665,9 +668,28 @@ def add_phone_expense(phone_id):
     if not data.get("amount"):
         return jsonify({"error": "Amount is required"}), 400
     with db.db_session() as conn:
-        expense = db.add_phone_expense(conn, user_id, phone_id, data)
+        try:
+            expense = db.add_phone_expense(conn, user_id, phone_id, data)
+        except ValueError as exc:
+            return jsonify({"error": str(exc)}), 400
         if not expense:
             return jsonify({"error": "Phone not found"}), 404
+        return jsonify(db.get_phone(conn, user_id, phone_id, include_details=True))
+
+
+@app.route("/api/phones/<int:phone_id>/expenses/<int:expense_id>", methods=["PUT"])
+def update_phone_expense(phone_id, expense_id):
+    user_id = _current_user_id()
+    data = request.get_json(force=True)
+    if not data.get("amount"):
+        return jsonify({"error": "Amount is required"}), 400
+    with db.db_session() as conn:
+        try:
+            expense = db.update_phone_expense(conn, user_id, phone_id, expense_id, data)
+        except ValueError as exc:
+            return jsonify({"error": str(exc)}), 400
+        if not expense:
+            return jsonify({"error": "Expense not found"}), 404
         return jsonify(db.get_phone(conn, user_id, phone_id, include_details=True))
 
 
@@ -677,7 +699,8 @@ def delete_phone_expense(phone_id, expense_id):
     with db.db_session() as conn:
         if not db.get_phone(conn, user_id, phone_id):
             return jsonify({"error": "Phone not found"}), 404
-        db.delete_phone_expense(conn, expense_id)
+        if not db.delete_phone_expense(conn, user_id, phone_id, expense_id):
+            return jsonify({"error": "Expense not found"}), 404
         return jsonify(db.get_phone(conn, user_id, phone_id, include_details=True))
 
 

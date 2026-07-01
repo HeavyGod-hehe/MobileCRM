@@ -59,6 +59,7 @@
               <th class="px-4 py-3 font-medium">Type</th>
               <th class="px-4 py-3 font-medium">Condition</th>
               <th class="px-4 py-3 font-medium">IMEI</th>
+              <th class="px-4 py-3 font-medium">IMEI 2</th>
               <th class="px-4 py-3 font-medium text-right">Cost</th>
               <th class="px-4 py-3 font-medium text-right">Total Cost</th>
               <th class="px-4 py-3 font-medium text-right">Sold Price</th>
@@ -95,7 +96,16 @@
       </button>
     </div>
     <form id="bulk-sold-form" class="p-6 space-y-4 max-h-[65vh] overflow-y-auto">
-      <p class="text-sm text-slate-400">Enter the sale price for each phone. Payment is recorded as cash received in full.</p>
+      <p class="text-sm text-slate-400">Enter sale price per phone. Profit is calculated per device (sale price minus total cost including expenses).</p>
+      <div class="flex flex-col sm:flex-row gap-3 p-3 rounded-lg border border-white/8 bg-slate-900/40">
+        <div class="flex-1">
+          <label class="block text-xs text-slate-500 mb-1">Same sale price for all (per phone)</label>
+          <input type="number" id="bulk-sale-unit-price" min="0" step="1" class="input-field" placeholder="e.g. 125000">
+        </div>
+        <div class="flex items-end">
+          <button type="button" id="bulk-apply-unit-price" class="btn btn-ghost btn-sm">Apply to all</button>
+        </div>
+      </div>
       <div id="bulk-sold-list" class="space-y-3"></div>
       <div class="flex gap-3 pt-2 border-t border-white/8">
         <button type="submit" class="btn btn-primary flex-1">Confirm Sold</button>
@@ -170,12 +180,16 @@
           </select>
         </div>
         <div>
-          <label class="block text-xs font-medium text-slate-400 mb-1.5">Purchase Price *</label>
+          <label class="block text-xs font-medium text-slate-400 mb-1.5">Purchase Price (per phone) *</label>
           <input type="number" id="f-purchase-price" required min="0" step="1" class="input-field">
         </div>
+        <div id="qty-total-wrap" class="hidden col-span-2">
+          <p class="text-sm text-orange-300/90">Total purchase cost: <span id="qty-total-purchase" class="font-semibold">—</span></p>
+          <p class="text-xs text-slate-500">Per-phone price × quantity</p>
+        </div>
         <div>
-          <label class="block text-xs font-medium text-slate-400 mb-1.5">Purchase Date</label>
-          <input type="date" id="f-purchase-date" class="input-field">
+          <label class="block text-xs font-medium text-slate-400 mb-1.5">Purchase Date &amp; Time</label>
+          <input type="datetime-local" id="f-purchase-date" class="input-field">
         </div>
         <div class="col-span-2">
           <label class="block text-xs font-medium text-slate-400 mb-1.5">Purchase Payment Method *</label>
@@ -193,10 +207,18 @@
         <p class="text-xs font-semibold uppercase tracking-wider text-slate-500 mb-3">IMEI Number(s)</p>
         <p id="imei-hint" class="text-xs text-slate-600 mb-3">Optional — enter the device IMEI for tracking and invoices.</p>
         <div id="single-imei-field">
-          <label class="block text-xs font-medium text-slate-400 mb-1.5" for="f-imei">IMEI</label>
-          <div class="flex gap-2">
-            <input type="text" id="f-imei" placeholder="15-digit IMEI number" class="input-field flex-1" inputmode="numeric" autocomplete="off">
-            <button type="button" id="btn-scan-imei-inv" class="btn btn-ghost btn-sm shrink-0">Scan</button>
+          <div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
+            <div>
+              <label class="block text-xs font-medium text-slate-400 mb-1.5" for="f-imei">IMEI 1</label>
+              <div class="flex gap-2">
+                <input type="text" id="f-imei" placeholder="15-digit IMEI" class="input-field flex-1" inputmode="numeric" autocomplete="off">
+                <button type="button" id="btn-scan-imei-inv" class="btn btn-ghost btn-sm shrink-0">Scan</button>
+              </div>
+            </div>
+            <div>
+              <label class="block text-xs font-medium text-slate-400 mb-1.5" for="f-imei2">IMEI 2</label>
+              <input type="text" id="f-imei2" placeholder="Second IMEI (optional)" class="input-field" inputmode="numeric" autocomplete="off">
+            </div>
           </div>
         </div>
         <div id="imei-bulk-section" class="hidden">
@@ -215,6 +237,11 @@
           <div>
             <label class="block text-xs font-medium text-slate-400 mb-1.5">Supplier Contact</label>
             <input type="text" id="f-supplier-contact" class="input-field">
+          </div>
+          <div class="sm:col-span-2">
+            <label class="block text-xs font-medium text-slate-400 mb-1.5">Supplier Account (optional)</label>
+            <div id="f-supplier-account-wrap"></div>
+            <p class="text-xs text-slate-600 mt-1">Default: No Account — link supplier to khata if needed</p>
           </div>
         </div>
       </div>
@@ -269,6 +296,10 @@
           <div>
             <label class="block text-xs font-medium text-slate-400 mb-1.5">Receivable Amount</label>
             <input type="number" id="f-receivable" min="0" step="1" value="0" class="input-field">
+          </div>
+          <div>
+            <label class="block text-xs font-medium text-slate-400 mb-1.5">Sale Date &amp; Time</label>
+            <input type="datetime-local" id="f-sale-date" class="input-field">
           </div>
           <div class="col-span-2">
             <label class="block text-xs font-medium text-slate-400 mb-1.5">Sale Payment Method *</label>
@@ -334,7 +365,16 @@
         <label class="block text-xs font-medium text-slate-400 mb-1.5">Description</label>
         <input type="text" id="expense-desc" class="input-field" placeholder="e.g. Repair cost">
       </div>
-      <button type="submit" class="btn btn-primary w-full">Add Expense</button>
+      <div>
+        <label class="block text-xs font-medium text-slate-400 mb-1.5">Expense Date</label>
+        <input type="datetime-local" id="expense-date" class="input-field">
+      </div>
+      <div>
+        <label class="block text-xs font-medium text-slate-400 mb-1.5">Account (optional)</label>
+        <div id="expense-account-wrap"></div>
+        <p class="text-xs text-slate-600 mt-1">Default: No Account</p>
+      </div>
+      <button type="submit" class="btn btn-primary w-full">Save Expense</button>
     </form>
   </div>
 </div>
@@ -353,7 +393,31 @@
   let formExistingExpenseTotal = 0;
   let expenseModalPurchase = 0;
   let expenseModalExisting = 0;
+  let expenseModalPhoneId = null;
+  let expenseEditId = null;
+  let supplierAccountPicker = null;
+  let expenseAccountPicker = null;
+  let inventoryAccounts = [];
   const saleSection = document.getElementById('sale-section');
+
+  function localDatetimeValue() {
+    const d = new Date();
+    d.setMinutes(d.getMinutes() - d.getTimezoneOffset());
+    return d.toISOString().slice(0, 16);
+  }
+
+  function toDatetimeLocal(value) {
+    if (!value) return localDatetimeValue();
+    const text = String(value).trim().replace(' ', 'T');
+    if (text.length >= 16) return text.slice(0, 16);
+    if (text.length === 10) return `${text}T12:00`;
+    return localDatetimeValue();
+  }
+
+  function formatImeiDisplay(p) {
+    const parts = [p.imei, p.imei2].filter(Boolean);
+    return parts.length ? parts.join(' / ') : '—';
+  }
 
   const statusBadge = (status) => {
     const colors = {
@@ -398,6 +462,7 @@
       <td class="px-4 py-3.5 cursor-pointer" onclick="viewPhone(${p.id})">${typeBadge(p.type)}</td>
       <td class="px-4 py-3.5 text-slate-400 cursor-pointer" onclick="viewPhone(${p.id})">${esc(p.condition)||'—'}</td>
       <td class="px-4 py-3.5 text-slate-400 text-xs font-mono cursor-pointer" onclick="viewPhone(${p.id})">${esc(p.imei)||'—'}</td>
+      <td class="px-4 py-3.5 text-slate-400 text-xs font-mono cursor-pointer" onclick="viewPhone(${p.id})">${esc(p.imei2)||'—'}</td>
       <td class="px-4 py-3.5 text-right tabular-nums font-medium cursor-pointer" onclick="viewPhone(${p.id})">${fmt(p.purchase_price)}</td>
       <td class="px-4 py-3.5 text-right tabular-nums text-orange-300 cursor-pointer" onclick="viewPhone(${p.id})">${fmt(p.total_costing ?? p.purchase_price)}</td>
       <td class="px-4 py-3.5 text-right tabular-nums ${sold ? 'text-emerald-400' : 'text-slate-600'} cursor-pointer" onclick="viewPhone(${p.id})">${sold ? fmt(p.sale_price) : '—'}</td>
@@ -446,7 +511,7 @@
     return phones.filter(p => {
       if (activeStatus !== 'All' && p.status !== activeStatus) return false;
       if (!q) return true;
-      const hay = `${p.imei||''} ${p.model||''} ${p.variant||''}`.toLowerCase();
+      const hay = `${p.imei||''} ${p.imei2||''} ${p.model||''} ${p.variant||''}`.toLowerCase();
       return hay.includes(q);
     });
   }
@@ -501,12 +566,27 @@
       </div>`).join('');
   }
 
+  function updateQtyTotalPreview() {
+    const qty = parseInt(document.getElementById('f-quantity').value) || 1;
+    const unit = parseFloat(document.getElementById('f-purchase-price').value) || 0;
+    const wrap = document.getElementById('qty-total-wrap');
+    const isEdit = !!document.getElementById('phone-id').value;
+    if (isEdit || qty <= 1) {
+      wrap.classList.add('hidden');
+      return;
+    }
+    wrap.classList.remove('hidden');
+    document.getElementById('qty-total-purchase').textContent = fmt(unit * qty);
+  }
+
   function updateImeiFields() {
     const qty = parseInt(document.getElementById('f-quantity').value) || 1;
     const isEdit = !!document.getElementById('phone-id').value;
     const bulkSection = document.getElementById('imei-bulk-section');
     const singleField = document.getElementById('single-imei-field');
     const qtyField = document.getElementById('quantity-field');
+
+    updateQtyTotalPreview();
 
     if (isEdit) {
       bulkSection.classList.add('hidden');
@@ -520,15 +600,46 @@
       bulkSection.classList.remove('hidden');
       singleField.classList.add('hidden');
       document.getElementById('imei-fields').innerHTML = Array.from({length: qty}, (_, i) => `
-        <div class="imei-field-row">
-          <label class="block text-xs font-medium text-slate-400 mb-1" for="imei-bulk-${i}">Device ${i + 1} — IMEI</label>
-          <input type="text" id="imei-bulk-${i}" class="input-field imei-bulk-input" data-index="${i}"
-            placeholder="15-digit IMEI" inputmode="numeric" autocomplete="off">
+        <div class="imei-field-row p-3 rounded-lg border border-white/8 bg-slate-900/30">
+          <p class="text-xs font-medium text-slate-400 mb-2">Device ${i + 1}</p>
+          <div class="grid grid-cols-1 sm:grid-cols-2 gap-2">
+            <div>
+              <label class="block text-xs text-slate-500 mb-1" for="imei-bulk-${i}">IMEI 1</label>
+              <input type="text" id="imei-bulk-${i}" class="input-field imei-bulk-input" data-index="${i}"
+                placeholder="15-digit IMEI" inputmode="numeric" autocomplete="off">
+            </div>
+            <div>
+              <label class="block text-xs text-slate-500 mb-1" for="imei2-bulk-${i}">IMEI 2</label>
+              <input type="text" id="imei2-bulk-${i}" class="input-field imei2-bulk-input" data-index="${i}"
+                placeholder="Second IMEI" inputmode="numeric" autocomplete="off">
+            </div>
+          </div>
         </div>`).join('');
     } else {
       bulkSection.classList.add('hidden');
       singleField.classList.remove('hidden');
     }
+  }
+
+  async function loadInventoryAccounts() {
+    const data = await apiFetch('/api/accounts');
+    inventoryAccounts = data.accounts || [];
+    if (!supplierAccountPicker) {
+      supplierAccountPicker = createSearchableAccountSelect('f-supplier-account-wrap', {
+        placeholder: 'Search supplier account…',
+        allowEmpty: true,
+        emptyLabel: 'No Account',
+      });
+    }
+    if (!expenseAccountPicker) {
+      expenseAccountPicker = createSearchableAccountSelect('expense-account-wrap', {
+        placeholder: 'Search account…',
+        allowEmpty: true,
+        emptyLabel: 'No Account',
+      });
+    }
+    supplierAccountPicker.setAccounts(inventoryAccounts);
+    expenseAccountPicker.setAccounts(inventoryAccounts);
   }
 
   async function loadPhones() {
@@ -664,7 +775,7 @@
     updateNetProfitPreview(total);
   }
 
-  function renderEditExpenseList(expenses = []) {
+  function renderEditExpenseList(expenses = [], phoneId = null) {
     const wrap = document.getElementById('edit-expense-section');
     const list = document.getElementById('edit-expense-list');
     if (!expenses.length) {
@@ -674,9 +785,16 @@
     }
     wrap.classList.remove('hidden');
     list.innerHTML = expenses.map(e => `
-      <div class="flex justify-between text-sm">
-        <span class="text-slate-400">${esc(e.description) || 'Expense'}</span>
-        <span class="text-red-400">${fmt(e.amount)}</span>
+      <div class="flex justify-between items-center gap-2 text-sm p-2 rounded-lg bg-slate-900/40 border border-white/8">
+        <div class="min-w-0">
+          <span class="text-slate-300">${esc(e.description) || 'Expense'}</span>
+          <span class="text-slate-600 text-xs ml-2">${esc((e.expense_date || e.created_at || '').slice(0, 16))}</span>
+        </div>
+        <div class="flex items-center gap-2 shrink-0">
+          <span class="text-red-400 font-medium">${fmt(e.amount)}</span>
+          <button type="button" class="action-pill edit" onclick="editExpense(${phoneId}, ${e.id})">Edit</button>
+          <button type="button" class="action-pill delete" onclick="deleteExpense(${phoneId}, ${e.id})">Delete</button>
+        </div>
       </div>`).join('');
   }
 
@@ -690,7 +808,12 @@
     const isSold = document.getElementById('f-status').value === 'Sold';
     saleSection.classList.toggle('hidden', !isSold);
     document.getElementById('f-sale-payment').required = isSold;
-    if (isSold) updateNetProfitPreview();
+    if (isSold) {
+      if (!document.getElementById('f-sale-date').value) {
+        document.getElementById('f-sale-date').value = localDatetimeValue();
+      }
+      updateNetProfitPreview();
+    }
   }
 
   function updateNetProfitPreview(totalCostingOverride) {
@@ -712,7 +835,7 @@
     const isEdit = !statusOverride && !!p.id;
     formExistingExpenseTotal = isEdit ? (p.expense_total || 0) : 0;
     document.getElementById('intake-expense-section').classList.toggle('hidden', isEdit);
-    renderEditExpenseList(isEdit ? (p.expenses || []) : []);
+    renderEditExpenseList(isEdit ? (p.expenses || []) : [], p.id);
     document.getElementById('f-expense-amount').value = '';
     document.getElementById('f-expense-desc').value = '';
     document.getElementById('phone-id').value = p.id;
@@ -723,15 +846,18 @@
     document.getElementById('f-variant').value = p.variant || '';
     document.getElementById('f-type').value = p.type;
     document.getElementById('f-purchase-price').value = p.purchase_price;
-    document.getElementById('f-purchase-date').value = p.purchase_date || (p.created_at ? p.created_at.slice(0, 10) : '');
+    document.getElementById('f-purchase-date').value = toDatetimeLocal(p.purchase_date || p.created_at);
     document.getElementById('f-status').value = statusOverride || p.status;
     document.getElementById('f-supplier-name').value = p.supplier_name;
     document.getElementById('f-supplier-contact').value = p.supplier_contact;
     document.getElementById('f-imei').value = p.imei || '';
+    document.getElementById('f-imei2').value = p.imei2 || '';
     document.getElementById('f-buyer-name').value = statusOverride === 'Sold' ? '' : p.buyer_name;
     document.getElementById('f-buyer-contact').value = statusOverride === 'Sold' ? '' : p.buyer_contact;
     document.getElementById('f-sale-price').value = statusOverride === 'Sold' ? '' : (p.sale_price || '');
     document.getElementById('f-receivable').value = statusOverride === 'Sold' ? 0 : p.receivable_amount;
+    document.getElementById('f-sale-date').value = toDatetimeLocal(p.sold_at);
+    supplierAccountPicker?.setValue(p.supplier_account_id || '');
     setPaymentFields('f-purchase', p.purchase_payment_method || 'cash', p.purchase_bank_id);
     setPaymentFields('f-sale', p.sale_payment_method || 'cash', p.sale_bank_id);
     updateImeiFields();
@@ -749,16 +875,21 @@
       </div>`).join('') : '<p class="text-slate-500 text-sm">No partner attribution recorded</p>';
 
     const expHtml = (p.expenses || []).length ? (p.expenses || []).map(e => `
-      <div class="flex justify-between text-sm">
+      <div class="flex justify-between items-center text-sm gap-2">
         <span class="text-slate-400">${esc(e.description) || 'Expense'}</span>
-        <span class="text-red-400">${fmt(e.amount)}</span>
+        <div class="flex items-center gap-2">
+          <span class="text-red-400">${fmt(e.amount)}</span>
+          <button type="button" class="action-pill edit" onclick="editExpense(${p.id}, ${e.id})">Edit</button>
+          <button type="button" class="action-pill delete" onclick="deleteExpense(${p.id}, ${e.id})">Delete</button>
+        </div>
       </div>`).join('') : '<p class="text-slate-500 text-sm">No expenses logged</p>';
 
     document.getElementById('detail-body').innerHTML = `
       <div class="grid grid-cols-2 gap-3 text-sm">
         <div><span class="text-slate-500">Purchase Date</span><p class="text-white">${esc(p.purchase_date) || (p.created_at ? p.created_at.slice(0,10) : '—')}</p></div>
         <div><span class="text-slate-500">Condition</span><p class="text-white">${esc(p.condition)||'—'}</p></div>
-        <div><span class="text-slate-500">IMEI</span><p class="text-white">${esc(p.imei)||'—'}</p></div>
+        <div><span class="text-slate-500">IMEI 1</span><p class="text-white">${esc(p.imei)||'—'}</p></div>
+        <div><span class="text-slate-500">IMEI 2</span><p class="text-white">${esc(p.imei2)||'—'}</p></div>
         <div><span class="text-slate-500">Box</span><p class="text-white">${esc(p.box_status)||'—'}</p></div>
         <div><span class="text-slate-500">Battery</span><p class="text-white">${esc(p.battery_health)||'—'}</p></div>
         <div><span class="text-slate-500">Variant</span><p class="text-white">${esc(p.variant)||'—'}</p></div>
@@ -800,19 +931,58 @@
 
   window.addExpense = async (id) => {
     const p = await apiFetch(`/api/phones/${id}`);
+    openExpenseModal(p);
+  };
+
+  window.editExpense = async (phoneId, expenseId) => {
+    const p = await apiFetch(`/api/phones/${phoneId}`);
+    const expense = (p.expenses || []).find(e => e.id === expenseId);
+    if (!expense) return;
+    openExpenseModal(p, expense);
+  };
+
+  window.deleteExpense = async (phoneId, expenseId) => {
+    if (!confirm('Delete this expense? Cash book entry will be reversed.')) return;
+    await apiFetch(`/api/phones/${phoneId}/expenses/${expenseId}`, { method: 'DELETE' });
+    toast('Expense deleted');
+    loadPhones();
+    if (document.getElementById('detail-modal').classList.contains('open')) {
+      viewPhone(phoneId);
+    }
+  };
+
+  function openExpenseModal(p, expense = null) {
+    expenseModalPhoneId = p.id;
+    expenseEditId = expense ? expense.id : null;
     expenseModalPurchase = p.purchase_price || 0;
-    expenseModalExisting = p.expense_total || 0;
-    document.getElementById('expense-phone-id').value = id;
+    expenseModalExisting = expense
+      ? (p.expense_total || 0) - (expense.amount || 0)
+      : (p.expense_total || 0);
+    document.getElementById('expense-phone-id').value = p.id;
     document.getElementById('expense-form').reset();
-    document.getElementById('expense-phone-id').value = id;
+    document.getElementById('expense-phone-id').value = p.id;
     document.getElementById('expense-phone-title').textContent = p.model;
     document.getElementById('expense-purchase-cost').textContent = fmt(expenseModalPurchase);
     document.getElementById('expense-existing-total').textContent = fmt(expenseModalExisting);
+    document.getElementById('expense-amount').value = expense ? expense.amount : '';
+    document.getElementById('expense-desc').value = expense ? (expense.description || '') : '';
+    document.getElementById('expense-date').value = toDatetimeLocal(expense?.expense_date || expense?.created_at);
+    expenseAccountPicker?.setValue(expense?.account_id || '');
+    document.querySelector('#expense-modal .text-lg').textContent = expense ? 'Edit Expense' : 'Add Expense';
     updateExpenseModalTotal();
     openModal('expense-overlay', 'expense-modal');
+  }
+
+
+  window.markAsSold = (id) => {
+    const p = phones.find(x => x.id === id);
+    if (p) {
+      fillPhoneForm(p, 'Sold');
+      document.getElementById('f-sale-date').value = localDatetimeValue();
+      showPhoneModal('Mark as Sold');
+    }
   };
 
-  window.markAsSold = (id) => { const p = phones.find(x => x.id === id); if (p) { fillPhoneForm(p,'Sold'); showPhoneModal('Mark as Sold'); } };
   window.editPhone = async (id) => {
     const p = await apiFetch(`/api/phones/${id}`);
     fillPhoneForm(p);
@@ -841,7 +1011,9 @@
     document.getElementById('phone-id').value = '';
     document.getElementById('f-status').value = 'Bought';
     document.getElementById('f-quantity').value = '1';
-    document.getElementById('f-purchase-date').value = new Date().toISOString().slice(0, 10);
+    document.getElementById('f-purchase-date').value = localDatetimeValue();
+    document.getElementById('f-sale-date').value = localDatetimeValue();
+    supplierAccountPicker?.setValue('');
     setPaymentFields('f-purchase', 'cash', null);
     setPaymentFields('f-sale', 'cash', null);
     formExistingExpenseTotal = 0;
@@ -857,7 +1029,10 @@
   document.getElementById('btn-cancel-x').addEventListener('click', () => hidePhoneModal());
   document.getElementById('modal-overlay').addEventListener('click', () => hidePhoneModal());
   document.getElementById('f-status').addEventListener('change', toggleSaleSection);
-  document.getElementById('f-purchase-price').addEventListener('input', updateTotalCostingPreview);
+  document.getElementById('f-purchase-price').addEventListener('input', () => {
+    updateTotalCostingPreview();
+    updateQtyTotalPreview();
+  });
   document.getElementById('f-expense-amount').addEventListener('input', updateTotalCostingPreview);
   document.getElementById('f-sale-price').addEventListener('input', () => updateTotalCostingPreview());
   document.getElementById('f-quantity').addEventListener('input', updateImeiFields);
@@ -888,13 +1063,21 @@
       payload.expenses = [{ amount: expAmt, description: document.getElementById('f-expense-desc').value }];
     }
 
+    const supplierAcct = supplierAccountPicker?.getValue();
+    if (supplierAcct) payload.supplier_account_id = supplierAcct;
+
     if (id) {
       payload.imei = document.getElementById('f-imei').value;
+      payload.imei2 = document.getElementById('f-imei2').value;
     } else if (qty > 1) {
       payload.quantity = qty;
-      payload.imeis = [...document.querySelectorAll('.imei-bulk-input')].map(el => el.value);
+      payload.imeis = [...document.querySelectorAll('.imei-bulk-input')].map((el, i) => ({
+        imei: el.value,
+        imei2: document.getElementById(`imei2-bulk-${i}`)?.value || '',
+      }));
     } else {
       payload.imei = document.getElementById('f-imei').value;
+      payload.imei2 = document.getElementById('f-imei2').value;
     }
 
     const purchasePay = readPaymentFields('f-purchase');
@@ -907,6 +1090,7 @@
       payload.buyer_contact = document.getElementById('f-buyer-contact').value;
       payload.sale_price = document.getElementById('f-sale-price').value;
       payload.receivable_amount = document.getElementById('f-receivable').value;
+      payload.sold_at = document.getElementById('f-sale-date').value;
       const salePay = readPaymentFields('f-sale');
       payload.sale_payment_method = salePay.method;
       if (salePay.bank_id) payload.sale_bank_id = salePay.bank_id;
@@ -927,16 +1111,24 @@
   document.getElementById('expense-form').addEventListener('submit', async (e) => {
     e.preventDefault();
     const phoneId = document.getElementById('expense-phone-id').value;
-    const res = await apiFetch(`/api/phones/${phoneId}/expenses`, {
-      method: 'POST',
+    const body = {
+      amount: document.getElementById('expense-amount').value,
+      description: document.getElementById('expense-desc').value,
+      expense_date: document.getElementById('expense-date').value,
+    };
+    const acctId = expenseAccountPicker?.getValue();
+    if (acctId) body.account_id = acctId;
+    const url = expenseEditId
+      ? `/api/phones/${phoneId}/expenses/${expenseEditId}`
+      : `/api/phones/${phoneId}/expenses`;
+    const res = await apiFetch(url, {
+      method: expenseEditId ? 'PUT' : 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        amount: document.getElementById('expense-amount').value,
-        description: document.getElementById('expense-desc').value,
-      }),
+      body: JSON.stringify(body),
     });
     closeModal('expense-overlay', 'expense-modal');
-    toast(`Expense added — total costing now ${fmt(res.total_costing)}`);
+    toast(`Expense saved — total costing now ${fmt(res.total_costing)}`);
+    expenseEditId = null;
     loadPhones();
   });
   document.getElementById('expense-overlay').addEventListener('click', () => closeModal('expense-overlay', 'expense-modal'));
@@ -979,20 +1171,55 @@
       toast('Select phones that are not already sold', 'error');
       return;
     }
-    document.getElementById('bulk-sold-list').innerHTML = selected.map(p => `
-      <div class="flex flex-col sm:flex-row sm:items-center gap-2 p-3 rounded-lg border border-white/8 bg-slate-900/40">
+    document.getElementById('bulk-sale-unit-price').value = '';
+    document.getElementById('bulk-sold-list').innerHTML = selected.map(p => {
+      const cost = p.total_costing ?? p.purchase_price ?? 0;
+      return `
+      <div class="bulk-sold-row flex flex-col sm:flex-row sm:items-center gap-2 p-3 rounded-lg border border-white/8 bg-slate-900/40">
         <div class="flex-1 min-w-0">
           <p class="font-medium text-white truncate">${esc(p.model)}</p>
-          <p class="text-xs text-slate-500">${esc(p.imei) || 'No IMEI'} · Cost ${fmt(p.purchase_price)}</p>
+          <p class="text-xs text-slate-500">${formatImeiDisplay(p)} · Total cost ${fmt(cost)}</p>
         </div>
         <div class="sm:w-40">
-          <label class="block text-xs text-slate-500 mb-1">Sale Price *</label>
+          <label class="block text-xs text-slate-500 mb-1">Sale Price (per phone) *</label>
           <input type="number" required min="1" step="1" class="input-field bulk-sale-price"
-            data-id="${p.id}" placeholder="0">
+            data-id="${p.id}" data-cost="${cost}" placeholder="0">
         </div>
-      </div>`).join('');
+        <div class="sm:w-32 text-right">
+          <p class="text-xs text-slate-500 mb-1">Profit</p>
+          <p class="bulk-profit-preview text-sm font-semibold text-emerald-400">—</p>
+        </div>
+      </div>`;
+    }).join('');
+    document.querySelectorAll('.bulk-sale-price').forEach(el => {
+      el.addEventListener('input', updateBulkSoldProfits);
+    });
     openModal('bulk-sold-overlay', 'bulk-sold-modal');
   }
+
+  function updateBulkSoldProfits() {
+    document.querySelectorAll('.bulk-sale-price').forEach(el => {
+      const cost = parseFloat(el.dataset.cost) || 0;
+      const sale = parseFloat(el.value) || 0;
+      const profitEl = el.closest('.bulk-sold-row')?.querySelector('.bulk-profit-preview');
+      if (!profitEl) return;
+      if (sale > 0) {
+        const profit = sale - cost;
+        profitEl.textContent = fmt(profit);
+        profitEl.className = `bulk-profit-preview text-sm font-semibold ${profit >= 0 ? 'text-emerald-400' : 'text-red-400'}`;
+      } else {
+        profitEl.textContent = '—';
+        profitEl.className = 'bulk-profit-preview text-sm font-semibold text-emerald-400';
+      }
+    });
+  }
+
+  document.getElementById('bulk-apply-unit-price')?.addEventListener('click', () => {
+    const unit = document.getElementById('bulk-sale-unit-price').value;
+    if (!unit) { toast('Enter a sale price per phone first', 'error'); return; }
+    document.querySelectorAll('.bulk-sale-price').forEach(el => { el.value = unit; });
+    updateBulkSoldProfits();
+  });
 
   document.getElementById('btn-bulk-sold')?.addEventListener('click', openBulkSoldModal);
   document.getElementById('bulk-sold-cancel')?.addEventListener('click', () => closeModal('bulk-sold-overlay', 'bulk-sold-modal'));
@@ -1013,7 +1240,10 @@
       const res = await apiFetch('/api/phones/bulk-sold', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ items }),
+        body: JSON.stringify({
+          sale_price_per_unit: document.getElementById('bulk-sale-unit-price').value || null,
+          items,
+        }),
       });
       closeModal('bulk-sold-overlay', 'bulk-sold-modal');
       selectedIds.clear();
@@ -1027,8 +1257,9 @@
 
   loadPartners();
   loadPaymentBanks();
+  loadInventoryAccounts();
   loadPhones();
-  document.getElementById('f-purchase-date').value = new Date().toISOString().slice(0, 10);
+  document.getElementById('f-purchase-date').value = localDatetimeValue();
 
   let invQr = null;
   document.getElementById('btn-scan-imei-inv')?.addEventListener('click', async () => {

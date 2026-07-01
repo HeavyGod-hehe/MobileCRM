@@ -211,6 +211,7 @@ def init_db():
         _migrate_cursor_panga(conn)
         _migrate_payment_methods(conn)
         _migrate_account_entry_payments(conn)
+        _migrate_more_fixes(conn)
 
         for key, value in DEFAULT_SETTINGS.items():
             conn.execute(
@@ -450,6 +451,59 @@ def _migrate_account_entry_payments(conn):
         conn.execute(
             "ALTER TABLE account_entries ADD COLUMN bank_account_id INTEGER REFERENCES bank_accounts(id)"
         )
+
+
+def _migrate_more_fixes(conn):
+    """imei2, supplier account link, phone expense accounts, return refunds."""
+    if not _column_exists(conn, "phones", "imei2"):
+        conn.execute("ALTER TABLE phones ADD COLUMN imei2 TEXT NOT NULL DEFAULT ''")
+    if not _column_exists(conn, "phones", "supplier_account_id"):
+        conn.execute(
+            "ALTER TABLE phones ADD COLUMN supplier_account_id INTEGER REFERENCES accounts(id)"
+        )
+    for col, sql in (
+        ("account_id", "ALTER TABLE phone_expenses ADD COLUMN account_id INTEGER REFERENCES accounts(id)"),
+        ("expense_date", "ALTER TABLE phone_expenses ADD COLUMN expense_date TEXT NOT NULL DEFAULT ''"),
+        (
+            "cash_book_entry_id",
+            "ALTER TABLE phone_expenses ADD COLUMN cash_book_entry_id INTEGER REFERENCES cash_book_entries(id)",
+        ),
+    ):
+        if not _column_exists(conn, "phone_expenses", col):
+            conn.execute(sql)
+    if not _column_exists(conn, "return_logs", "refund_amount"):
+        conn.execute(
+            "ALTER TABLE return_logs ADD COLUMN refund_amount REAL NOT NULL DEFAULT 0"
+        )
+    if not _column_exists(conn, "return_logs", "account_id"):
+        conn.execute(
+            "ALTER TABLE return_logs ADD COLUMN account_id INTEGER REFERENCES accounts(id)"
+        )
+
+
+def _local_datetime(conn) -> str:
+    return conn.execute("SELECT datetime('now', 'localtime')").fetchone()[0]
+
+
+def _local_date(conn) -> str:
+    return conn.execute("SELECT date('now', 'localtime')").fetchone()[0]
+
+
+def _normalize_datetime(value, conn, *, date_only=False) -> str:
+    if not value:
+        return _local_date(conn) if date_only else _local_datetime(conn)
+    text = str(value).strip().replace("T", " ")
+    if date_only:
+        return text[:10]
+    if len(text) == 10:
+        return f"{text} {_local_datetime(conn)[11:19]}"
+    if len(text) == 16:
+        return f"{text}:00"
+    return text[:19]
+
+
+def _sold_profit(conn, row) -> float:
+    return phone_to_dict(conn, row)["net_profit"] or 0.0
 
 
 def _migrate_cursor_panga(conn):
@@ -1074,9 +1128,7 @@ def reinvest_profit(conn, user_id, data):
         """,
         (user_id,),
     ).fetchall()
-    total_net_profit = sum(
-        (r["sale_price"] or 0) - (r["purchase_price"] or 0) for r in sold
-    )
+    total_net_profit = sum(_sold_profit(conn, r) for r in sold)
     settings = get_user_settings(conn, user_id)
     reinvested = float(settings.get("profit_reinvested_total") or 0)
     available = round(total_net_profit - reinvested, 2)
@@ -1187,12 +1239,13 @@ def _build_phone_insert_values(conn, data, status=None):
         buyer_contact,
         sale_price,
         receivable,
-        conn.execute("SELECT datetime('now')").fetchone()[0] if status == "Sold" else None,
+        _normalize_datetime(data.get("sold_at"), conn) if status == "Sold" else None,
         data.get("imei", ""),
+        data.get("imei2", ""),
         data.get("box_status", ""),
         data.get("battery_health", ""),
         data.get("variant", ""),
-        data.get("purchase_date") or conn.execute("SELECT date('now')").fetchone()[0],
+        _normalize_datetime(data.get("purchase_date"), conn, date_only=True),
     )
 
 
@@ -1201,8 +1254,17 @@ def _save_phone_extras(conn, phone_id, data):
     for exp in expenses:
         if float(exp.get("amount") or 0) > 0:
             conn.execute(
-                "INSERT INTO phone_expenses (phone_id, amount, description) VALUES (?, ?, ?)",
-                (phone_id, float(exp["amount"]), exp.get("description", "")),
+                """
+                INSERT INTO phone_expenses (phone_id, amount, description, expense_date, account_id)
+                VALUES (?, ?, ?, ?, ?)
+                """,
+                (
+                    phone_id,
+                    float(exp["amount"]),
+                    exp.get("description", ""),
+                    exp.get("expense_date") or "",
+                    int(exp["account_id"]) if exp.get("account_id") else None,
+                ),
             )
 
     investments = data.get("investments") or []
@@ -1258,7 +1320,7 @@ def _post_purchase_payment(conn, user_id, phone_id, data):
     method = data.get("purchase_payment_method") or "cash"
     bank_id = data.get("purchase_bank_id")
     model = data.get("model", "Phone")
-    entry_date = data.get("purchase_date") or conn.execute("SELECT date('now')").fetchone()[0]
+    entry_date = _normalize_datetime(data.get("purchase_date"), conn, date_only=True)
     _post_payment_transaction(
         conn, user_id, method, bank_id, "out", paid_now,
         f"Purchase: {model} (#{phone_id})", entry_date,
@@ -1274,7 +1336,7 @@ def _post_sale_payment(conn, user_id, phone_id, data):
     method = data.get("sale_payment_method") or "cash"
     bank_id = data.get("sale_bank_id")
     model = data.get("model", "Phone")
-    entry_date = conn.execute("SELECT date('now')").fetchone()[0]
+    entry_date = _normalize_datetime(data.get("sold_at"), conn, date_only=True)
     _post_payment_transaction(
         conn, user_id, method, bank_id, "in", received_now,
         f"Sale: {model} (#{phone_id})", entry_date,
@@ -1308,6 +1370,13 @@ def create_phone(conn, user_id, data):
     purchase_bank = data.get("purchase_bank_id")
     sale_pm = data.get("sale_payment_method") or "cash"
     sale_bank = data.get("sale_bank_id")
+    supplier_account_id = data.get("supplier_account_id")
+    if supplier_account_id not in (None, "", 0):
+        supplier_account_id = int(supplier_account_id)
+        if not get_account(conn, user_id, supplier_account_id):
+            raise ValueError("Supplier account not found")
+    else:
+        supplier_account_id = None
     cursor = conn.execute(
         """
         INSERT INTO phones (
@@ -1315,10 +1384,10 @@ def create_phone(conn, user_id, data):
             supplier_name, supplier_contact, status,
             payable_amount, advance_received,
             buyer_name, buyer_contact, sale_price, receivable_amount,
-            sold_at, imei, box_status, battery_health, variant, purchase_date,
+            sold_at, imei, imei2, box_status, battery_health, variant, purchase_date,
             purchase_payment_method, purchase_bank_id, sale_payment_method, sale_bank_id,
-            user_id
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            supplier_account_id, user_id
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """,
         (
             *values,
@@ -1326,6 +1395,7 @@ def create_phone(conn, user_id, data):
             int(purchase_bank) if purchase_bank else None,
             sale_pm,
             int(sale_bank) if sale_bank else None,
+            supplier_account_id,
             user_id,
         ),
     )
@@ -1342,12 +1412,21 @@ def create_phone(conn, user_id, data):
 def create_phones_bulk(conn, user_id, data):
     quantity = int(data.get("quantity") or 1)
     imeis = data.get("imeis") or []
+    imei2s = data.get("imei2s") or []
+    unit_price = float(data.get("purchase_price") or 0)
     created = []
     for i in range(quantity):
         phone_data = dict(data)
-        phone_data["imei"] = imeis[i] if i < len(imeis) else ""
+        phone_data["purchase_price"] = unit_price
+        if i < len(imeis) and isinstance(imeis[i], dict):
+            phone_data["imei"] = imeis[i].get("imei", "")
+            phone_data["imei2"] = imeis[i].get("imei2", "")
+        else:
+            phone_data["imei"] = imeis[i] if i < len(imeis) else ""
+            phone_data["imei2"] = imei2s[i] if i < len(imei2s) else ""
         phone_data.pop("quantity", None)
         phone_data.pop("imeis", None)
+        phone_data.pop("imei2s", None)
         if quantity > 1 and i > 0:
             phone_data["expenses"] = []
             phone_data["investments"] = []
@@ -1382,25 +1461,31 @@ def update_phone(conn, user_id, phone_id, data):
         "supplier_name", "supplier_contact", "status",
         "payable_amount", "advance_received",
         "buyer_name", "buyer_contact", "sale_price", "receivable_amount",
-        "imei", "box_status", "battery_health", "variant", "purchase_date",
+        "imei", "imei2", "box_status", "battery_health", "variant", "purchase_date",
         "purchase_payment_method", "purchase_bank_id", "sale_payment_method", "sale_bank_id",
+        "supplier_account_id", "sold_at",
     ]
     numeric_fields = {
         "purchase_price", "payable_amount", "advance_received",
         "sale_price", "receivable_amount",
     }
+    int_nullable_fields = {"purchase_bank_id", "sale_bank_id", "supplier_account_id"}
     for field in simple_fields:
         if field in data:
             fields.append(f"{field} = ?")
             val = data[field]
-            if field in ("purchase_bank_id", "sale_bank_id"):
+            if field in int_nullable_fields:
                 val = int(val) if val not in (None, "", 0) else None
             elif field in numeric_fields:
                 val = float(val) if val not in (None, "") else 0
+            elif field in ("purchase_date", "sold_at") and val:
+                val = _normalize_datetime(val, conn, date_only=(field == "purchase_date"))
             values.append(val)
 
     if new_status == "Sold" and existing["status"] != "Sold":
-        fields.append("sold_at = datetime('now')")
+        if "sold_at" not in data:
+            fields.append("sold_at = ?")
+            values.append(_local_datetime(conn))
     elif new_status != "Sold":
         fields.append("sold_at = NULL")
 
@@ -1442,13 +1527,14 @@ def bulk_delete_phones(conn, user_id, phone_ids):
     return {"deleted": deleted}
 
 
-def bulk_mark_sold(conn, user_id, items):
-    """Mark multiple phones sold with sale price only (defaults: cash, no udhar)."""
+def bulk_mark_sold(conn, user_id, items, default_sale_price=None):
+    """Mark multiple phones sold; each item can have its own sale_price."""
     updated = []
     errors = []
+    default_price = float(default_sale_price or 0)
     for item in items:
         phone_id = int(item["phone_id"])
-        sale_price = float(item.get("sale_price") or 0)
+        sale_price = float(item.get("sale_price") or default_price or 0)
         if sale_price <= 0:
             errors.append(f"Phone #{phone_id}: sale price required")
             continue
@@ -1465,11 +1551,12 @@ def bulk_mark_sold(conn, user_id, items):
         data = {
             "status": "Sold",
             "sale_price": sale_price,
-            "receivable_amount": 0,
-            "buyer_name": "",
-            "buyer_contact": "",
-            "sale_payment_method": "cash",
-            "sale_bank_id": None,
+            "receivable_amount": float(item.get("receivable_amount") or 0),
+            "buyer_name": item.get("buyer_name") or "",
+            "buyer_contact": item.get("buyer_contact") or "",
+            "sale_payment_method": item.get("sale_payment_method") or "cash",
+            "sale_bank_id": item.get("sale_bank_id"),
+            "sold_at": item.get("sold_at"),
         }
         phone = update_phone(conn, user_id, phone_id, data)
         if phone:
@@ -1480,20 +1567,126 @@ def bulk_mark_sold(conn, user_id, items):
 
 
 def add_phone_expense(conn, user_id, phone_id, data):
-    if not get_phone(conn, user_id, phone_id):
+    phone = get_phone(conn, user_id, phone_id)
+    if not phone:
         return None
+    amount = float(data["amount"])
+    description = data.get("description", "")
+    expense_date = _normalize_datetime(data.get("expense_date"), conn, date_only=True)
+    account_id = data.get("account_id")
+    if account_id not in (None, "", 0):
+        account_id = int(account_id)
+        if not get_account(conn, user_id, account_id):
+            raise ValueError("Account not found")
+    else:
+        account_id = None
+
     cursor = conn.execute(
-        "INSERT INTO phone_expenses (phone_id, amount, description) VALUES (?, ?, ?)",
-        (phone_id, float(data["amount"]), data.get("description", "")),
+        """
+        INSERT INTO phone_expenses (phone_id, amount, description, expense_date, account_id)
+        VALUES (?, ?, ?, ?, ?)
+        """,
+        (phone_id, amount, description, expense_date, account_id),
     )
+    expense_id = cursor.lastrowid
+    cash_book_entry_id = None
+    if amount > 0:
+        cb = create_cash_book_entry(conn, user_id, {
+            "entry_type": "out",
+            "amount": amount,
+            "note": description or f"Phone expense: {phone['model']} (#{phone_id})",
+            "entry_date": expense_date,
+            "account_id": account_id,
+            "payment_source": data.get("payment_source") or "cash",
+            "bank_account_id": data.get("bank_account_id"),
+        })
+        cash_book_entry_id = cb["id"]
+        conn.execute(
+            "UPDATE phone_expenses SET cash_book_entry_id = ? WHERE id = ?",
+            (cash_book_entry_id, expense_id),
+        )
     row = conn.execute(
-        "SELECT * FROM phone_expenses WHERE id = ?", (cursor.lastrowid,)
+        "SELECT * FROM phone_expenses WHERE id = ?", (expense_id,)
     ).fetchone()
     return dict(row)
 
 
-def delete_phone_expense(conn, expense_id):
+def update_phone_expense(conn, user_id, phone_id, expense_id, data):
+    phone = get_phone(conn, user_id, phone_id)
+    if not phone:
+        return None
+    row = conn.execute(
+        "SELECT * FROM phone_expenses WHERE id = ? AND phone_id = ?",
+        (expense_id, phone_id),
+    ).fetchone()
+    if not row:
+        return None
+
+    amount = float(data.get("amount", row["amount"]))
+    description = data.get("description", row["description"])
+    expense_date = _normalize_datetime(
+        data.get("expense_date") or row["expense_date"] or row["created_at"],
+        conn,
+        date_only=True,
+    )
+    account_id = data.get("account_id", row["account_id"])
+    if account_id in (None, "", 0):
+        account_id = None
+    else:
+        account_id = int(account_id)
+        if not get_account(conn, user_id, account_id):
+            raise ValueError("Account not found")
+
+    conn.execute(
+        """
+        UPDATE phone_expenses
+        SET amount = ?, description = ?, expense_date = ?, account_id = ?
+        WHERE id = ? AND phone_id = ?
+        """,
+        (amount, description, expense_date, account_id, expense_id, phone_id),
+    )
+
+    old_cb_id = row["cash_book_entry_id"]
+    if old_cb_id:
+        conn.execute("DELETE FROM cash_book_entries WHERE id = ?", (old_cb_id,))
+
+    cash_book_entry_id = None
+    if amount > 0:
+        cb = create_cash_book_entry(conn, user_id, {
+            "entry_type": "out",
+            "amount": amount,
+            "note": description or f"Phone expense: {phone['model']} (#{phone_id})",
+            "entry_date": expense_date,
+            "account_id": account_id,
+            "payment_source": data.get("payment_source") or "cash",
+            "bank_account_id": data.get("bank_account_id"),
+        })
+        cash_book_entry_id = cb["id"]
+        conn.execute(
+            "UPDATE phone_expenses SET cash_book_entry_id = ? WHERE id = ?",
+            (cash_book_entry_id, expense_id),
+        )
+
+    updated = conn.execute(
+        "SELECT * FROM phone_expenses WHERE id = ?", (expense_id,)
+    ).fetchone()
+    return dict(updated)
+
+
+def delete_phone_expense(conn, user_id, phone_id, expense_id):
+    row = conn.execute(
+        "SELECT * FROM phone_expenses WHERE id = ? AND phone_id = ?",
+        (expense_id, phone_id),
+    ).fetchone()
+    if not row:
+        return False
+    if row["cash_book_entry_id"]:
+        conn.execute(
+            "DELETE FROM cash_book_entries WHERE id = ?",
+            (row["cash_book_entry_id"],),
+        )
     conn.execute("DELETE FROM phone_expenses WHERE id = ?", (expense_id,))
+    return True
 
 
 def find_phone_by_imei(conn, user_id, imei):
@@ -1501,8 +1694,12 @@ def find_phone_by_imei(conn, user_id, imei):
     if not imei:
         return None
     row = conn.execute(
-        "SELECT * FROM phones WHERE user_id = ? AND imei = ? COLLATE NOCASE",
-        (user_id, imei),
+        """
+        SELECT * FROM phones
+        WHERE user_id = ?
+          AND (imei = ? COLLATE NOCASE OR imei2 = ? COLLATE NOCASE)
+        """,
+        (user_id, imei, imei),
     ).fetchone()
     return phone_to_dict(conn, row) if row else None
 
@@ -1578,9 +1775,24 @@ def process_purchase_return(conn, user_id, data):
         phone = find_phone_by_imei(conn, user_id, imei)
 
     if not phone:
-        raise ValueError("Phone not found — enter a valid IMEI from current inventory")
+        raise ValueError("Phone not found — select a phone from bought inventory")
     if phone["status"] not in INVENTORY_STATUSES:
         raise ValueError("Only Bought or In Repair items can be returned to supplier")
+
+    refund = float(
+        data.get("refund_amount")
+        if data.get("refund_amount") not in (None, "")
+        else phone.get("total_costing") or phone["purchase_price"]
+    )
+    account_id = data.get("account_id") or phone.get("supplier_account_id")
+    if account_id in (None, "", 0):
+        account_id = None
+    else:
+        account_id = int(account_id)
+        if not get_account(conn, user_id, account_id):
+            raise ValueError("Account not found")
+
+    return_date = _normalize_datetime(data.get("return_date"), conn, date_only=True)
 
     conn.execute(
         """
@@ -1589,10 +1801,31 @@ def process_purchase_return(conn, user_id, data):
         """,
         (phone["id"], user_id),
     )
+
+    if refund > 0:
+        create_cash_book_entry(conn, user_id, {
+            "entry_type": "in",
+            "amount": refund,
+            "note": note or f"Purchase return refund: {phone['model']} (#{phone['id']})",
+            "entry_date": return_date,
+            "account_id": account_id,
+            "payment_source": data.get("payment_source") or "cash",
+            "bank_account_id": data.get("bank_account_id"),
+        })
+        if account_id:
+            create_entry(conn, account_id, {
+                "entry_type": "credit",
+                "amount": refund,
+                "note": note or f"Purchase return: {phone['model']}",
+            }, user_id=user_id)
+
     cursor = conn.execute(
         """
-        INSERT INTO return_logs (user_id, return_type, phone_id, imei, model, party_name, note)
-        VALUES (?, 'purchase', ?, ?, ?, ?, ?)
+        INSERT INTO return_logs (
+            user_id, return_type, phone_id, imei, model, party_name, note,
+            refund_amount, account_id, created_at
+        )
+        VALUES (?, 'purchase', ?, ?, ?, ?, ?, ?, ?, ?)
         """,
         (
             user_id,
@@ -1601,6 +1834,9 @@ def process_purchase_return(conn, user_id, data):
             phone["model"],
             phone.get("supplier_name") or "",
             note,
+            refund,
+            account_id,
+            _normalize_datetime(data.get("return_date"), conn),
         ),
     )
     log = conn.execute(
@@ -1617,14 +1853,29 @@ def process_sale_return(conn, user_id, data):
 
     phone = None
     if phone_id:
-        phone = get_phone(conn, user_id, phone_id)
+        phone = get_phone(conn, user_id, phone_id, include_details=True)
     elif imei:
         phone = find_phone_by_imei(conn, user_id, imei)
 
     if not phone:
-        raise ValueError("Phone not found — enter a valid IMEI from sold inventory")
+        raise ValueError("Phone not found — select a sold phone from the list")
     if phone["status"] != "Sold":
         raise ValueError("Only sold items can be processed as sale returns")
+
+    refund = float(
+        data.get("refund_amount")
+        if data.get("refund_amount") not in (None, "")
+        else phone.get("sale_price") or 0
+    )
+    account_id = data.get("account_id")
+    if account_id in (None, "", 0):
+        account_id = None
+    else:
+        account_id = int(account_id)
+        if not get_account(conn, user_id, account_id):
+            raise ValueError("Account not found")
+
+    return_date = _normalize_datetime(data.get("return_date"), conn, date_only=True)
 
     conn.execute(
         """
@@ -1639,10 +1890,31 @@ def process_sale_return(conn, user_id, data):
         """,
         (phone["id"], user_id),
     )
+
+    if refund > 0:
+        create_cash_book_entry(conn, user_id, {
+            "entry_type": "out",
+            "amount": refund,
+            "note": note or f"Sale return refund: {phone['model']} (#{phone['id']})",
+            "entry_date": return_date,
+            "account_id": account_id,
+            "payment_source": data.get("payment_source") or "cash",
+            "bank_account_id": data.get("bank_account_id"),
+        })
+        if account_id:
+            create_entry(conn, account_id, {
+                "entry_type": "debit",
+                "amount": refund,
+                "note": note or f"Sale return: {phone['model']}",
+            }, user_id=user_id)
+
     cursor = conn.execute(
         """
-        INSERT INTO return_logs (user_id, return_type, phone_id, imei, model, party_name, note)
-        VALUES (?, 'sale', ?, ?, ?, ?, ?)
+        INSERT INTO return_logs (
+            user_id, return_type, phone_id, imei, model, party_name, note,
+            refund_amount, account_id, created_at
+        )
+        VALUES (?, 'sale', ?, ?, ?, ?, ?, ?, ?, ?)
         """,
         (
             user_id,
@@ -1651,6 +1923,9 @@ def process_sale_return(conn, user_id, data):
             phone["model"],
             party_name or phone.get("buyer_name") or "",
             note,
+            refund,
+            account_id,
+            _normalize_datetime(data.get("return_date"), conn),
         ),
     )
     log = conn.execute(
@@ -2049,7 +2324,7 @@ def compute_dashboard(conn, user_id):
 
     sold = conn.execute(
         """
-        SELECT purchase_price, sale_price, receivable_amount FROM phones
+        SELECT * FROM phones
         WHERE status = 'Sold' AND user_id = ?
         """,
         (user_id,),
@@ -2066,9 +2341,7 @@ def compute_dashboard(conn, user_id):
         (user_id,),
     ).fetchall()
 
-    total_net_profit = sum(
-        (r["sale_price"] or 0) - (r["purchase_price"] or 0) for r in sold
-    )
+    total_net_profit = sum(_sold_profit(conn, r) for r in sold)
     phone_receivables = sum(r["receivable_amount"] or 0 for r in sold)
     acct_summary = accounts_summary(conn, user_id)
     total_udhar = round(phone_receivables + acct_summary["total_receivable"], 2)
@@ -2134,18 +2407,17 @@ def compute_dashboard(conn, user_id):
 def compute_monthly_metrics(conn, user_id):
     rows = conn.execute(
         """
-        SELECT model, purchase_price, sale_price
-        FROM phones
+        SELECT * FROM phones
         WHERE status = 'Sold'
           AND sold_at IS NOT NULL
           AND user_id = ?
-          AND strftime('%Y-%m', sold_at) = strftime('%Y-%m', 'now')
+          AND strftime('%Y-%m', sold_at) = strftime('%Y-%m', 'now', 'localtime')
         """,
         (user_id,),
     ).fetchall()
 
     units_sold = len(rows)
-    total_profit = sum((r["sale_price"] or 0) - (r["purchase_price"] or 0) for r in rows)
+    total_profit = sum(_sold_profit(conn, r) for r in rows)
     total_cogs = sum(r["purchase_price"] or 0 for r in rows)
     margin = (total_profit / total_cogs * 100) if total_cogs > 0 else 0
 
@@ -2553,19 +2825,21 @@ def export_all_data(conn, user_id):
 def compute_today_summary(conn, user_id):
     sold = conn.execute(
         """
-        SELECT id, model, sale_price, purchase_price, buyer_name, imei, sold_at
-        FROM phones
-        WHERE user_id = ? AND status = 'Sold' AND date(sold_at) = date('now')
+        SELECT * FROM phones
+        WHERE user_id = ? AND status = 'Sold'
+          AND date(sold_at) = date('now', 'localtime')
         ORDER BY sold_at DESC
         """,
         (user_id,),
     ).fetchall()
     bought = conn.execute(
         """
-        SELECT id, model, purchase_price, supplier_name, imei, purchase_date, created_at
-        FROM phones
+        SELECT * FROM phones
         WHERE user_id = ? AND status IN ('Bought', 'In Repair')
-          AND (date(purchase_date) = date('now') OR date(created_at) = date('now'))
+          AND (
+            date(purchase_date) = date('now', 'localtime')
+            OR date(created_at) = date('now', 'localtime')
+          )
         ORDER BY created_at DESC
         """,
         (user_id,),
@@ -2576,15 +2850,17 @@ def compute_today_summary(conn, user_id):
             COALESCE(SUM(CASE WHEN entry_type = 'in' THEN amount ELSE 0 END), 0) AS cash_in,
             COALESCE(SUM(CASE WHEN entry_type = 'out' THEN amount ELSE 0 END), 0) AS cash_out
         FROM cash_book_entries
-        WHERE user_id = ? AND entry_date = date('now')
+        WHERE user_id = ? AND entry_date = date('now', 'localtime')
         """,
         (user_id,),
     ).fetchone()
     revenue = sum((r["sale_price"] or 0) for r in sold)
-    profit = sum((r["sale_price"] or 0) - (r["purchase_price"] or 0) for r in sold)
+    profit = sum(_sold_profit(conn, r) for r in sold)
+    sold_phones = [phone_to_dict(conn, r) for r in sold]
+    bought_phones = [phone_to_dict(conn, r) for r in bought]
     return {
         "date_label": conn.execute(
-            "SELECT strftime('%A, %d %B %Y', 'now') AS label"
+            "SELECT strftime('%A, %d %B %Y', 'now', 'localtime') AS label"
         ).fetchone()["label"],
         "phones_sold": len(sold),
         "phones_bought": len(bought),
@@ -2593,8 +2869,8 @@ def compute_today_summary(conn, user_id):
         "purchase_spend": round(sum((r["purchase_price"] or 0) for r in bought), 2),
         "cash_in": round(cash["cash_in"] or 0, 2),
         "cash_out": round(cash["cash_out"] or 0, 2),
-        "sold_phones": [dict(r) for r in sold],
-        "bought_phones": [dict(r) for r in bought],
+        "sold_phones": sold_phones,
+        "bought_phones": bought_phones,
     }
 
 
@@ -2608,8 +2884,7 @@ def compute_month_report(conn, user_id, year_month=None):
 
     sold = conn.execute(
         """
-        SELECT model, purchase_price, sale_price, buyer_name, imei, sold_at
-        FROM phones
+        SELECT * FROM phones
         WHERE user_id = ? AND status = 'Sold' AND sold_at IS NOT NULL
           AND strftime('%Y-%m', sold_at) = ?
         ORDER BY sold_at DESC
@@ -2620,7 +2895,7 @@ def compute_month_report(conn, user_id, year_month=None):
     acct = accounts_summary(conn, user_id)
     dash = compute_dashboard(conn, user_id)
     revenue = sum((r["sale_price"] or 0) for r in sold)
-    profit = sum((r["sale_price"] or 0) - (r["purchase_price"] or 0) for r in sold)
+    profit = sum(_sold_profit(conn, r) for r in sold)
     month_label = conn.execute(
         "SELECT strftime('%B %Y', ? || '-01') AS label",
         (year_month,),
@@ -2635,7 +2910,7 @@ def compute_month_report(conn, user_id, year_month=None):
         "total_udhar": dash["total_udhar"],
         "total_receivable": acct["total_receivable"],
         "total_payable": acct["total_payable"],
-        "sales": [dict(r) for r in sold],
+        "sales": [phone_to_dict(conn, r) for r in sold],
         "shop": get_shop_info(conn, user_id),
     }
 

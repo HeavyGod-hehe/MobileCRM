@@ -98,7 +98,7 @@
     } else {
       empty.classList.add('hidden');
       tbody.innerHTML = sales.map(s => {
-        const profit = (s.sale_price || 0) - (s.purchase_price || 0);
+        const profit = s.net_profit != null ? s.net_profit : ((s.sale_price || 0) - (s.total_costing ?? s.purchase_price ?? 0));
         const d = s.sold_at ? new Date(s.sold_at).toLocaleDateString('en-PK') : '—';
         return `<tr>
           <td>${esc(d)}</td>
