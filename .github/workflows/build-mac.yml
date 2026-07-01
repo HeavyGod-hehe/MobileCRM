@@ -64,8 +64,7 @@ jobs:
       - name: Verify extension architectures
         run: |
           MARKUPSAFE_SO="$(arch -x86_64 python -c "import markupsafe, pathlib; print(next(pathlib.Path(markupsafe.__file__).parent.glob('_speedups*.so')))")"
-          file "$MARKUPSAFE_SO"
-          echo "$MARKUPSAFE_SO" | grep -q x86_64
+          file "$MARKUPSAFE_SO" | grep -q x86_64
 
       - name: Build Customer Copy Intel Mac
         run: arch -x86_64 python Source/build_customer_mac.py --arch x86_64
