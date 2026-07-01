@@ -750,16 +750,16 @@ def _create_cash_book_synced(
 def _create_account_entry_synced(
     conn, user_id, account_id, entry_type, amount, note, *,
     source_type=None, source_id=None, payment_source="", bank_account_id=None,
-    mirror_cash_book=False,
+    mirror_cash_book=False, cash_book_entry_type="in",
 ):
-    """Create account entry; optionally mirror to cash book (Wasool) with full linking."""
+    """Create account entry; optionally mirror to cash book with full linking."""
     account_entry_id = _insert_account_entry(conn, account_id, entry_type, amount, note)
     cash_book_entry_id = None
     bank_tx_id = None
 
-    if mirror_cash_book and entry_type == "debit" and payment_source == "cash":
+    if mirror_cash_book and payment_source == "cash":
         cb = _create_cash_book_synced(conn, user_id, {
-            "entry_type": "in",
+            "entry_type": cash_book_entry_type,
             "amount": amount,
             "note": note,
             "payment_source": "cash",
@@ -767,16 +767,16 @@ def _create_account_entry_synced(
         }, link_account=False)
         cash_book_entry_id = cb["cash_book_entry_id"]
         conn.execute(
-            "UPDATE account_entries SET linked_cash_book_entry_id = ? WHERE id = ?",
+            "UPDATE account_entries SET payment_source = 'cash', linked_cash_book_entry_id = ? WHERE id = ?",
             (cash_book_entry_id, account_entry_id),
         )
         _record_ledger_link(
-            conn, user_id, "account_wasool", account_entry_id,
+            conn, user_id, "account_payment", account_entry_id,
             cash_book_entry_id=cash_book_entry_id,
         )
-    elif mirror_cash_book and entry_type == "debit" and payment_source == "bank" and bank_account_id:
+    elif mirror_cash_book and payment_source == "bank" and bank_account_id:
         cb = _create_cash_book_synced(conn, user_id, {
-            "entry_type": "in",
+            "entry_type": cash_book_entry_type,
             "amount": amount,
             "note": note,
             "payment_source": "bank",
@@ -787,6 +787,10 @@ def _create_account_entry_synced(
         conn.execute(
             "UPDATE account_entries SET payment_source = 'bank', bank_account_id = ?, linked_cash_book_entry_id = ? WHERE id = ?",
             (bank_account_id, cash_book_entry_id, account_entry_id),
+        )
+        _record_ledger_link(
+            conn, user_id, "account_payment", account_entry_id,
+            cash_book_entry_id=cash_book_entry_id,
         )
 
     if source_type and source_id is not None:
@@ -2914,9 +2918,21 @@ def _account_balance(conn, account_id):
     return round(row["balance"] or 0, 2)
 
 
+def is_expense_category_account(conn, account_id):
+    row = conn.execute(
+        "SELECT name, contact FROM accounts WHERE id = ?", (account_id,)
+    ).fetchone()
+    if not row:
+        return False
+    if (row["contact"] or "").strip().lower() == "expense category":
+        return True
+    return row["name"] in EXPENSE_CATEGORY_NAMES
+
+
 def account_to_dict(conn, row):
     d = dict(row)
     d["balance"] = _account_balance(conn, d["id"])
+    d["is_expense_category"] = is_expense_category_account(conn, d["id"])
     return d
 
 
@@ -3033,12 +3049,18 @@ def create_entry(conn, account_id, data, user_id=None):
     payment_source = (data.get("payment_source") or "").strip().lower()
     bank_account_id = data.get("bank_account_id")
 
+    is_expense = user_id and is_expense_category_account(conn, account_id)
+    needs_payment = (
+        (entry_type == "debit" and not is_expense)
+        or (entry_type == "credit" and is_expense)
+    )
+
     if payment_source and payment_source not in ("cash", "bank"):
         raise ValueError("Payment source must be cash or bank")
-    if entry_type == "credit" and payment_source:
-        raise ValueError("Payment method applies only to Wasool (Payment) entries")
-    if user_id and entry_type == "debit" and not payment_source:
-        raise ValueError("Payment method is required for Wasool entries")
+    if not needs_payment and payment_source:
+        raise ValueError("Payment method applies only to Debit (people) or Credit (expense categories)")
+    if user_id and needs_payment and not payment_source:
+        raise ValueError("Select payment method — Cash or Bank")
     if payment_source == "bank":
         if not bank_account_id:
             raise ValueError("Select a bank account")
@@ -3046,12 +3068,14 @@ def create_entry(conn, account_id, data, user_id=None):
         if user_id and not get_bank(conn, user_id, bank_account_id):
             raise ValueError("Bank account not found")
 
-    if user_id and entry_type == "debit" and payment_source in ("cash", "bank"):
+    if user_id and needs_payment and payment_source in ("cash", "bank"):
+        cash_direction = "out" if is_expense else "in"
         return _create_account_entry_synced(
             conn, user_id, account_id, entry_type, amount, note,
             payment_source=payment_source,
             bank_account_id=bank_account_id,
             mirror_cash_book=True,
+            cash_book_entry_type=cash_direction,
         )
 
     account_entry_id = _insert_account_entry(
