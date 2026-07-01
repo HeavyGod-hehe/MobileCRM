@@ -9,6 +9,7 @@ on:
     branches: [Version007, main]
     paths:
       - 'Source/VERSION'
+      - '.github/workflows/release.yml'
 
 permissions:
   contents: write
