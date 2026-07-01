@@ -503,7 +503,7 @@
   };
 
   window.deleteEntry = async (id) => {
-    if (!confirm('Delete this entry?')) return;
+    if (!confirm('Delete this entry? Linked cash book entry will also be removed.')) return;
     await apiFetch(`/api/accounts/${selectedId}/entries/${id}`, { method: 'DELETE' });
     toast('Entry deleted');
     loadAccounts();

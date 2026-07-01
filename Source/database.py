@@ -212,6 +212,7 @@ def init_db():
         _migrate_payment_methods(conn)
         _migrate_account_entry_payments(conn)
         _migrate_more_fixes(conn)
+        _migrate_ledger_sync(conn)
 
         for key, value in DEFAULT_SETTINGS.items():
             conn.execute(
@@ -479,6 +480,426 @@ def _migrate_more_fixes(conn):
         conn.execute(
             "ALTER TABLE return_logs ADD COLUMN account_id INTEGER REFERENCES accounts(id)"
         )
+
+
+    if not _column_exists(conn, "return_logs", "account_id"):
+        conn.execute(
+            "ALTER TABLE return_logs ADD COLUMN account_id INTEGER REFERENCES accounts(id)"
+        )
+
+
+def _migrate_ledger_sync(conn):
+    """Cross-module ledger links, borrow phones, synced deletes."""
+    conn.executescript(
+        """
+        CREATE TABLE IF NOT EXISTS ledger_links (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+            source_type TEXT NOT NULL,
+            source_id INTEGER NOT NULL,
+            cash_book_entry_id INTEGER REFERENCES cash_book_entries(id),
+            account_entry_id INTEGER REFERENCES account_entries(id),
+            bank_transaction_id INTEGER REFERENCES bank_transactions(id),
+            created_at TEXT NOT NULL DEFAULT (datetime('now'))
+        );
+        CREATE INDEX IF NOT EXISTS idx_ledger_links_source
+            ON ledger_links(user_id, source_type, source_id);
+        """
+    )
+    for col, sql in (
+        ("acquisition_type", "ALTER TABLE phones ADD COLUMN acquisition_type TEXT NOT NULL DEFAULT 'purchase'"),
+        ("buyer_account_id", "ALTER TABLE phones ADD COLUMN buyer_account_id INTEGER REFERENCES accounts(id)"),
+        ("purchase_cash_book_entry_id", "ALTER TABLE phones ADD COLUMN purchase_cash_book_entry_id INTEGER REFERENCES cash_book_entries(id)"),
+        ("sale_cash_book_entry_id", "ALTER TABLE phones ADD COLUMN sale_cash_book_entry_id INTEGER REFERENCES cash_book_entries(id)"),
+        ("purchase_account_entry_id", "ALTER TABLE phones ADD COLUMN purchase_account_entry_id INTEGER REFERENCES account_entries(id)"),
+        ("sale_account_entry_id", "ALTER TABLE phones ADD COLUMN sale_account_entry_id INTEGER REFERENCES account_entries(id)"),
+    ):
+        if not _column_exists(conn, "phones", col):
+            conn.execute(sql)
+    if not _column_exists(conn, "phone_expenses", "account_entry_id"):
+        conn.execute("ALTER TABLE phone_expenses ADD COLUMN account_entry_id INTEGER REFERENCES account_entries(id)")
+    if not _column_exists(conn, "account_entries", "linked_cash_book_entry_id"):
+        conn.execute("ALTER TABLE account_entries ADD COLUMN linked_cash_book_entry_id INTEGER REFERENCES cash_book_entries(id)")
+    if not _column_exists(conn, "cash_book_entries", "linked_bank_transaction_id"):
+        conn.execute("ALTER TABLE cash_book_entries ADD COLUMN linked_bank_transaction_id INTEGER REFERENCES bank_transactions(id)")
+    if not _column_exists(conn, "cash_book_entries", "linked_account_entry_id"):
+        conn.execute("ALTER TABLE cash_book_entries ADD COLUMN linked_account_entry_id INTEGER REFERENCES account_entries(id)")
+    if not _column_exists(conn, "journal_vouchers", "debit_entry_id"):
+        conn.execute("ALTER TABLE journal_vouchers ADD COLUMN debit_entry_id INTEGER REFERENCES account_entries(id)")
+    if not _column_exists(conn, "journal_vouchers", "credit_entry_id"):
+        conn.execute("ALTER TABLE journal_vouchers ADD COLUMN credit_entry_id INTEGER REFERENCES account_entries(id)")
+
+
+def _record_ledger_link(
+    conn, user_id, source_type, source_id, *,
+    cash_book_entry_id=None, account_entry_id=None, bank_transaction_id=None,
+):
+    conn.execute(
+        """
+        INSERT INTO ledger_links (
+            user_id, source_type, source_id,
+            cash_book_entry_id, account_entry_id, bank_transaction_id
+        ) VALUES (?, ?, ?, ?, ?, ?)
+        """,
+        (user_id, source_type, source_id, cash_book_entry_id, account_entry_id, bank_transaction_id),
+    )
+
+
+def _insert_account_entry(conn, account_id, entry_type, amount, note, *, linked_cash_book_entry_id=None):
+    cursor = conn.execute(
+        """
+        INSERT INTO account_entries (
+            account_id, entry_type, amount, note, payment_source, bank_account_id,
+            linked_cash_book_entry_id
+        ) VALUES (?, ?, ?, ?, '', NULL, ?)
+        """,
+        (account_id, entry_type, amount, note, linked_cash_book_entry_id),
+    )
+    return cursor.lastrowid
+
+
+def _delete_account_entry_raw(conn, entry_id):
+    if entry_id:
+        conn.execute(
+            "UPDATE phones SET purchase_account_entry_id = NULL WHERE purchase_account_entry_id = ?",
+            (entry_id,),
+        )
+        conn.execute(
+            "UPDATE phones SET sale_account_entry_id = NULL WHERE sale_account_entry_id = ?",
+            (entry_id,),
+        )
+        conn.execute(
+            "UPDATE phone_expenses SET account_entry_id = NULL WHERE account_entry_id = ?",
+            (entry_id,),
+        )
+        conn.execute(
+            "UPDATE cash_book_entries SET linked_account_entry_id = NULL WHERE linked_account_entry_id = ?",
+            (entry_id,),
+        )
+        conn.execute(
+            "UPDATE journal_vouchers SET debit_entry_id = NULL WHERE debit_entry_id = ?",
+            (entry_id,),
+        )
+        conn.execute(
+            "UPDATE journal_vouchers SET credit_entry_id = NULL WHERE credit_entry_id = ?",
+            (entry_id,),
+        )
+        conn.execute("DELETE FROM account_entries WHERE id = ?", (entry_id,))
+
+
+def _delete_cash_book_raw(conn, user_id, entry_id):
+    if entry_id:
+        conn.execute(
+            "UPDATE phones SET purchase_cash_book_entry_id = NULL WHERE purchase_cash_book_entry_id = ?",
+            (entry_id,),
+        )
+        conn.execute(
+            "UPDATE phones SET sale_cash_book_entry_id = NULL WHERE sale_cash_book_entry_id = ?",
+            (entry_id,),
+        )
+        conn.execute(
+            "UPDATE phone_expenses SET cash_book_entry_id = NULL WHERE cash_book_entry_id = ?",
+            (entry_id,),
+        )
+        conn.execute(
+            "UPDATE account_entries SET linked_cash_book_entry_id = NULL WHERE linked_cash_book_entry_id = ?",
+            (entry_id,),
+        )
+        conn.execute(
+            "DELETE FROM cash_book_entries WHERE id = ? AND user_id = ?",
+            (entry_id, user_id),
+        )
+
+
+def _delete_bank_tx_raw(conn, tx_id):
+    if tx_id:
+        conn.execute("DELETE FROM bank_transactions WHERE id = ?", (tx_id,))
+
+
+def _reverse_ledger_for_source(conn, user_id, source_type, source_id):
+    """Remove all cash book, account, and bank rows linked to a source record."""
+    links = conn.execute(
+        """
+        SELECT * FROM ledger_links
+        WHERE user_id = ? AND source_type = ? AND source_id = ?
+        ORDER BY id DESC
+        """,
+        (user_id, source_type, source_id),
+    ).fetchall()
+    conn.execute(
+        """
+        DELETE FROM ledger_links
+        WHERE user_id = ? AND source_type = ? AND source_id = ?
+        """,
+        (user_id, source_type, source_id),
+    )
+    seen_cb, seen_ac, seen_bank = set(), set(), set()
+    for link in links:
+        cb_id = link["cash_book_entry_id"]
+        ac_id = link["account_entry_id"]
+        bank_id = link["bank_transaction_id"]
+        if bank_id and bank_id not in seen_bank:
+            _delete_bank_tx_raw(conn, bank_id)
+            seen_bank.add(bank_id)
+        if cb_id and cb_id not in seen_cb:
+            row = conn.execute(
+                "SELECT linked_bank_transaction_id, linked_account_entry_id FROM cash_book_entries WHERE id = ?",
+                (cb_id,),
+            ).fetchone()
+            if row:
+                if row["linked_bank_transaction_id"] and row["linked_bank_transaction_id"] not in seen_bank:
+                    _delete_bank_tx_raw(conn, row["linked_bank_transaction_id"])
+                    seen_bank.add(row["linked_bank_transaction_id"])
+                if row["linked_account_entry_id"] and row["linked_account_entry_id"] not in seen_ac:
+                    _delete_account_entry_raw(conn, row["linked_account_entry_id"])
+                    seen_ac.add(row["linked_account_entry_id"])
+            _delete_cash_book_raw(conn, user_id, cb_id)
+            seen_cb.add(cb_id)
+        if ac_id and ac_id not in seen_ac:
+            _delete_account_entry_raw(conn, ac_id)
+            seen_ac.add(ac_id)
+
+
+def _create_cash_book_synced(
+    conn, user_id, data, source_type=None, source_id=None, *,
+    account_entry_type=None, link_account=True,
+):
+    """Create cash book entry with linked account/bank rows and ledger tracking."""
+    entry_type = data["entry_type"]
+    if entry_type not in CASH_BOOK_TYPES:
+        raise ValueError("Invalid entry type")
+
+    payment_source = data.get("payment_source") or "cash"
+    if payment_source not in ("cash", "bank"):
+        raise ValueError("Payment source must be cash or bank")
+
+    bank_account_id = data.get("bank_account_id")
+    if payment_source == "bank":
+        if not bank_account_id:
+            raise ValueError("Select a bank account")
+        bank_account_id = int(bank_account_id)
+        if not get_bank(conn, user_id, bank_account_id):
+            raise ValueError("Bank account not found")
+    else:
+        bank_account_id = None
+
+    account_id = data.get("account_id")
+    if account_id:
+        account_id = int(account_id)
+        if not get_account(conn, user_id, account_id):
+            raise ValueError("Selected account not found")
+
+    note = data.get("note", "")
+    amount = float(data["amount"])
+    entry_date = data.get("entry_date") or _local_date(conn)
+
+    cursor = conn.execute(
+        """
+        INSERT INTO cash_book_entries (
+            entry_type, amount, note, entry_date, user_id, account_id,
+            payment_source, bank_account_id
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        (entry_type, amount, note, entry_date, user_id, account_id, payment_source, bank_account_id),
+    )
+    entry_id = cursor.lastrowid
+    bank_tx_id = None
+    account_entry_id = None
+
+    if payment_source == "bank":
+        tx = create_bank_transaction(conn, bank_account_id, {
+            "transaction_type": "credit" if entry_type == "in" else "debit",
+            "amount": amount,
+            "note": note or f"Cash book {entry_type} — entry #{entry_id}",
+        })
+        bank_tx_id = tx["id"]
+        conn.execute(
+            "UPDATE cash_book_entries SET linked_bank_transaction_id = ? WHERE id = ?",
+            (bank_tx_id, entry_id),
+        )
+
+    if account_id and link_account:
+        if account_entry_type is None:
+            account_entry_type = "credit" if entry_type == "out" else "debit"
+        acct_note = note or f"Cash book {entry_type} — entry #{entry_id}"
+        account_entry_id = _insert_account_entry(
+            conn, account_id, account_entry_type, amount, acct_note,
+            linked_cash_book_entry_id=entry_id,
+        )
+        conn.execute(
+            "UPDATE cash_book_entries SET linked_account_entry_id = ? WHERE id = ?",
+            (account_entry_id, entry_id),
+        )
+
+    if source_type and source_id is not None:
+        _record_ledger_link(
+            conn, user_id, source_type, source_id,
+            cash_book_entry_id=entry_id,
+            account_entry_id=account_entry_id,
+            bank_transaction_id=bank_tx_id,
+        )
+
+    row = conn.execute("SELECT * FROM cash_book_entries WHERE id = ?", (entry_id,)).fetchone()
+    result = dict(row)
+    result["cash_book_entry_id"] = entry_id
+    result["account_entry_id"] = account_entry_id
+    result["bank_transaction_id"] = bank_tx_id
+    return result
+
+
+def _create_account_entry_synced(
+    conn, user_id, account_id, entry_type, amount, note, *,
+    source_type=None, source_id=None, payment_source="", bank_account_id=None,
+    mirror_cash_book=False,
+):
+    """Create account entry; optionally mirror to cash book (Wasool) with full linking."""
+    account_entry_id = _insert_account_entry(conn, account_id, entry_type, amount, note)
+    cash_book_entry_id = None
+    bank_tx_id = None
+
+    if mirror_cash_book and entry_type == "debit" and payment_source == "cash":
+        cb = _create_cash_book_synced(conn, user_id, {
+            "entry_type": "in",
+            "amount": amount,
+            "note": note,
+            "payment_source": "cash",
+            "entry_date": _local_date(conn),
+        }, link_account=False)
+        cash_book_entry_id = cb["cash_book_entry_id"]
+        conn.execute(
+            "UPDATE account_entries SET linked_cash_book_entry_id = ? WHERE id = ?",
+            (cash_book_entry_id, account_entry_id),
+        )
+        _record_ledger_link(
+            conn, user_id, "account_wasool", account_entry_id,
+            cash_book_entry_id=cash_book_entry_id,
+        )
+    elif mirror_cash_book and entry_type == "debit" and payment_source == "bank" and bank_account_id:
+        cb = _create_cash_book_synced(conn, user_id, {
+            "entry_type": "in",
+            "amount": amount,
+            "note": note,
+            "payment_source": "bank",
+            "bank_account_id": bank_account_id,
+            "entry_date": _local_date(conn),
+        }, link_account=False)
+        cash_book_entry_id = cb["cash_book_entry_id"]
+        conn.execute(
+            "UPDATE account_entries SET payment_source = 'bank', bank_account_id = ?, linked_cash_book_entry_id = ? WHERE id = ?",
+            (bank_account_id, cash_book_entry_id, account_entry_id),
+        )
+
+    if source_type and source_id is not None:
+        _record_ledger_link(
+            conn, user_id, source_type, source_id,
+            account_entry_id=account_entry_id,
+            cash_book_entry_id=cash_book_entry_id,
+            bank_transaction_id=bank_tx_id,
+        )
+
+    row = conn.execute("SELECT * FROM account_entries WHERE id = ?", (account_entry_id,)).fetchone()
+    return dict(row)
+
+
+def _reverse_phone_ledger(conn, user_id, phone_id):
+    """Reverse all financial entries tied to a phone."""
+    phone = get_phone(conn, user_id, phone_id)
+    if not phone:
+        return
+    conn.execute(
+        """
+        UPDATE phones SET
+            purchase_cash_book_entry_id = NULL,
+            sale_cash_book_entry_id = NULL,
+            purchase_account_entry_id = NULL,
+            sale_account_entry_id = NULL
+        WHERE id = ? AND user_id = ?
+        """,
+        (phone_id, user_id),
+    )
+    conn.execute(
+        """
+        UPDATE phone_expenses SET cash_book_entry_id = NULL, account_entry_id = NULL
+        WHERE phone_id = ?
+        """,
+        (phone_id,),
+    )
+    for source in ("phone_purchase", "phone_sale", "phone_borrow", "phone_receivable", "phone_payable"):
+        _reverse_ledger_for_source(conn, user_id, source, phone_id)
+    expenses = conn.execute(
+        "SELECT id FROM phone_expenses WHERE phone_id = ?", (phone_id,)
+    ).fetchall()
+    for exp in expenses:
+        _reverse_ledger_for_source(conn, user_id, "phone_expense", exp["id"])
+
+
+def _delete_cash_book_entry_cascade(conn, user_id, entry_id, *, skip_account_entry_id=None):
+    """Delete cash book row and linked account/bank rows without double-deleting."""
+    if not entry_id:
+        return
+    row = conn.execute(
+        "SELECT * FROM cash_book_entries WHERE id = ? AND user_id = ?",
+        (entry_id, user_id),
+    ).fetchone()
+    if not row:
+        return
+
+    acct_id = row["linked_account_entry_id"]
+    if acct_id and acct_id != skip_account_entry_id:
+        _delete_account_entry_cascade(conn, user_id, acct_id, skip_cash_book_id=entry_id)
+
+    bank_id = row["linked_bank_transaction_id"]
+    if bank_id:
+        _delete_bank_tx_raw(conn, bank_id)
+
+    conn.execute(
+        "DELETE FROM ledger_links WHERE cash_book_entry_id = ? AND user_id = ?",
+        (entry_id, user_id),
+    )
+    conn.execute(
+        "UPDATE phones SET purchase_cash_book_entry_id = NULL WHERE purchase_cash_book_entry_id = ?",
+        (entry_id,),
+    )
+    conn.execute(
+        "UPDATE phones SET sale_cash_book_entry_id = NULL WHERE sale_cash_book_entry_id = ?",
+        (entry_id,),
+    )
+    conn.execute(
+        "UPDATE phone_expenses SET cash_book_entry_id = NULL WHERE cash_book_entry_id = ?",
+        (entry_id,),
+    )
+    _delete_cash_book_raw(conn, user_id, entry_id)
+
+
+def _delete_account_entry_cascade(conn, user_id, entry_id, *, skip_cash_book_id=None):
+    """Delete account entry and any mirrored cash book / bank rows."""
+    if not entry_id:
+        return
+    row = conn.execute(
+        "SELECT * FROM account_entries WHERE id = ?", (entry_id,)
+    ).fetchone()
+    if not row:
+        return
+
+    cb_id = row["linked_cash_book_entry_id"]
+    if cb_id and cb_id != skip_cash_book_id:
+        _delete_cash_book_entry_cascade(conn, user_id, cb_id, skip_account_entry_id=entry_id)
+
+    for cb in conn.execute(
+        """
+        SELECT id FROM cash_book_entries
+        WHERE linked_account_entry_id = ? AND user_id = ?
+        """,
+        (entry_id, user_id),
+    ).fetchall():
+        if cb["id"] != skip_cash_book_id:
+            _delete_cash_book_entry_cascade(conn, user_id, cb["id"], skip_account_entry_id=entry_id)
+
+    conn.execute(
+        "DELETE FROM ledger_links WHERE account_entry_id = ? AND user_id = ?",
+        (entry_id, user_id),
+    )
+    _delete_account_entry_raw(conn, entry_id)
 
 
 def _local_datetime(conn) -> str:
@@ -1249,23 +1670,16 @@ def _build_phone_insert_values(conn, data, status=None):
     )
 
 
-def _save_phone_extras(conn, phone_id, data):
+def _save_phone_extras(conn, user_id, phone_id, data):
     expenses = data.get("expenses") or []
     for exp in expenses:
         if float(exp.get("amount") or 0) > 0:
-            conn.execute(
-                """
-                INSERT INTO phone_expenses (phone_id, amount, description, expense_date, account_id)
-                VALUES (?, ?, ?, ?, ?)
-                """,
-                (
-                    phone_id,
-                    float(exp["amount"]),
-                    exp.get("description", ""),
-                    exp.get("expense_date") or "",
-                    int(exp["account_id"]) if exp.get("account_id") else None,
-                ),
-            )
+            add_phone_expense(conn, user_id, phone_id, {
+                "amount": exp["amount"],
+                "description": exp.get("description", ""),
+                "expense_date": exp.get("expense_date") or "",
+                "account_id": exp.get("account_id"),
+            })
 
     investments = data.get("investments") or []
     for inv in investments:
@@ -1284,67 +1698,152 @@ def _save_phone_extras(conn, phone_id, data):
 
 def _post_payment_transaction(
     conn, user_id, payment_method, bank_id, entry_type, amount, note, entry_date,
+    *, source_type=None, source_id=None, account_id=None, account_entry_type=None,
 ):
-    """Record cash book or bank movement for phone purchase/sale payments."""
+    """Record cash book or bank movement with optional account link."""
     if amount <= 0:
-        return
-    if payment_method == "bank":
-        if not bank_id:
-            raise ValueError("Select a bank account for bank payment")
-        if not get_bank(conn, user_id, int(bank_id)):
-            raise ValueError("Bank account not found")
-        create_cash_book_entry(conn, user_id, {
-            "entry_type": entry_type,
-            "amount": amount,
-            "note": note,
-            "entry_date": entry_date,
-            "payment_source": "bank",
-            "bank_account_id": int(bank_id),
-        })
-    else:
-        create_cash_book_entry(conn, user_id, {
-            "entry_type": entry_type,
-            "amount": amount,
-            "note": note,
-            "entry_date": entry_date,
-            "payment_source": "cash",
-        })
-
-
-def _post_purchase_payment(conn, user_id, phone_id, data):
-    purchase_price = float(data.get("purchase_price") or 0)
-    payable = float(data.get("payable_amount") or 0)
-    paid_now = max(0.0, purchase_price - payable)
-    if paid_now <= 0:
-        return
-    method = data.get("purchase_payment_method") or "cash"
-    bank_id = data.get("purchase_bank_id")
-    model = data.get("model", "Phone")
-    entry_date = _normalize_datetime(data.get("purchase_date"), conn, date_only=True)
-    _post_payment_transaction(
-        conn, user_id, method, bank_id, "out", paid_now,
-        f"Purchase: {model} (#{phone_id})", entry_date,
+        return None
+    data = {
+        "entry_type": entry_type,
+        "amount": amount,
+        "note": note,
+        "entry_date": entry_date,
+        "payment_source": "bank" if payment_method == "bank" else "cash",
+        "bank_account_id": int(bank_id) if payment_method == "bank" and bank_id else None,
+        "account_id": account_id,
+    }
+    if payment_method == "bank" and not bank_id:
+        raise ValueError("Select a bank account for bank payment")
+    if payment_method == "bank" and not get_bank(conn, user_id, int(bank_id)):
+        raise ValueError("Bank account not found")
+    return _create_cash_book_synced(
+        conn, user_id, data,
+        source_type=source_type, source_id=source_id,
+        account_entry_type=account_entry_type,
     )
 
 
-def _post_sale_payment(conn, user_id, phone_id, data):
+def _post_purchase_ledger(conn, user_id, phone_id, data):
+    """Sync purchase/borrow to cash book and supplier account."""
+    acquisition = (data.get("acquisition_type") or "purchase").strip().lower()
+    purchase_price = float(data.get("purchase_price") or 0)
+    payable = float(data.get("payable_amount") or 0)
+    supplier_account_id = data.get("supplier_account_id")
+    if supplier_account_id not in (None, "", 0):
+        supplier_account_id = int(supplier_account_id)
+    else:
+        supplier_account_id = None
+
+    if acquisition == "borrow":
+        if not supplier_account_id:
+            raise ValueError("Select a shopkeeper account when borrowing a phone")
+        payable = purchase_price
+        data = {**data, "payable_amount": payable}
+
+    paid_now = max(0.0, purchase_price - payable)
+    model = data.get("model", "Phone")
+    entry_date = _normalize_datetime(data.get("purchase_date"), conn, date_only=True)
+    method = data.get("purchase_payment_method") or "cash"
+    bank_id = data.get("purchase_bank_id")
+
+    purchase_cb_id = None
+    purchase_acct_id = None
+
+    if paid_now > 0:
+        cb = _post_payment_transaction(
+            conn, user_id, method, bank_id, "out", paid_now,
+            f"Purchase: {model} (#{phone_id})", entry_date,
+            source_type="phone_purchase", source_id=phone_id,
+            account_id=supplier_account_id,
+            account_entry_type="credit" if supplier_account_id else None,
+        )
+        if cb:
+            purchase_cb_id = cb.get("cash_book_entry_id") or cb.get("id")
+
+    if payable > 0 and supplier_account_id:
+        note = f"{'Borrow' if acquisition == 'borrow' else 'Udhar'}: {model} (#{phone_id})"
+        acct_type = "debit"
+        purchase_acct_id = _insert_account_entry(
+            conn, supplier_account_id, acct_type, payable, note,
+        )
+        _record_ledger_link(
+            conn, user_id,
+            "phone_borrow" if acquisition == "borrow" else "phone_payable",
+            phone_id, account_entry_id=purchase_acct_id,
+        )
+
+    if purchase_cb_id or purchase_acct_id:
+        conn.execute(
+            """
+            UPDATE phones SET
+                purchase_cash_book_entry_id = COALESCE(?, purchase_cash_book_entry_id),
+                purchase_account_entry_id = COALESCE(?, purchase_account_entry_id),
+                payable_amount = ?,
+                acquisition_type = ?
+            WHERE id = ? AND user_id = ?
+            """,
+            (purchase_cb_id, purchase_acct_id, payable, acquisition, phone_id, user_id),
+        )
+
+
+def _post_sale_ledger(conn, user_id, phone_id, data):
+    """Sync sale payment and receivable to cash book and buyer account."""
     sale_price = float(data.get("sale_price") or 0)
     receivable = float(data.get("receivable_amount") or 0)
     received_now = max(0.0, sale_price - receivable)
-    if received_now <= 0:
-        return
-    method = data.get("sale_payment_method") or "cash"
-    bank_id = data.get("sale_bank_id")
+    buyer_account_id = data.get("buyer_account_id")
+    if buyer_account_id not in (None, "", 0):
+        buyer_account_id = int(buyer_account_id)
+    else:
+        buyer_account_id = None
+
     model = data.get("model", "Phone")
     entry_date = _normalize_datetime(data.get("sold_at"), conn, date_only=True)
-    _post_payment_transaction(
-        conn, user_id, method, bank_id, "in", received_now,
-        f"Sale: {model} (#{phone_id})", entry_date,
+    method = data.get("sale_payment_method") or "cash"
+    bank_id = data.get("sale_bank_id")
+
+    sale_cb_id = None
+    sale_acct_id = None
+
+    if received_now > 0:
+        cb = _post_payment_transaction(
+            conn, user_id, method, bank_id, "in", received_now,
+            f"Sale: {model} (#{phone_id})", entry_date,
+            source_type="phone_sale", source_id=phone_id,
+            account_id=buyer_account_id,
+            account_entry_type="debit" if buyer_account_id else None,
+        )
+        if cb:
+            sale_cb_id = cb.get("cash_book_entry_id") or cb.get("id")
+
+    if receivable > 0:
+        acct_id = buyer_account_id
+        if not acct_id:
+            raise ValueError("Select a buyer account when recording sale udhar (receivable)")
+        note = f"Sale udhar: {model} (#{phone_id})"
+        sale_acct_id = _insert_account_entry(conn, acct_id, "credit", receivable, note)
+        _record_ledger_link(
+            conn, user_id, "phone_receivable", phone_id, account_entry_id=sale_acct_id,
+        )
+
+    conn.execute(
+        """
+        UPDATE phones SET
+            sale_cash_book_entry_id = ?,
+            sale_account_entry_id = ?,
+            buyer_account_id = ?,
+            receivable_amount = ?
+        WHERE id = ? AND user_id = ?
+        """,
+        (sale_cb_id, sale_acct_id, buyer_account_id, receivable, phone_id, user_id),
     )
 
 
 def _validate_phone_payments(conn, user_id, data, status):
     if status in ("Bought", "In Repair"):
+        acquisition = (data.get("acquisition_type") or "purchase").strip().lower()
+        if acquisition == "borrow":
+            return
         method = data.get("purchase_payment_method") or "cash"
         if method not in ("cash", "bank"):
             raise ValueError("Purchase payment method must be Cash or Bank")
@@ -1377,6 +1876,16 @@ def create_phone(conn, user_id, data):
             raise ValueError("Supplier account not found")
     else:
         supplier_account_id = None
+    buyer_account_id = data.get("buyer_account_id")
+    if buyer_account_id not in (None, "", 0):
+        buyer_account_id = int(buyer_account_id)
+        if not get_account(conn, user_id, buyer_account_id):
+            raise ValueError("Buyer account not found")
+    else:
+        buyer_account_id = None
+    acquisition_type = (data.get("acquisition_type") or "purchase").strip().lower()
+    if acquisition_type not in ("purchase", "borrow"):
+        acquisition_type = "purchase"
     cursor = conn.execute(
         """
         INSERT INTO phones (
@@ -1386,8 +1895,8 @@ def create_phone(conn, user_id, data):
             buyer_name, buyer_contact, sale_price, receivable_amount,
             sold_at, imei, imei2, box_status, battery_health, variant, purchase_date,
             purchase_payment_method, purchase_bank_id, sale_payment_method, sale_bank_id,
-            supplier_account_id, user_id
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            supplier_account_id, buyer_account_id, acquisition_type, user_id
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """,
         (
             *values,
@@ -1396,16 +1905,18 @@ def create_phone(conn, user_id, data):
             sale_pm,
             int(sale_bank) if sale_bank else None,
             supplier_account_id,
+            buyer_account_id,
+            acquisition_type,
             user_id,
         ),
     )
     phone_id = cursor.lastrowid
-    _save_phone_extras(conn, phone_id, data)
+    _save_phone_extras(conn, user_id, phone_id, data)
     if status in ("Bought", "In Repair"):
-        _post_purchase_payment(conn, user_id, phone_id, data)
+        _post_purchase_ledger(conn, user_id, phone_id, {**data, "supplier_account_id": supplier_account_id})
     if status == "Sold":
-        _post_purchase_payment(conn, user_id, phone_id, data)
-        _post_sale_payment(conn, user_id, phone_id, data)
+        _post_purchase_ledger(conn, user_id, phone_id, {**data, "supplier_account_id": supplier_account_id})
+        _post_sale_ledger(conn, user_id, phone_id, {**data, "buyer_account_id": buyer_account_id})
     return get_phone(conn, user_id, phone_id, include_details=True)
 
 
@@ -1463,13 +1974,13 @@ def update_phone(conn, user_id, phone_id, data):
         "buyer_name", "buyer_contact", "sale_price", "receivable_amount",
         "imei", "imei2", "box_status", "battery_health", "variant", "purchase_date",
         "purchase_payment_method", "purchase_bank_id", "sale_payment_method", "sale_bank_id",
-        "supplier_account_id", "sold_at",
+        "supplier_account_id", "sold_at", "buyer_account_id", "acquisition_type",
     ]
     numeric_fields = {
         "purchase_price", "payable_amount", "advance_received",
         "sale_price", "receivable_amount",
     }
-    int_nullable_fields = {"purchase_bank_id", "sale_bank_id", "supplier_account_id"}
+    int_nullable_fields = {"purchase_bank_id", "sale_bank_id", "supplier_account_id", "buyer_account_id"}
     for field in simple_fields:
         if field in data:
             fields.append(f"{field} = ?")
@@ -1502,12 +2013,14 @@ def update_phone(conn, user_id, phone_id, data):
 
     if new_status == "Sold" and existing["status"] != "Sold":
         merged = {**dict(existing), **data}
-        _post_sale_payment(conn, user_id, phone_id, merged)
+        _post_sale_ledger(conn, user_id, phone_id, merged)
 
     return get_phone(conn, user_id, phone_id, include_details=True)
 
 
 def delete_phone(conn, user_id, phone_id):
+    if get_phone(conn, user_id, phone_id):
+        _reverse_phone_ledger(conn, user_id, phone_id)
     conn.execute(
         "DELETE FROM phones WHERE id = ? AND user_id = ?",
         (phone_id, user_id),
@@ -1590,8 +2103,9 @@ def add_phone_expense(conn, user_id, phone_id, data):
     )
     expense_id = cursor.lastrowid
     cash_book_entry_id = None
+    account_entry_id = None
     if amount > 0:
-        cb = create_cash_book_entry(conn, user_id, {
+        cb = _create_cash_book_synced(conn, user_id, {
             "entry_type": "out",
             "amount": amount,
             "note": description or f"Phone expense: {phone['model']} (#{phone_id})",
@@ -1599,11 +2113,16 @@ def add_phone_expense(conn, user_id, phone_id, data):
             "account_id": account_id,
             "payment_source": data.get("payment_source") or "cash",
             "bank_account_id": data.get("bank_account_id"),
-        })
-        cash_book_entry_id = cb["id"]
+        }, source_type="phone_expense", source_id=expense_id, account_entry_type="debit" if account_id else None)
+        cash_book_entry_id = cb.get("cash_book_entry_id") or cb.get("id")
+        account_entry_id = cb.get("account_entry_id")
         conn.execute(
-            "UPDATE phone_expenses SET cash_book_entry_id = ? WHERE id = ?",
-            (cash_book_entry_id, expense_id),
+            """
+            UPDATE phone_expenses
+            SET cash_book_entry_id = ?, account_entry_id = ?
+            WHERE id = ?
+            """,
+            (cash_book_entry_id, account_entry_id, expense_id),
         )
     row = conn.execute(
         "SELECT * FROM phone_expenses WHERE id = ?", (expense_id,)
@@ -1646,13 +2165,12 @@ def update_phone_expense(conn, user_id, phone_id, expense_id, data):
         (amount, description, expense_date, account_id, expense_id, phone_id),
     )
 
-    old_cb_id = row["cash_book_entry_id"]
-    if old_cb_id:
-        conn.execute("DELETE FROM cash_book_entries WHERE id = ?", (old_cb_id,))
+    _reverse_ledger_for_source(conn, user_id, "phone_expense", expense_id)
 
     cash_book_entry_id = None
+    account_entry_id = None
     if amount > 0:
-        cb = create_cash_book_entry(conn, user_id, {
+        cb = _create_cash_book_synced(conn, user_id, {
             "entry_type": "out",
             "amount": amount,
             "note": description or f"Phone expense: {phone['model']} (#{phone_id})",
@@ -1660,11 +2178,16 @@ def update_phone_expense(conn, user_id, phone_id, expense_id, data):
             "account_id": account_id,
             "payment_source": data.get("payment_source") or "cash",
             "bank_account_id": data.get("bank_account_id"),
-        })
-        cash_book_entry_id = cb["id"]
+        }, source_type="phone_expense", source_id=expense_id, account_entry_type="debit" if account_id else None)
+        cash_book_entry_id = cb.get("cash_book_entry_id") or cb.get("id")
+        account_entry_id = cb.get("account_entry_id")
         conn.execute(
-            "UPDATE phone_expenses SET cash_book_entry_id = ? WHERE id = ?",
-            (cash_book_entry_id, expense_id),
+            """
+            UPDATE phone_expenses
+            SET cash_book_entry_id = ?, account_entry_id = ?
+            WHERE id = ?
+            """,
+            (cash_book_entry_id, account_entry_id, expense_id),
         )
 
     updated = conn.execute(
@@ -1680,11 +2203,7 @@ def delete_phone_expense(conn, user_id, phone_id, expense_id):
     ).fetchone()
     if not row:
         return False
-    if row["cash_book_entry_id"]:
-        conn.execute(
-            "DELETE FROM cash_book_entries WHERE id = ?",
-            (row["cash_book_entry_id"],),
-        )
+    _reverse_ledger_for_source(conn, user_id, "phone_expense", expense_id)
     conn.execute("DELETE FROM phone_expenses WHERE id = ?", (expense_id,))
     return True
 
@@ -1802,22 +2321,7 @@ def process_purchase_return(conn, user_id, data):
         (phone["id"], user_id),
     )
 
-    if refund > 0:
-        create_cash_book_entry(conn, user_id, {
-            "entry_type": "in",
-            "amount": refund,
-            "note": note or f"Purchase return refund: {phone['model']} (#{phone['id']})",
-            "entry_date": return_date,
-            "account_id": account_id,
-            "payment_source": data.get("payment_source") or "cash",
-            "bank_account_id": data.get("bank_account_id"),
-        })
-        if account_id:
-            create_entry(conn, account_id, {
-                "entry_type": "credit",
-                "amount": refund,
-                "note": note or f"Purchase return: {phone['model']}",
-            }, user_id=user_id)
+    _reverse_phone_ledger(conn, user_id, phone["id"])
 
     cursor = conn.execute(
         """
@@ -1839,8 +2343,22 @@ def process_purchase_return(conn, user_id, data):
             _normalize_datetime(data.get("return_date"), conn),
         ),
     )
+    log_id = cursor.lastrowid
+
+    if refund > 0:
+        _create_cash_book_synced(conn, user_id, {
+            "entry_type": "in",
+            "amount": refund,
+            "note": note or f"Purchase return refund: {phone['model']} (#{phone['id']})",
+            "entry_date": return_date,
+            "account_id": account_id,
+            "payment_source": data.get("payment_source") or "cash",
+            "bank_account_id": data.get("bank_account_id"),
+        }, source_type="purchase_return", source_id=log_id,
+           account_entry_type="credit" if account_id else None)
+
     log = conn.execute(
-        "SELECT * FROM return_logs WHERE id = ?", (cursor.lastrowid,)
+        "SELECT * FROM return_logs WHERE id = ?", (log_id,)
     ).fetchone()
     return dict(log)
 
@@ -1885,28 +2403,17 @@ def process_sale_return(conn, user_id, data):
             buyer_contact = '',
             sale_price = NULL,
             receivable_amount = 0,
-            sold_at = NULL
+            sold_at = NULL,
+            sale_cash_book_entry_id = NULL,
+            sale_account_entry_id = NULL,
+            buyer_account_id = NULL
         WHERE id = ? AND user_id = ?
         """,
         (phone["id"], user_id),
     )
 
-    if refund > 0:
-        create_cash_book_entry(conn, user_id, {
-            "entry_type": "out",
-            "amount": refund,
-            "note": note or f"Sale return refund: {phone['model']} (#{phone['id']})",
-            "entry_date": return_date,
-            "account_id": account_id,
-            "payment_source": data.get("payment_source") or "cash",
-            "bank_account_id": data.get("bank_account_id"),
-        })
-        if account_id:
-            create_entry(conn, account_id, {
-                "entry_type": "debit",
-                "amount": refund,
-                "note": note or f"Sale return: {phone['model']}",
-            }, user_id=user_id)
+    _reverse_ledger_for_source(conn, user_id, "phone_sale", phone["id"])
+    _reverse_ledger_for_source(conn, user_id, "phone_receivable", phone["id"])
 
     cursor = conn.execute(
         """
@@ -1928,8 +2435,22 @@ def process_sale_return(conn, user_id, data):
             _normalize_datetime(data.get("return_date"), conn),
         ),
     )
+    log_id = cursor.lastrowid
+
+    if refund > 0:
+        _create_cash_book_synced(conn, user_id, {
+            "entry_type": "out",
+            "amount": refund,
+            "note": note or f"Sale return refund: {phone['model']} (#{phone['id']})",
+            "entry_date": return_date,
+            "account_id": account_id,
+            "payment_source": data.get("payment_source") or "cash",
+            "bank_account_id": data.get("bank_account_id"),
+        }, source_type="sale_return", source_id=log_id,
+           account_entry_type="debit" if account_id else None)
+
     log = conn.execute(
-        "SELECT * FROM return_logs WHERE id = ?", (cursor.lastrowid,)
+        "SELECT * FROM return_logs WHERE id = ?", (log_id,)
     ).fetchone()
     return dict(log)
 
@@ -2152,70 +2673,14 @@ def list_cash_book(conn, user_id):
 
 
 def create_cash_book_entry(conn, user_id, data):
-    entry_type = data["entry_type"]
-    if entry_type not in CASH_BOOK_TYPES:
-        raise ValueError("Invalid entry type")
-
-    payment_source = data.get("payment_source") or "cash"
-    if payment_source not in ("cash", "bank"):
-        raise ValueError("Payment source must be cash or bank")
-
-    bank_account_id = data.get("bank_account_id")
-    if payment_source == "bank":
-        if not bank_account_id:
-            raise ValueError("Select a bank account")
-        bank_account_id = int(bank_account_id)
-        if not get_bank(conn, user_id, bank_account_id):
-            raise ValueError("Bank account not found")
-    else:
-        bank_account_id = None
-
+    result = _create_cash_book_synced(conn, user_id, data)
     account_id = data.get("account_id")
     if account_id:
-        account_id = int(account_id)
-        acct = get_account(conn, user_id, account_id)
-        if not acct:
-            raise ValueError("Selected account not found")
-
-    note = data.get("note", "")
-    amount = float(data["amount"])
-    entry_date = data.get("entry_date") or conn.execute("SELECT date('now')").fetchone()[0]
-
-    cursor = conn.execute(
-        """
-        INSERT INTO cash_book_entries (
-            entry_type, amount, note, entry_date, user_id, account_id,
-            payment_source, bank_account_id
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-        """,
-        (entry_type, amount, note, entry_date, user_id, account_id, payment_source, bank_account_id),
-    )
-    entry_id = cursor.lastrowid
-
-    if payment_source == "bank":
-        create_bank_transaction(conn, bank_account_id, {
-            "transaction_type": "credit" if entry_type == "in" else "debit",
-            "amount": amount,
-            "note": note or f"Cash book {entry_type} — entry #{entry_id}",
-        })
-
-    if account_id:
-        acct_entry_type = "debit" if entry_type == "out" else "credit"
-        acct_note = note or f"Cash book {entry_type} — entry #{entry_id}"
-        create_entry(conn, account_id, {
-            "entry_type": acct_entry_type,
-            "amount": amount,
-            "note": acct_note,
-        })
-
-    row = conn.execute(
-        "SELECT * FROM cash_book_entries WHERE id = ?", (entry_id,)
-    ).fetchone()
-    result = dict(row)
-    if account_id:
-        result["account_name"] = get_account(conn, user_id, account_id)["name"]
+        result["account_name"] = get_account(conn, user_id, int(account_id))["name"]
+    bank_account_id = data.get("bank_account_id")
     if bank_account_id:
-        result["bank_name"] = get_bank(conn, user_id, bank_account_id)["name"]
+        result["bank_name"] = get_bank(conn, user_id, int(bank_account_id))["name"]
+    payment_source = data.get("payment_source") or "cash"
     result["payment_label"] = (
         f"Bank: {result['bank_name']}" if payment_source == "bank"
         else "Cash"
@@ -2251,10 +2716,7 @@ def update_cash_book_entry(conn, user_id, entry_id, data):
 
 
 def delete_cash_book_entry(conn, user_id, entry_id):
-    conn.execute(
-        "DELETE FROM cash_book_entries WHERE id = ? AND user_id = ?",
-        (entry_id, user_id),
-    )
+    _delete_cash_book_entry_cascade(conn, user_id, entry_id)
 
 
 def cash_book_daily_summary(conn, user_id):
@@ -2584,35 +3046,20 @@ def create_entry(conn, account_id, data, user_id=None):
         if user_id and not get_bank(conn, user_id, bank_account_id):
             raise ValueError("Bank account not found")
 
-    cursor = conn.execute(
-        """
-        INSERT INTO account_entries (
-            account_id, entry_type, amount, note, payment_source, bank_account_id
-        ) VALUES (?, ?, ?, ?, ?, ?)
-        """,
-        (
-            account_id,
-            entry_type,
-            amount,
-            note,
-            payment_source,
-            bank_account_id if payment_source == "bank" else None,
-        ),
+    if user_id and entry_type == "debit" and payment_source in ("cash", "bank"):
+        return _create_account_entry_synced(
+            conn, user_id, account_id, entry_type, amount, note,
+            payment_source=payment_source,
+            bank_account_id=bank_account_id,
+            mirror_cash_book=True,
+        )
+
+    account_entry_id = _insert_account_entry(
+        conn, account_id, entry_type, amount, note,
+        linked_cash_book_entry_id=None,
     )
-    entry_id = cursor.lastrowid
-
-    if user_id and entry_type == "debit" and payment_source == "cash":
-        acct = get_account(conn, user_id, account_id)
-        acct_name = acct["name"] if acct else "Account"
-        create_cash_book_entry(conn, user_id, {
-            "entry_type": "in",
-            "amount": amount,
-            "note": note or f"Wasool — {acct_name}",
-            "payment_source": "cash",
-        })
-
     row = conn.execute(
-        "SELECT * FROM account_entries WHERE id = ?", (entry_id,)
+        "SELECT * FROM account_entries WHERE id = ?", (account_entry_id,)
     ).fetchone()
     return dict(row)
 
@@ -2643,8 +3090,21 @@ def update_entry(conn, entry_id, data):
     return dict(row)
 
 
-def delete_entry(conn, entry_id):
-    conn.execute("DELETE FROM account_entries WHERE id = ?", (entry_id,))
+def delete_entry(conn, entry_id, user_id=None):
+    if user_id is None:
+        row = conn.execute(
+            """
+            SELECT a.user_id FROM account_entries ae
+            JOIN accounts a ON a.id = ae.account_id
+            WHERE ae.id = ?
+            """,
+            (entry_id,),
+        ).fetchone()
+        user_id = row["user_id"] if row else None
+    if user_id:
+        _delete_account_entry_cascade(conn, user_id, entry_id)
+    else:
+        _delete_account_entry_raw(conn, entry_id)
 
 
 def accounts_summary(conn, user_id):
@@ -2723,8 +3183,24 @@ def create_journal_voucher(conn, user_id, data):
     )
     voucher_id = cursor.lastrowid
     note = narration or reference or f"Journal voucher #{voucher_id}"
-    create_entry(conn, debit_id, {"entry_type": "debit", "amount": amount, "note": note})
-    create_entry(conn, credit_id, {"entry_type": "credit", "amount": amount, "note": note})
+    debit_entry_id = _insert_account_entry(conn, debit_id, "debit", amount, note)
+    credit_entry_id = _insert_account_entry(conn, credit_id, "credit", amount, note)
+    conn.execute(
+        """
+        UPDATE journal_vouchers
+        SET debit_entry_id = ?, credit_entry_id = ?
+        WHERE id = ?
+        """,
+        (debit_entry_id, credit_entry_id, voucher_id),
+    )
+    _record_ledger_link(
+        conn, user_id, "journal_voucher", voucher_id,
+        account_entry_id=debit_entry_id,
+    )
+    _record_ledger_link(
+        conn, user_id, "journal_voucher", voucher_id,
+        account_entry_id=credit_entry_id,
+    )
 
     row = conn.execute(
         """
@@ -2748,6 +3224,14 @@ def delete_journal_voucher(conn, user_id, voucher_id):
     ).fetchone()
     if not row:
         return False
+    if row["debit_entry_id"]:
+        _delete_account_entry_cascade(conn, user_id, row["debit_entry_id"])
+    if row["credit_entry_id"]:
+        _delete_account_entry_cascade(conn, user_id, row["credit_entry_id"])
+    conn.execute(
+        "DELETE FROM ledger_links WHERE user_id = ? AND source_type = 'journal_voucher' AND source_id = ?",
+        (user_id, voucher_id),
+    )
     conn.execute(
         "DELETE FROM journal_vouchers WHERE id = ? AND user_id = ?",
         (voucher_id, user_id),

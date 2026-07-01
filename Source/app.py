@@ -1245,7 +1245,7 @@ def delete_entry_api(account_id, entry_id):
         ).fetchone()
         if not row:
             return jsonify({"error": "Entry not found"}), 404
-        db.delete_entry(conn, entry_id)
+        db.delete_entry(conn, entry_id, user_id=user_id)
         return jsonify({"ok": True})
 
 
