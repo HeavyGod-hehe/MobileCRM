@@ -69,7 +69,8 @@
   let jvCreditPicker;
 
   async function loadJvAccounts() {
-    jvAccounts = await apiFetch('/api/accounts/expense-categories');
+    const data = await apiFetch('/api/accounts');
+    jvAccounts = (data.accounts || []).filter(a => !a.is_expense_category);
     if (!jvDebitPicker) {
       jvDebitPicker = createSearchableAccountSelect('jv-debit-wrap', { placeholder: 'Search debit account…' });
       jvCreditPicker = createSearchableAccountSelect('jv-credit-wrap', { placeholder: 'Search credit account…' });

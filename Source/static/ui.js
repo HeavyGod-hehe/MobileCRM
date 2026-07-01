@@ -422,11 +422,8 @@ async function initSettingsPage() {
   document.getElementById('btn-close-crm')?.addEventListener('click', async () => {
     if (!confirm('Close CRM now? The local server will stop and this window will no longer work until you reopen the app.')) return;
     try {
-      const res = await apiFetch('/api/system/shutdown', { method: 'POST' });
-      alert(res.message || 'CRM is closing...');
-      setTimeout(() => {
-        window.close();
-      }, 600);
+      await apiFetch('/api/system/shutdown', { method: 'POST' });
+      document.body.innerHTML = '<div style="display:flex;align-items:center;justify-content:center;min-height:100vh;font-family:system-ui;color:#94a3b8;background:#0f172a"><p>CRM closed. You can close this tab and reopen the app from the desktop.</p></div>';
     } catch (err) {
       toast(err.message, 'error');
     }
@@ -464,7 +461,10 @@ async function loadAppBranding() {
   try {
     const auth = await apiFetch('/api/auth/status');
     const shopEl = document.getElementById('shop-name-display');
-    if (shopEl && auth.shop_name) shopEl.textContent = auth.shop_name;
+    if (shopEl && auth.shop_name) {
+      shopEl.textContent = auth.shop_name;
+      try { localStorage.setItem('crm-shop-name', auth.shop_name); } catch (_) {}
+    }
     const saved = localStorage.getItem(THEME_KEY);
     if (auth.theme && auth.theme !== saved) {
       applyTheme(auth.theme);

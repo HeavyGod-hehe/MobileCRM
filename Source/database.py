@@ -3050,15 +3050,10 @@ def create_entry(conn, account_id, data, user_id=None):
     bank_account_id = data.get("bank_account_id")
 
     is_expense = user_id and is_expense_category_account(conn, account_id)
-    needs_payment = (
-        (entry_type == "debit" and not is_expense)
-        or (entry_type == "credit" and is_expense)
-    )
+    needs_payment = entry_type == "debit" or (entry_type == "credit" and is_expense)
 
     if payment_source and payment_source not in ("cash", "bank"):
         raise ValueError("Payment source must be cash or bank")
-    if not needs_payment and payment_source:
-        raise ValueError("Payment method applies only to Debit (people) or Credit (expense categories)")
     if user_id and needs_payment and not payment_source:
         raise ValueError("Select payment method — Cash or Bank")
     if payment_source == "bank":
@@ -3069,7 +3064,7 @@ def create_entry(conn, account_id, data, user_id=None):
             raise ValueError("Bank account not found")
 
     if user_id and needs_payment and payment_source in ("cash", "bank"):
-        cash_direction = "out" if is_expense else "in"
+        cash_direction = "in" if entry_type == "debit" else "out"
         return _create_account_entry_synced(
             conn, user_id, account_id, entry_type, amount, note,
             payment_source=payment_source,
@@ -3132,7 +3127,7 @@ def delete_entry(conn, entry_id, user_id=None):
 
 
 def accounts_summary(conn, user_id):
-    accounts = list_accounts(conn, user_id)
+    accounts = [a for a in list_accounts(conn, user_id) if not a["is_expense_category"]]
     total_receivable = sum(a["balance"] for a in accounts if a["balance"] > 0)
     total_payable = sum(abs(a["balance"]) for a in accounts if a["balance"] < 0)
     return {
@@ -3142,22 +3137,17 @@ def accounts_summary(conn, user_id):
     }
 
 
-EXPENSE_CATEGORY_NAMES = (
-    "Food", "Entertainment", "Transport", "Utilities", "Shop Expenses", "Other",
-)
+EXPENSE_CATEGORY_NAMES = ()
 
 
 def seed_expense_accounts(conn, user_id):
-    """Create default expense category accounts for cash book / journal use."""
-    existing = {
-        r["name"].lower()
-        for r in conn.execute(
-            "SELECT name FROM accounts WHERE user_id = ?", (user_id,)
-        ).fetchall()
-    }
-    for name in EXPENSE_CATEGORY_NAMES:
-        if name.lower() not in existing:
-            create_account(conn, user_id, {"name": name, "contact": "Expense category"})
+    """Default expense category accounts are no longer auto-created."""
+    return
+
+
+def list_khata_accounts(conn, user_id):
+    """Person/supplier accounts only — excludes expense category accounts."""
+    return [a for a in list_accounts(conn, user_id) if not a["is_expense_category"]]
 
 
 def list_journal_vouchers(conn, user_id):

@@ -1,5 +1,4 @@
 import os
-import signal
 import subprocess
 import sys
 import urllib.request
@@ -61,9 +60,19 @@ def _display_name():
 
 @app.context_processor
 def inject_user_context():
+    shop_name = "My Phone Shop"
+    user_id = session.get("user_id")
+    if user_id:
+        try:
+            with db.db_session() as conn:
+                config = db.get_auth_config(conn, user_id)
+                shop_name = (config.get("shop_name") or shop_name).strip() or shop_name
+        except Exception:
+            pass
     return {
         "current_username": _display_name(),
         "session_username": session.get("username"),
+        "shop_name": shop_name,
     }
 
 
@@ -160,14 +169,11 @@ def shutdown_system():
         return jsonify({"error": "Unauthorized"}), 401
 
     def _shutdown() -> None:
-        try:
-            os.kill(os.getpid(), signal.SIGTERM)
-        except OSError:
-            os._exit(0)
+        os._exit(0)
 
     import threading
 
-    threading.Timer(0.5, _shutdown).start()
+    threading.Timer(0.3, _shutdown).start()
     return jsonify({"ok": True, "message": "CRM is closing..."})
 
 
@@ -798,13 +804,35 @@ def restore_backup_api():
     })
 
 
+def _pick_folder_native():
+    if sys.platform == "darwin":
+        from folder_picker import pick_folder_macos
+        return pick_folder_macos()
+    if sys.platform == "win32":
+        from folder_picker import pick_folder_windows
+        try:
+            return pick_folder_windows()
+        except Exception:
+            from folder_picker import pick_folder_tkinter
+            return pick_folder_tkinter()
+    from folder_picker import pick_folder_tkinter
+    return pick_folder_tkinter()
+
+
+def _pick_backup_file_native():
+    if sys.platform == "darwin":
+        from folder_picker import pick_file_macos
+        return pick_file_macos()
+    from folder_picker import pick_backup_file
+    return pick_backup_file()
+
+
 @app.route("/api/storage/browse-backup-file", methods=["POST"])
 def browse_backup_file_api():
     """Open native file picker to choose a .db backup for restore."""
-    if sys.platform == "darwin":
+    if sys.platform in ("darwin", "win32") or not getattr(sys, "frozen", False):
         try:
-            from folder_picker import pick_file_macos
-            path = pick_file_macos()
+            path = _pick_backup_file_native()
         except RuntimeError as e:
             return jsonify({"error": str(e)}), 500
         except subprocess.TimeoutExpired:
@@ -842,11 +870,10 @@ def browse_backup_file_api():
 
 @app.route("/api/storage/browse-folder", methods=["POST"])
 def browse_folder_api():
-    """Open native OS folder picker (AppleScript on macOS, helper exe/script elsewhere)."""
-    if sys.platform == "darwin":
+    """Open native OS folder picker in-process (no separate helper exe required)."""
+    if sys.platform in ("darwin", "win32") or not getattr(sys, "frozen", False):
         try:
-            from folder_picker import pick_folder_macos
-            path = pick_folder_macos()
+            path = _pick_folder_native()
         except RuntimeError as e:
             return jsonify({"error": str(e)}), 500
         except subprocess.TimeoutExpired:
@@ -1102,7 +1129,6 @@ def delete_cash_book_entry_api(entry_id):
 def list_journal_vouchers_api():
     user_id = _current_user_id()
     with db.db_session() as conn:
-        db.seed_expense_accounts(conn, user_id)
         return jsonify(db.list_journal_vouchers(conn, user_id))
 
 
@@ -1134,8 +1160,7 @@ def delete_journal_voucher_api(voucher_id):
 def expense_categories_api():
     user_id = _current_user_id()
     with db.db_session() as conn:
-        db.seed_expense_accounts(conn, user_id)
-        return jsonify(db.list_accounts(conn, user_id))
+        return jsonify(db.list_khata_accounts(conn, user_id))
 
 
 # --- Accounts ---
@@ -1147,7 +1172,7 @@ def list_accounts_api():
         summary = db.accounts_summary(conn, user_id)
         dash = db.compute_dashboard(conn, user_id)
         return jsonify({
-            "accounts": db.list_accounts(conn, user_id),
+            "accounts": db.list_khata_accounts(conn, user_id),
             "summary": summary,
             "cash_in_hand": dash["cash_in_hand"],
             "total_in_bank": dash["total_in_bank"],

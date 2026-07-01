@@ -216,8 +216,8 @@
       </div>
 
       <div id="imei-section" class="border-t border-white/8 pt-4">
-        <p class="text-xs font-semibold uppercase tracking-wider text-slate-500 mb-3">IMEI Number(s)</p>
-        <p id="imei-hint" class="text-xs text-slate-600 mb-3">Optional — enter the device IMEI for tracking and invoices.</p>
+        <p class="text-xs font-semibold uppercase tracking-wider text-slate-500 mb-3">IMEI Numbers — 1 Phone = 2 IMEI</p>
+        <p id="imei-hint" class="text-xs text-slate-600 mb-3">Enter both IMEI numbers for each device (dual SIM phones).</p>
         <div id="single-imei-field">
           <div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
             <div>
@@ -228,8 +228,8 @@
               </div>
             </div>
             <div>
-              <label class="block text-xs font-medium text-slate-400 mb-1.5" for="f-imei2">IMEI 2</label>
-              <input type="text" id="f-imei2" placeholder="Second IMEI (optional)" class="input-field" inputmode="numeric" autocomplete="off">
+              <label class="block text-xs font-medium text-slate-400 mb-1.5" for="f-imei2">IMEI 2 *</label>
+              <input type="text" id="f-imei2" placeholder="Second IMEI" class="input-field" inputmode="numeric" autocomplete="off">
             </div>
           </div>
         </div>
@@ -306,11 +306,11 @@
             <input type="number" id="f-sale-price" min="0" step="1" class="input-field">
           </div>
           <div>
-            <label class="block text-xs font-medium text-slate-400 mb-1.5">Receivable Amount (Udhar)</label>
+            <label class="block text-xs font-medium text-slate-400 mb-1.5">Receivable Amount (Credit)</label>
             <input type="number" id="f-receivable" min="0" step="1" value="0" class="input-field">
           </div>
           <div class="sm:col-span-2">
-            <label class="block text-xs font-medium text-slate-400 mb-1.5">Buyer Account (for sale udhar)</label>
+            <label class="block text-xs font-medium text-slate-400 mb-1.5">Buyer Account (for sale credit)</label>
             <div id="f-buyer-account-wrap"></div>
             <p class="text-xs text-slate-600 mt-1">Required when receivable &gt; 0 — syncs to accounts &amp; cash book</p>
           </div>
@@ -634,7 +634,7 @@
                 placeholder="15-digit IMEI" inputmode="numeric" autocomplete="off">
             </div>
             <div>
-              <label class="block text-xs text-slate-500 mb-1" for="imei2-bulk-${i}">IMEI 2</label>
+              <label class="block text-xs text-slate-500 mb-1" for="imei2-bulk-${i}">IMEI 2 *</label>
               <input type="text" id="imei2-bulk-${i}" class="input-field imei2-bulk-input" data-index="${i}"
                 placeholder="Second IMEI" inputmode="numeric" autocomplete="off">
             </div>

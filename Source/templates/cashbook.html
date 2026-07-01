@@ -41,7 +41,7 @@
       <div>
         <label class="block text-xs font-medium text-slate-400 mb-1.5">Account / Category</label>
         <div id="cb-account-wrap"></div>
-        <p class="text-xs text-slate-600 mt-1">e.g. Food, Entertainment — auto-posts to Accounts</p>
+        <p class="text-xs text-slate-600 mt-1">Optional — link to a person account in khata</p>
       </div>
       <div>
         <label class="block text-xs font-medium text-slate-400 mb-1.5">Amount</label>
@@ -122,10 +122,11 @@
   document.getElementById('cb-payment').addEventListener('change', toggleCbBank);
 
   async function loadCbAccounts() {
-    cbAccounts = await apiFetch('/api/accounts/expense-categories');
+    const data = await apiFetch('/api/accounts');
+    cbAccounts = (data.accounts || []).filter(a => !a.is_expense_category);
     if (!cbAccountPicker) {
       cbAccountPicker = createSearchableAccountSelect('cb-account-wrap', {
-        placeholder: 'Search account (Food, Entertainment…)',
+        placeholder: 'Search account…',
         allowEmpty: true,
         emptyLabel: 'No Account',
       });
