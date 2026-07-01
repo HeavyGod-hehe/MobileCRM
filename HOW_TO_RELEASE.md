@@ -2,7 +2,19 @@
 
 You do **not** need to email new .exe / .app files anymore.
 
-## Your 3-step routine
+## One click (easiest)
+
+**Double-click** `Release Everything.command` on your **Desktop** (or in the `Source` folder).
+
+It automatically:
+1. Pushes your code to GitHub
+2. Starts the release build (Windows + all Mac types)
+3. Rebuilds the app on your Desktop
+4. Opens GitHub Actions so you can watch progress
+
+For a **new** version number first, double-click and pass `--bump` from Terminal, or edit `Source/VERSION` yourself.
+
+## Your 3-step routine (manual)
 
 1. **Edit one file** — open `Source/VERSION` and change the number  
    Example: `2.3.0` → `2.4.0`
