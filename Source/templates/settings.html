@@ -1,0 +1,168 @@
+{% extends "base.html" %}
+{% set active = 'settings' %}
+{% block title %}Settings — Welcome, {{ current_username }}{% endblock %}
+
+{% block content %}
+<div class="mb-8">
+  <h1 class="text-2xl font-bold text-white tracking-tight">Settings</h1>
+  <p class="text-slate-400 text-sm mt-1">Shop details, login, backups &amp; email — v<span id="app-version">2.1.0</span></p>
+</div>
+
+<div class="grid grid-cols-1 lg:grid-cols-2 gap-6 stagger">
+  <!-- Shop Details (single source of truth) -->
+  <section class="glass-card rounded-xl p-6 lg:col-span-2">
+    <div class="flex items-center gap-3 mb-5">
+      <div class="w-9 h-9 rounded-lg bg-purple-500/15 flex items-center justify-center">
+        <svg class="w-5 h-5 text-purple-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.75" d="M19 21V5a2 2 0 00-2-2H7a2 2 0 00-2 2v16m14 0h2m-2 0h-5m-9 0H3m2 0h5M9 7h1m-1 4h1m4-4h1m-1 4h1m-5 10v-5a1 1 0 011-1h2a1 1 0 011 1v5m-4 0h4"/></svg>
+      </div>
+      <div>
+        <h2 class="text-lg font-semibold text-white">Shop Details</h2>
+        <p class="text-xs text-slate-500">Name, address &amp; phones — used on invoices, nav bar &amp; WhatsApp</p>
+      </div>
+    </div>
+    <form id="shop-info-form" class="space-y-4 max-w-2xl">
+      <div>
+        <label class="block text-xs font-medium text-slate-400 mb-1.5" for="shop-info-name">Shop Name</label>
+        <input type="text" id="shop-info-name" class="input-field" placeholder="Your shop name">
+      </div>
+      <div>
+        <label class="block text-xs font-medium text-slate-400 mb-1.5" for="shop-info-address">Shop Address</label>
+        <textarea id="shop-info-address" class="input-field" rows="2" placeholder="Street, city, country"></textarea>
+      </div>
+      <div>
+        <label class="block text-xs font-medium text-slate-400 mb-1.5" for="shop-info-whatsapp">Shop WhatsApp</label>
+        <input type="tel" id="shop-info-whatsapp" class="input-field" placeholder="0300-1234567">
+      </div>
+      <div>
+        <label class="block text-xs font-medium text-slate-400 mb-1.5">Phone Numbers</label>
+        <div id="shop-phones-list" class="space-y-2"></div>
+        <button type="button" id="btn-add-phone" class="btn btn-ghost btn-sm mt-2">+ Add Phone Number</button>
+      </div>
+      <button type="submit" class="btn btn-primary">Save Shop Details</button>
+    </form>
+  </section>
+
+  <!-- Login -->
+  <section class="glass-card rounded-xl p-6">
+    <div class="flex items-center gap-3 mb-5">
+      <div class="w-9 h-9 rounded-lg bg-emerald-500/15 flex items-center justify-center">
+        <svg class="w-5 h-5 text-emerald-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.75" d="M16 7a4 4 0 11-8 0 4 4 0 018 0zM12 14a7 7 0 00-7 7h14a7 7 0 00-7-7z"/></svg>
+      </div>
+      <div>
+        <h2 class="text-lg font-semibold text-white">Login &amp; Password</h2>
+        <p class="text-xs text-slate-500">Username and password only — shop name is above</p>
+      </div>
+    </div>
+    <form id="auth-settings-form" class="space-y-4">
+      <div>
+        <label class="block text-xs font-medium text-slate-400 mb-1.5" for="settings-username">Username</label>
+        <input type="text" id="settings-username" class="input-field" autocomplete="username">
+      </div>
+      <div>
+        <label class="block text-xs font-medium text-slate-400 mb-1.5" for="settings-current-pw">Current Password</label>
+        <input type="password" id="settings-current-pw" class="input-field" placeholder="Required to save" autocomplete="current-password">
+      </div>
+      <div>
+        <label class="block text-xs font-medium text-slate-400 mb-1.5" for="settings-new-pw">New Password</label>
+        <input type="password" id="settings-new-pw" class="input-field" placeholder="Leave blank to keep" autocomplete="new-password">
+      </div>
+      <div class="flex gap-3 pt-2 border-t border-white/8">
+        <button type="submit" class="btn btn-primary flex-1">Save Login</button>
+        <a href="/logout" class="btn btn-ghost">Logout</a>
+      </div>
+    </form>
+  </section>
+
+  <!-- Email / Password reset -->
+  <section class="glass-card rounded-xl p-6">
+    <div class="flex items-center gap-3 mb-5">
+      <div class="w-9 h-9 rounded-lg bg-amber-500/15 flex items-center justify-center">
+        <svg class="w-5 h-5 text-amber-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.75" d="M3 8l7.89 5.26a2 2 0 002.22 0L21 8M5 19h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z"/></svg>
+      </div>
+      <div>
+        <h2 class="text-lg font-semibold text-white">Forgot Password Email</h2>
+        <p class="text-xs text-slate-500">Free Gmail App Password — or vendor WhatsApp fallback</p>
+      </div>
+    </div>
+    <form id="email-settings-form" class="space-y-4">
+      <div>
+        <label class="block text-xs font-medium text-slate-400 mb-1.5">Gmail Address</label>
+        <input type="email" id="settings-gmail-user" class="input-field" placeholder="yourshop@gmail.com">
+      </div>
+      <div>
+        <label class="block text-xs font-medium text-slate-400 mb-1.5">Gmail App Password</label>
+        <input type="password" id="settings-gmail-pass" class="input-field" placeholder="16-character app password">
+        <p class="text-xs text-slate-600 mt-1">Google Account → Security → 2-Step Verification → App passwords</p>
+      </div>
+      <div>
+        <label class="block text-xs font-medium text-slate-400 mb-1.5">Vendor WhatsApp (fallback)</label>
+        <input type="tel" id="settings-vendor-wa" class="input-field" placeholder="Your support number">
+      </div>
+      <div>
+        <label class="block text-xs font-medium text-slate-400 mb-1.5">Vendor reset message</label>
+        <textarea id="settings-vendor-note" class="input-field" rows="2"></textarea>
+      </div>
+      <button type="submit" class="btn btn-primary">Save Email Settings</button>
+    </form>
+  </section>
+
+  <!-- Data Storage -->
+  <section class="glass-card rounded-xl p-6 lg:col-span-2">
+    <div class="flex items-center gap-3 mb-5">
+      <div class="w-9 h-9 rounded-lg bg-blue-500/15 flex items-center justify-center">
+        <svg class="w-5 h-5 text-blue-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.75" d="M4 7v10c0 2.21 3.582 4 8 4s8-1.79 8-4V7M4 7c0 2.21 3.582 4 8 4s8-1.79 8-4M4 7c0-2.21 3.582-4 8-4s8 1.79 8 4"/></svg>
+      </div>
+      <div>
+        <h2 class="text-lg font-semibold text-white">Backup &amp; Restore</h2>
+        <p class="text-xs text-slate-500">Auto-backup every hour + restore from a previous backup</p>
+      </div>
+    </div>
+    <form id="storage-settings-form" class="space-y-4 max-w-2xl">
+      <div>
+        <label class="block text-xs font-medium text-slate-400 mb-1.5">Database Location</label>
+        <div id="settings-db-path" class="input-field text-slate-300 bg-slate-900/60 font-mono text-xs break-all cursor-default">Loading…</div>
+      </div>
+      <div>
+        <label class="block text-xs font-medium text-slate-400 mb-1.5" for="settings-backup-path">Local Backup Folder</label>
+        <div class="flex gap-2">
+          <input type="text" id="settings-backup-path" class="input-field font-mono text-sm flex-1" placeholder="/Users/you/CRM Backups">
+          <button type="button" id="btn-browse-backup" class="btn btn-ghost shrink-0">Browse</button>
+        </div>
+      </div>
+      <div class="flex items-center justify-between gap-4 p-4 rounded-xl border border-white/8 bg-slate-900/40">
+        <div>
+          <p class="text-sm font-medium text-white">Auto Backup Every Hour</p>
+          <p id="settings-last-backup" class="text-xs text-emerald-400/80 mt-1">Last backup: never</p>
+        </div>
+        <label class="toggle-switch shrink-0">
+          <input type="checkbox" id="settings-auto-backup" checked>
+          <span class="toggle-slider"></span>
+        </label>
+      </div>
+      <div class="flex flex-wrap gap-3 pt-2 border-t border-white/8">
+        <button type="submit" class="btn btn-primary">Save Backup Settings</button>
+        <button type="button" id="btn-backup-now" class="btn btn-primary">Save Data Now</button>
+        <button type="button" id="btn-export-backup" class="btn btn-ghost">Export JSON</button>
+      </div>
+    </form>
+
+    <div class="mt-6 pt-6 border-t border-white/8 max-w-2xl">
+      <h3 class="text-sm font-semibold text-white mb-3">Restore from Backup</h3>
+      <p class="text-xs text-slate-500 mb-3">Select a backup file from your backup folder. You will be logged out and must sign in again.</p>
+      <div class="flex gap-2 flex-wrap">
+        <select id="restore-backup-select" class="input-field flex-1 min-w-[200px] text-sm">
+          <option value="">— Select backup file —</option>
+        </select>
+        <button type="button" id="btn-restore-backup" class="btn btn-ghost text-red-400 border-red-500/30">Restore</button>
+        <button type="button" id="btn-refresh-backups" class="btn btn-ghost btn-sm">Refresh list</button>
+      </div>
+    </div>
+  </section>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+  initSettingsPage();
+</script>
+{% endblock %}

@@ -1,0 +1,14 @@
+# Python
+Source/venv/
+**/__pycache__/
+*.pyc
+
+# macOS
+.DS_Store
+
+# PyInstaller build cache (Customer Copy/ has the shipped app)
+Source/build/
+Source/dist/
+Source/Phone Reseller CRM.app/
+
+# Note: crm.db and Customer Copy/ are intentionally tracked (requested)

@@ -1,0 +1,28 @@
+╔══════════════════════════════════════════════════════════════╗
+║     PHONE RESELLER CRM — USE THIS FOLDER (RECOMMENDED)       ║
+╚══════════════════════════════════════════════════════════════╝
+
+Location:  ~/Phone Reseller CRM
+           (in your home folder — avoids macOS Documents permission errors)
+
+HOW TO START (macOS)
+────────────────────
+  → Double-click:  Start Phone Reseller CRM.command
+
+  Browser opens at:  http://localhost:5050
+
+DO NOT double-click app.py — that opens source code in an editor.
+
+HOW TO START (Windows)
+──────────────────────
+  → Double-click:  Start Phone Reseller CRM.bat
+
+FIRST TIME
+──────────
+  1. Enter activation license key (from your vendor)
+  2. Create shop login account
+  3. Settings → set backup folder → Save Data Now
+
+Your data is saved in crm.db in this folder.
+
+If the Documents copy gives "Operation not permitted" — use THIS folder instead.

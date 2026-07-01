@@ -1,0 +1,26 @@
+Phone Reseller CRM — Customer Edition v2.1 (Mac)
+================================================
+
+NO Python or source code — everything is inside the app.
+
+HOW TO START
+────────────
+  1. Double-click:  Phone Reseller CRM.app
+  2. Browser opens at http://localhost:5050
+
+FIRST TIME
+──────────
+  • Activation: copy Hardware ID → get key from vendor → Activate
+  • Sign up with username, password & email
+  • Settings → Shop Details (one place for name, address, WhatsApp)
+  • Settings → Backup folder → enable auto-backup
+
+FEATURES (v2.1)
+───────────────
+  • Today — daily sales & cash at a glance
+  • Billing — print invoice + WhatsApp receipt
+  • Help — where to put cash, udhar, bank entries
+  • Month Report — print sales & profit summary
+  • Restore from backup in Settings
+
+Support: contact your CRM vendor.

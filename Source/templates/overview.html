@@ -1,0 +1,380 @@
+{% extends "base.html" %}
+{% set active = 'overview' %}
+{% block title %}Overview — Welcome, {{ current_username }}{% endblock %}
+
+{% block content %}
+<div class="mb-8 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
+  <div>
+    <h1 class="text-2xl font-bold text-white tracking-tight">Overview</h1>
+    <p class="text-slate-400 text-sm mt-1">Financial reconciliation &amp; monthly performance</p>
+  </div>
+  <div class="flex gap-2">
+    <button onclick="exportBackup()" class="btn btn-ghost btn-sm no-print">Export Backup</button>
+    <button id="btn-partner-settings" class="btn btn-ghost btn-sm no-print">Partner Settings</button>
+  </div>
+</div>
+
+<section class="mb-8 stagger">
+  <h2 class="text-xs font-semibold uppercase tracking-wider text-slate-500 mb-4">Financial Reconciliation</h2>
+
+  <!-- Partner Capital -->
+  <div class="glass-card rounded-xl p-5 mb-4">
+    <div class="flex items-center justify-between mb-4">
+      <p class="text-xs font-semibold uppercase tracking-wider text-slate-500">Business Partners</p>
+      <button id="btn-add-partner" class="btn btn-primary btn-sm">+ Add Partner</button>
+    </div>
+    <div id="partners-list" class="space-y-2"></div>
+  </div>
+
+  <!-- Bank vs Cash Split -->
+  <div class="grid grid-cols-1 sm:grid-cols-2 gap-4 mb-4">
+    <div class="hero-card rounded-2xl p-6">
+      <p class="text-emerald-400/90 text-sm font-medium mb-2 flex items-center gap-2">
+        <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 10h18M7 15h1m4 0h1m-7 4h12a3 3 0 003-3V8a3 3 0 00-3-3H6a3 3 0 00-3 3v8a3 3 0 003 3z"/></svg>
+        Total in Bank
+      </p>
+      <p id="total-in-bank" class="text-3xl font-bold text-white num-animate" data-value="0">—</p>
+    </div>
+    <div class="hero-card rounded-2xl p-6" style="border-color: rgba(251,191,36,0.25); box-shadow: 0 0 40px -8px rgba(251,191,36,0.2);">
+      <p class="text-amber-400/90 text-sm font-medium mb-2 flex items-center gap-2">
+        <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M17 9V7a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2m2 4h10a2 2 0 002-2v-6a2 2 0 00-2-2H9a2 2 0 00-2 2v6a2 2 0 002 2zm7-5a2 2 0 11-4 0 2 2 0 014 0z"/></svg>
+        Total in Cash
+      </p>
+      <p id="total-in-cash" class="text-3xl font-bold text-white num-animate" data-value="0">—</p>
+    </div>
+  </div>
+
+  <div class="hero-card rounded-2xl p-7 mb-4">
+    <p class="text-emerald-400/90 text-sm font-medium mb-2 flex items-center gap-2">
+      <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 10h18M7 15h1m4 0h1m-7 4h12a3 3 0 003-3V8a3 3 0 00-3-3H6a3 3 0 00-3 3v8a3 3 0 003 3z"/></svg>
+      Expected Bank Balance
+    </p>
+    <p id="expected-balance" class="text-4xl sm:text-5xl font-bold text-white tracking-tight num-animate" data-value="0">—</p>
+    <p class="text-slate-400/80 text-xs mt-3">Synced with aggregate bank account totals</p>
+  </div>
+
+  <div class="grid grid-cols-2 lg:grid-cols-4 gap-3">
+    <div class="stat-card p-4">
+      <p class="text-xs text-slate-500 uppercase tracking-wide font-medium">Total Investment</p>
+      <p id="total-investment" class="text-xl font-bold mt-2 num-animate" data-value="0">—</p>
+    </div>
+    <div class="stat-card p-4">
+      <p class="text-xs text-slate-500 uppercase tracking-wide font-medium">Udhar (Receivable)</p>
+      <p id="total-udhar" class="text-xl font-bold mt-2 text-amber-400 num-animate" data-value="0">—</p>
+    </div>
+    <div class="stat-card p-4 cursor-pointer glass-card-interactive" id="active-stock-card" onclick="showActiveStockModal()">
+      <p class="text-xs text-slate-500 uppercase tracking-wide font-medium">Active Stock Worth</p>
+      <p id="active-stock" class="text-xl font-bold mt-2 text-blue-400 num-animate" data-value="0">—</p>
+      <p class="text-xs text-slate-600 mt-1">Click to view inventory &amp; receivables</p>
+    </div>
+    <div class="stat-card p-4">
+      <p class="text-xs text-slate-500 uppercase tracking-wide font-medium">Payable (You Owe)</p>
+      <p id="total-payable" class="text-xl font-bold mt-2 text-red-400 num-animate" data-value="0">—</p>
+      <p class="text-xs text-slate-600 mt-1">Synced with Accounts → Payable</p>
+    </div>
+  </div>
+</section>
+
+<!-- Fixed Expenses -->
+<section class="mb-8 stagger">
+  <h2 class="text-xs font-semibold uppercase tracking-wider text-slate-500 mb-4">Fixed Expenses</h2>
+  <div class="glass-card rounded-xl p-5">
+    <form id="fixed-expense-form" class="grid grid-cols-1 sm:grid-cols-3 gap-3 mb-4">
+      <div class="sm:col-span-2">
+        <label class="block text-xs font-medium text-slate-400 mb-1.5">Purpose</label>
+        <input type="text" id="fe-purpose" required placeholder="e.g. Shop rent, utilities" class="input-field">
+      </div>
+      <div>
+        <label class="block text-xs font-medium text-slate-400 mb-1.5">Amount</label>
+        <input type="number" id="fe-amount" required min="1" step="1" class="input-field" placeholder="0">
+      </div>
+      <div class="sm:col-span-3">
+        <button type="submit" class="btn btn-primary btn-sm">Add Fixed Expense</button>
+      </div>
+    </form>
+    <div id="fixed-expenses-list" class="space-y-2"></div>
+  </div>
+</section>
+
+<section class="stagger">
+  <h2 class="text-xs font-semibold uppercase tracking-wider text-slate-500 mb-4">
+    Monthly Metrics — <span id="month-label" class="text-slate-300">—</span>
+  </h2>
+  <div class="grid grid-cols-2 lg:grid-cols-4 gap-3">
+    <div class="stat-card glass-card-interactive p-5">
+      <p class="text-xs text-slate-500 uppercase tracking-wide font-medium">Units Sold</p>
+      <p id="units-sold" class="text-3xl font-bold mt-2 num-animate" data-value="0">—</p>
+    </div>
+    <div class="stat-card glass-card-interactive p-5">
+      <p class="text-xs text-slate-500 uppercase tracking-wide font-medium">Net Profit</p>
+      <p id="monthly-profit" class="text-3xl font-bold mt-2 text-emerald-400 num-animate" data-value="0">—</p>
+    </div>
+    <div class="stat-card glass-card-interactive p-5">
+      <p class="text-xs text-slate-500 uppercase tracking-wide font-medium">Profit Margin</p>
+      <p id="profit-margin" class="text-3xl font-bold mt-2">—</p>
+    </div>
+    <div class="stat-card glass-card-interactive p-5">
+      <p class="text-xs text-slate-500 uppercase tracking-wide font-medium">Top Model</p>
+      <p id="top-model" class="text-lg font-semibold mt-2 truncate text-white">—</p>
+    </div>
+  </div>
+</section>
+
+<!-- Partner Modal -->
+<div id="partner-overlay" class="modal-overlay"></div>
+<div id="partner-modal" class="modal-wrap">
+  <div class="modal-panel">
+    <div class="p-6 border-b border-white/8 flex items-center justify-between">
+      <h3 id="partner-modal-title" class="text-lg font-semibold text-white">Add Partner</h3>
+      <button type="button" id="partner-cancel-x" class="btn btn-ghost btn-icon text-slate-400">
+        <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/></svg>
+      </button>
+    </div>
+    <form id="partner-form" class="p-6 space-y-4">
+      <input type="hidden" id="partner-id">
+      <div>
+        <label class="block text-xs font-medium text-slate-400 mb-1.5">Partner Name *</label>
+        <input type="text" id="partner-name" required class="input-field">
+      </div>
+      <div>
+        <label class="block text-xs font-medium text-slate-400 mb-1.5">Starting Capital</label>
+        <input type="number" id="partner-capital" min="0" step="1" value="0" class="input-field">
+      </div>
+      <div class="flex gap-3">
+        <button type="submit" class="btn btn-primary flex-1">Save</button>
+        <button type="button" id="partner-cancel" class="btn btn-ghost">Cancel</button>
+      </div>
+    </form>
+  </div>
+</div>
+
+<!-- Partner Settings Modal -->
+<div id="ps-overlay" class="modal-overlay"></div>
+<div id="ps-modal" class="modal-wrap">
+  <div class="modal-panel">
+    <div class="p-6 border-b border-white/8 flex items-center justify-between">
+      <h3 class="text-lg font-semibold text-white">Partner Customization</h3>
+      <button type="button" id="ps-cancel-x" class="btn btn-ghost btn-icon text-slate-400">
+        <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/></svg>
+      </button>
+    </div>
+    <div id="ps-partners-list" class="p-6 space-y-3 max-h-[60vh] overflow-y-auto"></div>
+  </div>
+</div>
+
+<!-- Active Stock Modal -->
+<div id="stock-overlay" class="modal-overlay"></div>
+<div id="stock-modal" class="modal-wrap">
+  <div class="modal-panel modal-panel-wide">
+    <div class="p-6 border-b border-white/8 flex items-center justify-between">
+      <h3 class="text-lg font-semibold text-white">Active Stock &amp; Receivables</h3>
+      <button type="button" onclick="closeModal('stock-overlay','stock-modal')" class="btn btn-ghost btn-icon text-slate-400">
+        <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/></svg>
+      </button>
+    </div>
+    <div class="p-6 split-view">
+      <div>
+        <h4 class="text-sm font-semibold text-blue-300 mb-3">Physical Inventory</h4>
+        <div id="stock-inventory-list" class="space-y-2 max-h-[50vh] overflow-y-auto"></div>
+      </div>
+      <div>
+        <h4 class="text-sm font-semibold text-amber-300 mb-3">Payment Receivables</h4>
+        <div id="stock-receivables-list" class="space-y-2 max-h-[50vh] overflow-y-auto"></div>
+      </div>
+    </div>
+  </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+  let overviewData = null;
+  let partners = [];
+
+  async function loadOverview() {
+    const data = await apiFetch('/api/overview');
+    overviewData = data;
+    const s = data.summary, m = data.monthly;
+    partners = s.partners || [];
+
+    renderPartners();
+    animateValue(document.getElementById('total-in-bank'), s.total_in_bank, fmt, 800);
+    animateValue(document.getElementById('total-in-cash'), s.total_in_cash, fmt, 800);
+    animateValue(document.getElementById('expected-balance'), s.expected_cash_balance, fmt, 800);
+    animateValue(document.getElementById('total-investment'), s.total_investment, fmt);
+    animateValue(document.getElementById('total-udhar'), s.total_udhar, fmt);
+    animateValue(document.getElementById('active-stock'), s.active_stock_worth, fmt);
+    animateValue(document.getElementById('total-payable'), s.accounts_payable ?? s.total_payables, fmt);
+    document.getElementById('month-label').textContent = m.month_label;
+    animateValue(document.getElementById('units-sold'), m.units_sold, n => n, 500);
+    animateValue(document.getElementById('monthly-profit'), m.total_profit, fmt);
+    document.getElementById('profit-margin').textContent = m.profit_margin + '%';
+    document.getElementById('top-model').textContent = m.top_model;
+
+    if (s.theme) applyTheme(s.theme);
+    renderFixedExpenses(data.fixed_expenses || []);
+  }
+
+  function renderPartners() {
+    const el = document.getElementById('partners-list');
+    if (!partners.length) {
+      el.innerHTML = '<p class="text-slate-500 text-sm">No partners yet — click + Add Partner</p>';
+      return;
+    }
+    el.innerHTML = partners.map(p => `
+      <div class="list-item-row">
+        <div>
+          <p class="font-semibold text-white">${esc(p.name)}</p>
+          <p class="text-xs text-slate-500">Invested Capital</p>
+        </div>
+        <div class="flex items-center gap-2 flex-wrap justify-end">
+          <input type="number" value="${p.capital}" min="0" step="1"
+            onchange="updatePartnerCapital(${p.id}, this.value)"
+            class="input-field w-32 text-right text-emerald-400 font-semibold">
+          <button onclick="editPartner(${p.id})" class="action-pill edit">Edit</button>
+          <button onclick="deletePartner(${p.id})" class="action-pill delete">Delete</button>
+        </div>
+      </div>`).join('');
+  }
+
+  window.deletePartner = async (id) => {
+    const p = partners.find(x => x.id === id);
+    if (!confirm(`Delete partner "${p?.name || 'this partner'}"? Their investment records on phones will also be removed.`)) return;
+    await apiFetch(`/api/partners/${id}`, { method: 'DELETE' });
+    toast('Partner deleted');
+    loadOverview();
+  };
+
+  async function updatePartnerCapital(id, capital) {
+    await apiFetch(`/api/partners/${id}`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ capital }),
+    });
+    toast('Capital updated');
+    loadOverview();
+  }
+
+  function renderFixedExpenses(expenses) {
+    const el = document.getElementById('fixed-expenses-list');
+    if (!expenses.length) {
+      el.innerHTML = '<p class="text-slate-500 text-sm">No fixed expenses logged yet</p>';
+      return;
+    }
+    el.innerHTML = expenses.map(e => `
+      <div class="list-item-row">
+        <div>
+          <p class="font-medium text-white">${esc(e.purpose)}</p>
+          <p class="text-xs text-slate-500">${e.created_at ? e.created_at.slice(0, 10) : ''}</p>
+        </div>
+        <div class="flex items-center gap-2">
+          <span class="font-bold text-red-400">${fmt(e.amount)}</span>
+          <button onclick="deleteFixedExpense(${e.id})" class="action-pill delete">Delete</button>
+        </div>
+      </div>`).join('');
+  }
+
+  window.showActiveStockModal = () => {
+    if (!overviewData) return;
+    const s = overviewData.summary;
+    const inv = s.active_inventory || [];
+    const recv = s.active_receivables || [];
+    document.getElementById('stock-inventory-list').innerHTML = inv.length ? inv.map(p => `
+      <div class="list-item-row text-sm">
+        <span class="text-white font-medium">${esc(p.model)}</span>
+        <span class="text-blue-400">${fmt(p.purchase_price)}</span>
+      </div>`).join('') : '<p class="text-slate-500 text-sm">No active inventory</p>';
+    document.getElementById('stock-receivables-list').innerHTML = recv.length ? recv.map(r => `
+      <div class="list-item-row text-sm">
+        <span class="text-white font-medium">${esc(r.model)}</span>
+        <span class="text-amber-400">${fmt(r.receivable_amount)}</span>
+      </div>`).join('') : '<p class="text-slate-500 text-sm">No outstanding receivables</p>';
+    openModal('stock-overlay', 'stock-modal');
+  };
+
+  window.deleteFixedExpense = async (id) => {
+    if (!confirm('Delete this fixed expense?')) return;
+    await apiFetch(`/api/fixed-expenses/${id}`, { method: 'DELETE' });
+    toast('Fixed expense deleted');
+    loadOverview();
+  };
+
+  window.editPartner = (id) => {
+    const p = partners.find(x => x.id === id);
+    if (!p) return;
+    document.getElementById('partner-modal-title').textContent = 'Edit Partner';
+    document.getElementById('partner-id').value = p.id;
+    document.getElementById('partner-name').value = p.name;
+    document.getElementById('partner-capital').value = p.capital;
+    openModal('partner-overlay', 'partner-modal');
+  };
+
+  document.getElementById('btn-add-partner').addEventListener('click', () => {
+    document.getElementById('partner-form').reset();
+    document.getElementById('partner-id').value = '';
+    document.getElementById('partner-modal-title').textContent = 'Add Partner';
+    openModal('partner-overlay', 'partner-modal');
+  });
+
+  document.getElementById('partner-cancel').addEventListener('click', () => closeModal('partner-overlay', 'partner-modal'));
+  document.getElementById('partner-cancel-x').addEventListener('click', () => closeModal('partner-overlay', 'partner-modal'));
+  document.getElementById('partner-overlay').addEventListener('click', () => closeModal('partner-overlay', 'partner-modal'));
+
+  document.getElementById('partner-form').addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const id = document.getElementById('partner-id').value;
+    const payload = {
+      name: document.getElementById('partner-name').value,
+      capital: document.getElementById('partner-capital').value,
+    };
+    await apiFetch(id ? `/api/partners/${id}` : '/api/partners', {
+      method: id ? 'PUT' : 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    });
+    closeModal('partner-overlay', 'partner-modal');
+    toast(id ? 'Partner updated' : 'Partner added');
+    loadOverview();
+  });
+
+  document.getElementById('btn-partner-settings').addEventListener('click', () => {
+    document.getElementById('ps-partners-list').innerHTML = partners.map(p => `
+      <div class="flex gap-2 items-center">
+        <input type="text" value="${esc(p.name)}" id="ps-name-${p.id}" class="input-field flex-1">
+        <button onclick="savePartnerName(${p.id})" class="btn btn-primary btn-sm">Save</button>
+        <button onclick="deletePartner(${p.id}); closeModal('ps-overlay','ps-modal');" class="action-pill delete">Delete</button>
+      </div>`).join('') || '<p class="text-slate-500 text-sm">No partners</p>';
+    openModal('ps-overlay', 'ps-modal');
+  });
+  document.getElementById('ps-cancel-x').addEventListener('click', () => closeModal('ps-overlay', 'ps-modal'));
+  document.getElementById('ps-overlay').addEventListener('click', () => closeModal('ps-overlay', 'ps-modal'));
+
+  window.savePartnerName = async (id) => {
+    const name = document.getElementById(`ps-name-${id}`).value;
+    await apiFetch(`/api/partners/${id}`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name }),
+    });
+    toast('Partner name updated');
+    loadOverview();
+  };
+
+  document.getElementById('fixed-expense-form').addEventListener('submit', async (e) => {
+    e.preventDefault();
+    await apiFetch('/api/fixed-expenses', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        purpose: document.getElementById('fe-purpose').value,
+        amount: document.getElementById('fe-amount').value,
+      }),
+    });
+    document.getElementById('fixed-expense-form').reset();
+    toast('Fixed expense added');
+    loadOverview();
+  });
+
+  loadOverview();
+</script>
+{% endblock %}

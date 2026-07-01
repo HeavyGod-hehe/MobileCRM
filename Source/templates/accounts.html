@@ -1,0 +1,686 @@
+{% extends "base.html" %}
+{% set active = 'accounts' %}
+{% block title %}Accounts — Welcome, {{ current_username }}{% endblock %}
+
+{% block content %}
+<div class="flex flex-col lg:flex-row gap-6">
+
+  <!-- Sidebar -->
+  <div class="lg:w-80 shrink-0 no-print">
+    <div class="flex items-center justify-between mb-5">
+      <div>
+        <h1 class="text-2xl font-bold text-white tracking-tight">Accounts</h1>
+        <p class="text-slate-400 text-sm mt-1">Credit &amp; debit khata book</p>
+      </div>
+      <button id="btn-new-account" class="btn btn-primary btn-sm">+ New</button>
+    </div>
+
+    <!-- Cash in Hand -->
+    <div class="stat-card p-4 mb-4 border-amber-500/30 hero-card" style="border-radius: 1rem;">
+      <p class="text-xs text-amber-400/90 font-semibold uppercase tracking-wide">Cash in Hand</p>
+      <p id="cash-in-hand" class="text-2xl font-bold text-white mt-1 num-animate" data-value="0">—</p>
+    </div>
+
+    <div class="grid grid-cols-2 lg:grid-cols-1 gap-2 mb-4 stagger">
+      <div class="stat-card p-4 border-emerald-500/20">
+        <p class="text-xs text-slate-500 font-medium">You'll Receive</p>
+        <p id="sum-receivable" class="text-xl font-bold text-emerald-400 mt-1 num-animate" data-value="0">—</p>
+      </div>
+      <div class="stat-card p-4 border-red-500/20">
+        <p class="text-xs text-slate-500 font-medium">You'll Give</p>
+        <p id="sum-payable" class="text-xl font-bold text-red-400 mt-1 num-animate" data-value="0">—</p>
+      </div>
+    </div>
+
+    <div class="relative mb-3">
+      <svg class="w-4 h-4 absolute left-3 top-1/2 -translate-y-1/2 text-slate-500 pointer-events-none" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"/></svg>
+      <input type="text" id="account-search" placeholder="Search people…" class="input-field pl-9 text-sm">
+    </div>
+
+    <div id="account-list" class="space-y-2 max-h-[40vh] overflow-y-auto pr-1"></div>
+    <div id="empty-accounts" class="hidden empty-state">No accounts yet — add someone to start</div>
+
+    <!-- Bank Accounts -->
+    <div class="mt-6">
+      <div class="flex items-center justify-between mb-3">
+        <p class="text-xs font-semibold uppercase tracking-wider text-slate-500">Bank Accounts</p>
+        <button id="btn-new-bank" class="btn btn-primary btn-sm">+ Bank</button>
+      </div>
+      <p class="text-xs text-slate-600 mb-2">Total in Bank: <span id="total-in-bank" class="text-emerald-400 font-bold">—</span></p>
+      <div id="bank-list" class="space-y-2 max-h-[30vh] overflow-y-auto"></div>
+    </div>
+  </div>
+
+  <!-- Main Panel -->
+  <div class="flex-1 min-w-0">
+    <!-- Bank Ledger Panel -->
+    <div id="bank-panel" class="hidden panel-fade-in mb-6">
+      <div class="flex flex-col sm:flex-row sm:items-start sm:justify-between gap-4 mb-5 no-print">
+        <div>
+          <h2 id="bank-name" class="text-xl font-bold text-white"></h2>
+          <p id="bank-balance" class="text-2xl font-bold mt-2 text-emerald-400"></p>
+        </div>
+        <div class="flex gap-2">
+          <button id="btn-edit-bank" class="btn btn-ghost btn-sm">Edit</button>
+          <button id="btn-delete-bank" class="btn btn-danger btn-sm">Delete</button>
+          <button onclick="showAccountPlaceholder()" class="btn btn-ghost btn-sm">← Khata</button>
+        </div>
+      </div>
+      <div class="glass-card rounded-xl p-5 mb-4 no-print">
+        <p class="text-xs font-semibold uppercase tracking-wider text-slate-500 mb-4">Bank Transaction</p>
+        <form id="bank-tx-form" class="grid grid-cols-1 sm:grid-cols-4 gap-3">
+          <div>
+            <label class="block text-xs font-medium text-slate-400 mb-1.5">Type</label>
+            <select id="bt-type" class="input-field">
+              <option value="credit">Credit (Deposit)</option>
+              <option value="debit">Debit (Withdrawal)</option>
+            </select>
+          </div>
+          <div>
+            <label class="block text-xs font-medium text-slate-400 mb-1.5">Amount</label>
+            <input type="number" id="bt-amount" required min="1" step="1" class="input-field">
+          </div>
+          <div class="sm:col-span-2">
+            <label class="block text-xs font-medium text-slate-400 mb-1.5">Note</label>
+            <input type="text" id="bt-note" class="input-field" placeholder="Transaction note">
+          </div>
+          <div class="sm:col-span-4">
+            <button type="submit" class="btn btn-primary btn-sm">Add Transaction</button>
+          </div>
+        </form>
+      </div>
+      <div class="section-panel">
+        <div class="overflow-x-auto">
+          <table class="w-full text-sm">
+            <thead>
+              <tr class="text-slate-500 text-left text-xs uppercase tracking-wider">
+                <th class="px-4 py-3 font-medium">Date</th>
+                <th class="px-4 py-3 font-medium">Type</th>
+                <th class="px-4 py-3 font-medium">Note</th>
+                <th class="px-4 py-3 text-right font-medium">Amount</th>
+                <th class="px-4 py-3 text-right font-medium">Balance</th>
+                <th class="px-4 py-3 text-right font-medium no-print">Actions</th>
+              </tr>
+            </thead>
+            <tbody id="bank-tx-body" class="divide-y divide-white/5"></tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+
+    <!-- Khata Ledger Panel -->
+    <div id="ledger-placeholder" class="glass-card rounded-2xl p-16 text-center">
+      <div class="w-16 h-16 rounded-2xl bg-slate-800/80 border border-white/8 flex items-center justify-center mx-auto mb-4">
+        <svg class="w-8 h-8 text-slate-600" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"/></svg>
+      </div>
+      <p class="text-slate-400 text-sm">Select a person or bank account<br><span class="text-slate-600 text-xs">to view their ledger</span></p>
+      <div class="max-w-sm mx-auto mt-6 text-left">
+        <label class="block text-xs font-medium text-slate-400 mb-1.5">Search &amp; open account</label>
+        <div id="account-jump-picker"></div>
+      </div>
+    </div>
+
+    <div id="ledger-panel" class="hidden panel-fade-in">
+      <div class="flex flex-col sm:flex-row sm:items-start sm:justify-between gap-4 mb-5 no-print">
+        <div>
+          <h2 id="ledger-name" class="text-xl font-bold text-white"></h2>
+          <p id="ledger-contact" class="text-slate-400 text-sm mt-0.5"></p>
+          <p id="ledger-balance" class="text-2xl font-bold mt-3"></p>
+        </div>
+        <div class="flex flex-wrap gap-2">
+          <button id="btn-print" class="btn btn-ghost btn-sm">Print</button>
+          <button id="btn-whatsapp-ledger" class="btn btn-ghost btn-sm" style="color:#25d366">WhatsApp</button>
+          <button id="btn-export" class="btn btn-ghost btn-sm">Export</button>
+          <button id="btn-edit-account" class="btn btn-ghost btn-sm">Edit</button>
+          <button id="btn-delete-account" class="btn btn-danger btn-sm">Delete</button>
+        </div>
+      </div>
+
+      <div class="glass-card rounded-xl p-5 mb-4 no-print">
+        <p class="text-xs font-semibold uppercase tracking-wider text-slate-500 mb-4">Quick Entry</p>
+        <form id="entry-form" class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
+          <div>
+            <label class="block text-xs font-medium text-slate-400 mb-1.5">Type *</label>
+            <select id="e-type" required class="input-field">
+              <option value="credit">Credit (Udhar)</option>
+              <option value="debit">Payment (Wasool)</option>
+            </select>
+          </div>
+          <div>
+            <label class="block text-xs font-medium text-slate-400 mb-1.5">Amount *</label>
+            <input type="number" id="e-amount" required min="1" step="1" class="input-field" placeholder="0">
+          </div>
+          <div class="sm:col-span-2">
+            <label class="block text-xs font-medium text-slate-400 mb-1.5">Note</label>
+            <input type="text" id="e-note" placeholder="e.g. iPhone 13 sale" class="input-field">
+          </div>
+          <div class="sm:col-span-2 lg:col-span-4">
+            <button type="submit" id="btn-add-entry" class="btn btn-primary">Add Entry</button>
+          </div>
+        </form>
+      </div>
+
+      <div id="print-area" class="print-area section-panel">
+        <div class="hidden print:block p-4 border-b border-gray-300">
+          <h2 id="print-title" class="text-xl font-bold text-black"></h2>
+          <p id="print-subtitle" class="text-sm text-gray-600"></p>
+        </div>
+        <div class="overflow-x-auto">
+          <table class="w-full text-sm">
+            <thead>
+              <tr class="text-slate-500 text-left text-xs uppercase tracking-wider border-b border-white/5">
+                <th class="px-4 py-3 font-medium">Date</th>
+                <th class="px-4 py-3 font-medium">Type</th>
+                <th class="px-4 py-3 font-medium">Note</th>
+                <th class="px-4 py-3 text-right font-medium">Credit</th>
+                <th class="px-4 py-3 text-right font-medium">Payment</th>
+                <th class="px-4 py-3 text-right font-medium">Balance</th>
+                <th class="px-4 py-3 text-right font-medium no-print">Actions</th>
+              </tr>
+            </thead>
+            <tbody id="entries-body" class="divide-y divide-white/5"></tbody>
+          </table>
+        </div>
+        <div id="empty-entries" class="hidden empty-state">No entries yet — add one above</div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- Account Modal -->
+<div id="acct-overlay" class="modal-overlay"></div>
+<div id="acct-modal" class="modal-wrap">
+  <div class="modal-panel">
+    <div class="p-6 border-b border-white/8 flex items-center justify-between">
+      <h3 id="acct-modal-title" class="text-lg font-semibold text-white">New Account</h3>
+      <button type="button" id="acct-cancel-x" class="btn btn-ghost btn-icon text-slate-400">
+        <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/></svg>
+      </button>
+    </div>
+    <form id="acct-form" class="p-6 space-y-4">
+      <input type="hidden" id="acct-id">
+      <div>
+        <label class="block text-xs font-medium text-slate-400 mb-1.5">Name *</label>
+        <input type="text" id="acct-name" required class="input-field">
+      </div>
+      <div>
+        <label class="block text-xs font-medium text-slate-400 mb-1.5">Contact</label>
+        <input type="text" id="acct-contact" class="input-field">
+      </div>
+      <div class="flex gap-3 pt-1">
+        <button type="submit" class="btn btn-primary flex-1">Save</button>
+        <button type="button" id="acct-cancel" class="btn btn-ghost">Cancel</button>
+      </div>
+    </form>
+  </div>
+</div>
+
+<!-- Bank Modal -->
+<div id="bank-overlay" class="modal-overlay"></div>
+<div id="bank-modal" class="modal-wrap">
+  <div class="modal-panel">
+    <div class="p-6 border-b border-white/8 flex items-center justify-between">
+      <h3 id="bank-modal-title" class="text-lg font-semibold text-white">New Bank Account</h3>
+      <button type="button" id="bank-cancel-x" class="btn btn-ghost btn-icon text-slate-400">
+        <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/></svg>
+      </button>
+    </div>
+    <form id="bank-form" class="p-6 space-y-4">
+      <input type="hidden" id="bank-id">
+      <div>
+        <label class="block text-xs font-medium text-slate-400 mb-1.5">Bank Name *</label>
+        <input type="text" id="bank-name-input" required class="input-field" placeholder="e.g. HBL, Meezan">
+      </div>
+      <div id="bank-initial-field">
+        <label class="block text-xs font-medium text-slate-400 mb-1.5">Opening Balance</label>
+        <input type="number" id="bank-initial" min="0" step="1" value="0" class="input-field">
+      </div>
+      <div class="flex gap-3">
+        <button type="submit" class="btn btn-primary flex-1">Save</button>
+        <button type="button" id="bank-cancel" class="btn btn-ghost">Cancel</button>
+      </div>
+    </form>
+  </div>
+</div>
+
+<!-- Entry Edit Modal -->
+<div id="entry-edit-overlay" class="modal-overlay"></div>
+<div id="entry-edit-modal" class="modal-wrap">
+  <div class="modal-panel">
+    <div class="modal-header">
+      <h3 class="text-lg font-semibold text-white">Edit Entry</h3>
+      <button type="button" id="entry-edit-close-x" class="btn btn-ghost btn-icon text-slate-400" aria-label="Close">
+        <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/></svg>
+      </button>
+    </div>
+    <form id="entry-edit-form" class="p-6 space-y-4">
+      <input type="hidden" id="edit-entry-id">
+      <div>
+        <label class="block text-xs font-medium text-slate-400 mb-1.5">Type</label>
+        <select id="edit-e-type" class="input-field">
+          <option value="credit">Credit (Udhar)</option>
+          <option value="debit">Payment (Wasool)</option>
+        </select>
+      </div>
+      <div>
+        <label class="block text-xs font-medium text-slate-400 mb-1.5">Amount</label>
+        <input type="number" id="edit-e-amount" required min="1" step="1" class="input-field">
+      </div>
+      <div>
+        <label class="block text-xs font-medium text-slate-400 mb-1.5">Note</label>
+        <input type="text" id="edit-e-note" class="input-field">
+      </div>
+      <button type="submit" class="btn btn-primary w-full">Save Changes</button>
+    </form>
+  </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+  let accounts = [];
+  let banks = [];
+  let shopInfo = {};
+  let selectedId = null;
+  let selectedBankId = null;
+  let statement = null;
+  let bankTransactions = [];
+  let searchQuery = '';
+  let accountJumpPicker;
+
+  const balanceLabel = (b) => {
+    if (b > 0) return `<span class="text-emerald-400">You'll receive ${fmt(b)}</span>`;
+    if (b < 0) return `<span class="text-red-400">You'll give ${fmt(Math.abs(b))}</span>`;
+    return `<span class="text-slate-500">Settled ✓</span>`;
+  };
+
+  window.showAccountPlaceholder = () => {
+    selectedBankId = null;
+    selectedId = null;
+    document.getElementById('bank-panel').classList.add('hidden');
+    document.getElementById('ledger-panel').classList.add('hidden');
+    document.getElementById('ledger-placeholder').classList.remove('hidden');
+    renderAccountList();
+    renderBankList();
+  };
+
+  async function loadAccounts() {
+    const data = await apiFetch('/api/accounts');
+    accounts = data.accounts;
+    animateValue(document.getElementById('sum-receivable'), data.summary.total_receivable, fmt);
+    animateValue(document.getElementById('sum-payable'), data.summary.total_payable, fmt);
+    animateValue(document.getElementById('cash-in-hand'), data.cash_in_hand, fmt);
+    animateValue(document.getElementById('total-in-bank'), data.total_in_bank, fmt);
+    renderAccountList();
+    if (!accountJumpPicker) {
+      accountJumpPicker = createSearchableAccountSelect('account-jump-picker', {
+        placeholder: 'Type to search accounts…',
+        onSelect(id) {
+          if (id) {
+            selectAccount(parseInt(id, 10));
+            accountJumpPicker.reset();
+          }
+        },
+      });
+    }
+    accountJumpPicker?.setAccounts(accounts);
+    if (selectedId && accounts.find(a => a.id === selectedId)) loadStatement(selectedId);
+    else if (selectedId) { selectedId = null; showAccountPlaceholder(); }
+  }
+
+  async function loadBanks() {
+    const data = await apiFetch('/api/banks');
+    banks = data.banks;
+    animateValue(document.getElementById('total-in-bank'), data.total_balance, fmt);
+    renderBankList();
+    if (selectedBankId && banks.find(b => b.id === selectedBankId)) loadBankTransactions(selectedBankId);
+  }
+
+  function filteredAccounts() {
+    if (!searchQuery) return accounts;
+    const q = searchQuery.toLowerCase();
+    return accounts.filter(a => a.name.toLowerCase().includes(q) || (a.contact||'').includes(q));
+  }
+
+  function renderAccountList() {
+    const list = document.getElementById('account-list');
+    const empty = document.getElementById('empty-accounts');
+    const filtered = filteredAccounts();
+    if (!accounts.length) { list.innerHTML = ''; empty.classList.remove('hidden'); return; }
+    empty.classList.add('hidden');
+    list.innerHTML = filtered.map((a, i) => `
+      <button onclick="selectAccount(${a.id})"
+        class="account-item ${selectedId === a.id ? 'selected' : ''}"
+        style="animation: page-in 0.25s ease ${i*0.03}s both">
+        <div class="flex justify-between items-start gap-2">
+          <div class="min-w-0">
+            <p class="font-semibold truncate text-white">${esc(a.name)}</p>
+            ${a.contact ? `<p class="text-xs text-slate-500 truncate mt-0.5">${esc(a.contact)}</p>` : ''}
+          </div>
+          <p class="text-sm font-bold shrink-0 ${a.balance > 0 ? 'text-emerald-400' : a.balance < 0 ? 'text-red-400' : 'text-slate-600'}">
+            ${a.balance === 0 ? '—' : fmt(Math.abs(a.balance))}
+          </p>
+        </div>
+      </button>`).join('');
+  }
+
+  function renderBankList() {
+    const el = document.getElementById('bank-list');
+    if (!banks.length) {
+      el.innerHTML = '<p class="text-slate-500 text-xs">No bank accounts — click + Bank</p>';
+      return;
+    }
+    el.innerHTML = banks.map(b => `
+      <button onclick="selectBank(${b.id})"
+        class="account-item ${selectedBankId === b.id ? 'selected' : ''} text-left w-full">
+        <div class="flex justify-between items-center">
+          <span class="font-semibold text-white text-sm">${esc(b.name)}</span>
+          <span class="text-emerald-400 font-bold text-sm">${fmt(b.balance)}</span>
+        </div>
+      </button>`).join('');
+  }
+
+  window.selectAccount = async (id) => {
+    selectedId = id;
+    selectedBankId = null;
+    renderAccountList();
+    renderBankList();
+    await loadStatement(id);
+  };
+
+  window.selectBank = async (id) => {
+    selectedBankId = id;
+    selectedId = null;
+    renderAccountList();
+    renderBankList();
+    await loadBankTransactions(id);
+  };
+
+  async function loadStatement(id) {
+    statement = await apiFetch(`/api/accounts/${id}/statement`);
+    document.getElementById('ledger-placeholder').classList.add('hidden');
+    document.getElementById('bank-panel').classList.add('hidden');
+    const panel = document.getElementById('ledger-panel');
+    panel.classList.remove('hidden');
+    panel.classList.remove('panel-fade-in');
+    void panel.offsetWidth;
+    panel.classList.add('panel-fade-in');
+    const a = statement.account;
+    document.getElementById('ledger-name').textContent = a.name;
+    document.getElementById('ledger-contact').textContent = a.contact || '';
+    document.getElementById('ledger-balance').innerHTML = balanceLabel(a.balance);
+    document.getElementById('print-title').textContent = a.name + ' — Khata Statement';
+    document.getElementById('print-subtitle').textContent = (a.contact ? a.contact + ' · ' : '') + new Date().toLocaleString();
+    renderEntries();
+  }
+
+  async function loadBankTransactions(id) {
+    const bank = banks.find(b => b.id === id);
+    bankTransactions = await apiFetch(`/api/banks/${id}/transactions`);
+    document.getElementById('ledger-placeholder').classList.add('hidden');
+    document.getElementById('ledger-panel').classList.add('hidden');
+    const panel = document.getElementById('bank-panel');
+    panel.classList.remove('hidden');
+    document.getElementById('bank-name').textContent = bank.name;
+    document.getElementById('bank-balance').textContent = fmt(bank.balance);
+    renderBankTransactions();
+  }
+
+  function formatDate(iso) {
+    if (!iso) return '—';
+    return iso.slice(0, 10);
+  }
+
+  function renderEntries() {
+    const tbody = document.getElementById('entries-body');
+    const empty = document.getElementById('empty-entries');
+    const entries = statement.entries;
+    if (!entries.length) { tbody.innerHTML = ''; empty.classList.remove('hidden'); return; }
+    empty.classList.add('hidden');
+    tbody.innerHTML = entries.map((e, i) => `
+      <tr class="table-row" style="animation: page-in 0.25s ease ${i*0.03}s both">
+        <td class="px-4 py-3.5 text-slate-400 whitespace-nowrap text-xs">${formatDate(e.created_at)}</td>
+        <td class="px-4 py-3.5">${e.entry_type === 'credit'
+          ? '<span class="type-badge type-nonpta">Credit</span>'
+          : '<span class="type-badge type-pta">Payment</span>'}</td>
+        <td class="px-4 py-3.5 text-slate-300">${esc(e.note) || '—'}</td>
+        <td class="px-4 py-3.5 text-right tabular-nums text-amber-400 font-medium">${e.entry_type === 'credit' ? fmt(e.amount) : '—'}</td>
+        <td class="px-4 py-3.5 text-right tabular-nums text-emerald-400 font-medium">${e.entry_type === 'debit' ? fmt(e.amount) : '—'}</td>
+        <td class="px-4 py-3.5 text-right tabular-nums font-semibold text-white">${fmt(e.balance)}</td>
+        <td class="px-4 py-3.5 text-right no-print">
+          <button onclick="editEntry(${e.id})" class="action-pill edit">Edit</button>
+          <button onclick="deleteEntry(${e.id})" class="action-pill delete">Delete</button>
+        </td>
+      </tr>`).join('');
+  }
+
+  function renderBankTransactions() {
+    const tbody = document.getElementById('bank-tx-body');
+    if (!bankTransactions.length) {
+      tbody.innerHTML = '<tr><td colspan="6" class="px-4 py-4 text-slate-500 text-sm">No transactions yet</td></tr>';
+      return;
+    }
+    tbody.innerHTML = bankTransactions.map((t, i) => `
+      <tr class="table-row">
+        <td class="px-4 py-3 text-slate-400 text-xs">${formatDate(t.created_at)}</td>
+        <td class="px-4 py-3">${t.transaction_type === 'credit'
+          ? '<span class="type-badge type-pta">Deposit</span>'
+          : '<span class="type-badge type-nonpta">Withdrawal</span>'}</td>
+        <td class="px-4 py-3 text-slate-300">${esc(t.note) || '—'}</td>
+        <td class="px-4 py-3 text-right font-medium ${t.transaction_type === 'credit' ? 'text-emerald-400' : 'text-red-400'}">${fmt(t.amount)}</td>
+        <td class="px-4 py-3 text-right font-semibold text-white">${fmt(t.balance)}</td>
+        <td class="px-4 py-3 text-right no-print">
+          <button onclick="deleteBankTx(${t.id})" class="action-pill delete">Delete</button>
+        </td>
+      </tr>`).join('');
+  }
+
+  window.editEntry = (id) => {
+    const e = statement.entries.find(x => x.id === id);
+    if (!e) return;
+    document.getElementById('edit-entry-id').value = e.id;
+    document.getElementById('edit-e-type').value = e.entry_type;
+    document.getElementById('edit-e-amount').value = e.amount;
+    document.getElementById('edit-e-note').value = e.note || '';
+    openModal('entry-edit-overlay', 'entry-edit-modal');
+  };
+
+  window.deleteEntry = async (id) => {
+    if (!confirm('Delete this entry?')) return;
+    await apiFetch(`/api/accounts/${selectedId}/entries/${id}`, { method: 'DELETE' });
+    toast('Entry deleted');
+    loadAccounts();
+  };
+
+  window.deleteBankTx = async (id) => {
+    if (!confirm('Delete this transaction?')) return;
+    await apiFetch(`/api/banks/${selectedBankId}/transactions/${id}`, { method: 'DELETE' });
+    toast('Transaction deleted');
+    loadBanks();
+    loadAccounts();
+  };
+
+  function buildStatementText() {
+    const a = statement.account;
+    let lines = [`KHATA STATEMENT — ${a.name}`, a.contact ? `Contact: ${a.contact}` : '', `Generated: ${new Date().toLocaleString()}`, ''];
+    lines.push('Date\tType\tCredit\tPayment\tBalance\tNote');
+    lines.push('-'.repeat(70));
+    for (const e of [...statement.entries].reverse()) {
+      lines.push(`${formatDate(e.created_at)}\t${e.entry_type === 'credit' ? 'Credit' : 'Payment'}\t${e.entry_type === 'credit' ? e.amount : ''}\t${e.entry_type === 'debit' ? e.amount : ''}\t${e.balance}\t${e.note || ''}`);
+    }
+    lines.push('', `Closing: ${a.balance > 0 ? "Receive " + a.balance : a.balance < 0 ? "Give " + Math.abs(a.balance) : 'Settled'}`);
+    return lines.filter((l, i) => i > 1 || l).join('\n');
+  }
+
+  document.getElementById('btn-print').addEventListener('click', () => window.print());
+  document.getElementById('btn-export').addEventListener('click', () => {
+    const blob = new Blob([buildStatementText()], { type: 'text/plain' });
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(blob);
+    a.download = `${statement.account.name.replace(/\s+/g, '_')}_statement.txt`;
+    a.click();
+    toast('Statement exported');
+  });
+
+  document.getElementById('account-search').addEventListener('input', (e) => {
+    searchQuery = e.target.value;
+    renderAccountList();
+  });
+
+  document.getElementById('entry-form').addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const btn = document.getElementById('btn-add-entry');
+    btn.disabled = true;
+    try {
+      await apiFetch(`/api/accounts/${selectedId}/entries`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          entry_type: document.getElementById('e-type').value,
+          amount: document.getElementById('e-amount').value,
+          note: document.getElementById('e-note').value,
+        }),
+      });
+      document.getElementById('entry-form').reset();
+      toast('Entry added');
+      loadAccounts();
+    } catch(err) { toast(err.message, 'error'); }
+    btn.disabled = false;
+  });
+
+  document.getElementById('entry-edit-form').addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const entryId = document.getElementById('edit-entry-id').value;
+    await apiFetch(`/api/accounts/${selectedId}/entries/${entryId}`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        entry_type: document.getElementById('edit-e-type').value,
+        amount: document.getElementById('edit-e-amount').value,
+        note: document.getElementById('edit-e-note').value,
+      }),
+    });
+    closeModal('entry-edit-overlay', 'entry-edit-modal');
+    toast('Entry updated');
+    loadAccounts();
+  });
+  document.getElementById('entry-edit-overlay').addEventListener('click', () => closeModal('entry-edit-overlay', 'entry-edit-modal'));
+  document.getElementById('entry-edit-close-x')?.addEventListener('click', () => closeModal('entry-edit-overlay', 'entry-edit-modal'));
+
+  function showAcctModal(title, account) {
+    document.getElementById('acct-modal-title').textContent = title;
+    document.getElementById('acct-id').value = account ? account.id : '';
+    document.getElementById('acct-name').value = account ? account.name : '';
+    document.getElementById('acct-contact').value = account ? account.contact : '';
+    openModal('acct-overlay', 'acct-modal');
+  }
+  function hideAcctModal() { closeModal('acct-overlay', 'acct-modal'); }
+
+  document.getElementById('btn-new-account').addEventListener('click', () => showAcctModal('New Account'));
+  document.getElementById('btn-edit-account').addEventListener('click', () => {
+    const a = accounts.find(x => x.id === selectedId);
+    if (a) showAcctModal('Edit Account', a);
+  });
+  document.getElementById('btn-delete-account').addEventListener('click', async () => {
+    if (!confirm('Delete this account and all entries?')) return;
+    await apiFetch(`/api/accounts/${selectedId}`, { method: 'DELETE' });
+    selectedId = null;
+    showAccountPlaceholder();
+    toast('Account deleted');
+    loadAccounts();
+  });
+  document.getElementById('acct-cancel').addEventListener('click', hideAcctModal);
+  document.getElementById('acct-cancel-x').addEventListener('click', hideAcctModal);
+  document.getElementById('acct-overlay').addEventListener('click', hideAcctModal);
+  document.getElementById('acct-form').addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const id = document.getElementById('acct-id').value;
+    const payload = { name: document.getElementById('acct-name').value, contact: document.getElementById('acct-contact').value };
+    const account = await apiFetch(id ? `/api/accounts/${id}` : '/api/accounts', {
+      method: id ? 'PUT' : 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    });
+    if (!id) selectedId = account.id;
+    hideAcctModal();
+    toast(id ? 'Account updated' : 'Account created');
+    loadAccounts();
+  });
+
+  // Bank modals
+  document.getElementById('btn-new-bank').addEventListener('click', () => {
+    document.getElementById('bank-form').reset();
+    document.getElementById('bank-id').value = '';
+    document.getElementById('bank-modal-title').textContent = 'New Bank Account';
+    document.getElementById('bank-initial-field').classList.remove('hidden');
+    openModal('bank-overlay', 'bank-modal');
+  });
+  document.getElementById('btn-edit-bank').addEventListener('click', () => {
+    const b = banks.find(x => x.id === selectedBankId);
+    if (!b) return;
+    document.getElementById('bank-id').value = b.id;
+    document.getElementById('bank-name-input').value = b.name;
+    document.getElementById('bank-modal-title').textContent = 'Edit Bank Account';
+    document.getElementById('bank-initial-field').classList.add('hidden');
+    openModal('bank-overlay', 'bank-modal');
+  });
+  document.getElementById('btn-delete-bank').addEventListener('click', async () => {
+    if (!confirm('Delete this bank account and all transactions?')) return;
+    await apiFetch(`/api/banks/${selectedBankId}`, { method: 'DELETE' });
+    selectedBankId = null;
+    showAccountPlaceholder();
+    toast('Bank account deleted');
+    loadBanks();
+    loadAccounts();
+  });
+  document.getElementById('bank-cancel').addEventListener('click', () => closeModal('bank-overlay', 'bank-modal'));
+  document.getElementById('bank-cancel-x').addEventListener('click', () => closeModal('bank-overlay', 'bank-modal'));
+  document.getElementById('bank-overlay').addEventListener('click', () => closeModal('bank-overlay', 'bank-modal'));
+  document.getElementById('bank-form').addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const id = document.getElementById('bank-id').value;
+    const payload = { name: document.getElementById('bank-name-input').value };
+    if (!id) payload.initial_balance = document.getElementById('bank-initial').value;
+    const bank = await apiFetch(id ? `/api/banks/${id}` : '/api/banks', {
+      method: id ? 'PUT' : 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    });
+    if (!id) selectedBankId = bank.id;
+    closeModal('bank-overlay', 'bank-modal');
+    toast(id ? 'Bank updated' : 'Bank account created');
+    loadBanks();
+    loadAccounts();
+  });
+
+  document.getElementById('bank-tx-form').addEventListener('submit', async (e) => {
+    e.preventDefault();
+    await apiFetch(`/api/banks/${selectedBankId}/transactions`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        transaction_type: document.getElementById('bt-type').value,
+        amount: document.getElementById('bt-amount').value,
+        note: document.getElementById('bt-note').value,
+      }),
+    });
+    document.getElementById('bank-tx-form').reset();
+    toast('Transaction added');
+    loadBanks();
+    loadAccounts();
+  });
+
+  document.getElementById('btn-whatsapp-ledger')?.addEventListener('click', () => {
+    const a = accounts.find(x => x.id === selectedId);
+    if (!a || !a.contact) {
+      toast('Add a phone number in account contact first', 'error');
+      return;
+    }
+    openWhatsAppShare(a.contact, buildBalanceWhatsAppMessage(shopInfo, a));
+  });
+
+  apiFetch('/api/settings/shop').then(s => { shopInfo = s; }).catch(() => {});
+  loadAccounts();
+  loadBanks();
+</script>
+{% endblock %}

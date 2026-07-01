@@ -1,0 +1,120 @@
+{% extends "base.html" %}
+{% set active = 'month-report' %}
+{% block title %}Month Report — Welcome, {{ current_username }}{% endblock %}
+
+{% block content %}
+<div class="mb-8 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4 no-print">
+  <div>
+    <h1 class="text-2xl font-bold text-white tracking-tight">Month Report</h1>
+    <p class="text-slate-400 text-sm mt-1">Sales, profit &amp; udhar summary for tax / partner review</p>
+  </div>
+  <div class="flex gap-2 items-center">
+    <input type="month" id="report-month" class="input-field text-sm w-auto">
+    <button type="button" id="btn-load-report" class="btn btn-ghost btn-sm">Load</button>
+    <button type="button" id="btn-print-report" class="btn btn-primary btn-sm">Print / PDF</button>
+  </div>
+</div>
+
+<div id="report-print-area" class="glass-card rounded-xl p-6 lg:p-8">
+  <div id="report-letterhead" class="invoice-letterhead mb-6"></div>
+  <h2 id="report-title" class="text-xl font-bold text-white mb-6">Monthly Summary</h2>
+
+  <div class="grid grid-cols-2 lg:grid-cols-4 gap-4 mb-8">
+    <div class="stat-card p-4">
+      <p class="text-xs text-slate-500 uppercase">Units Sold</p>
+      <p id="r-units" class="text-2xl font-bold mt-1">—</p>
+    </div>
+    <div class="stat-card p-4">
+      <p class="text-xs text-slate-500 uppercase">Revenue</p>
+      <p id="r-revenue" class="text-2xl font-bold mt-1 text-emerald-400">—</p>
+    </div>
+    <div class="stat-card p-4">
+      <p class="text-xs text-slate-500 uppercase">Profit</p>
+      <p id="r-profit" class="text-2xl font-bold mt-1 text-emerald-400">—</p>
+    </div>
+    <div class="stat-card p-4">
+      <p class="text-xs text-slate-500 uppercase">Total Udhar</p>
+      <p id="r-udhar" class="text-2xl font-bold mt-1 text-amber-400">—</p>
+    </div>
+  </div>
+
+  <div class="grid grid-cols-2 gap-4 mb-8 text-sm">
+    <div><span class="text-slate-500">Receivable (Accounts):</span> <span id="r-receivable" class="font-semibold">—</span></div>
+    <div><span class="text-slate-500">Payable:</span> <span id="r-payable" class="font-semibold">—</span></div>
+  </div>
+
+  <h3 class="text-sm font-semibold text-slate-400 uppercase tracking-wider mb-3">Sales Detail</h3>
+  <div class="overflow-x-auto">
+    <table class="w-full text-sm invoice-table">
+      <thead>
+        <tr>
+          <th>Date</th>
+          <th>Model</th>
+          <th>IMEI</th>
+          <th>Buyer</th>
+          <th class="text-right">Sale</th>
+          <th class="text-right">Profit</th>
+        </tr>
+      </thead>
+      <tbody id="report-sales-tbody"></tbody>
+    </table>
+    <div id="report-empty" class="hidden empty-state py-6">No sales this month</div>
+  </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+  let shopInfo = {};
+
+  function renderLetterhead(shop) {
+    const phones = (shop.shop_phones || []).join(' · ');
+    document.getElementById('report-letterhead').innerHTML = `
+      <h2>${esc(shop.shop_name || 'My Phone Shop')}</h2>
+      ${shop.shop_address ? `<p>${esc(shop.shop_address)}</p>` : ''}
+      ${phones ? `<p>Tel: ${esc(phones)}</p>` : ''}`;
+  }
+
+  async function loadReport() {
+    const month = document.getElementById('report-month').value;
+    const q = month ? `?month=${month}` : '';
+    const data = await apiFetch('/api/month-report' + q);
+    shopInfo = data.shop || {};
+    renderLetterhead(shopInfo);
+    document.getElementById('report-title').textContent = `Monthly Summary — ${data.month_label}`;
+    document.getElementById('r-units').textContent = data.units_sold;
+    document.getElementById('r-revenue').textContent = fmt(data.total_revenue);
+    document.getElementById('r-profit').textContent = fmt(data.total_profit);
+    document.getElementById('r-udhar').textContent = fmt(data.total_udhar);
+    document.getElementById('r-receivable').textContent = fmt(data.total_receivable);
+    document.getElementById('r-payable').textContent = fmt(data.total_payable);
+
+    const tbody = document.getElementById('report-sales-tbody');
+    const empty = document.getElementById('report-empty');
+    const sales = data.sales || [];
+    if (!sales.length) {
+      tbody.innerHTML = '';
+      empty.classList.remove('hidden');
+    } else {
+      empty.classList.add('hidden');
+      tbody.innerHTML = sales.map(s => {
+        const profit = (s.sale_price || 0) - (s.purchase_price || 0);
+        const d = s.sold_at ? new Date(s.sold_at).toLocaleDateString('en-PK') : '—';
+        return `<tr>
+          <td>${esc(d)}</td>
+          <td>${esc(s.model)}</td>
+          <td class="font-mono text-xs">${esc(s.imei)||'—'}</td>
+          <td>${esc(s.buyer_name)||'—'}</td>
+          <td class="text-right">${fmt(s.sale_price)}</td>
+          <td class="text-right text-emerald-400">${fmt(profit)}</td>
+        </tr>`;
+      }).join('');
+    }
+  }
+
+  document.getElementById('report-month').value = new Date().toISOString().slice(0, 7);
+  document.getElementById('btn-load-report').addEventListener('click', () => loadReport().catch(e => toast(e.message, 'error')));
+  document.getElementById('btn-print-report').addEventListener('click', () => window.print());
+  loadReport().catch(err => toast(err.message, 'error'));
+</script>
+{% endblock %}
