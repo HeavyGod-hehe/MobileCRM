@@ -27,8 +27,9 @@ python3 app.py
 
 ```bash
 cd Source
-python3 build_customer_copy.py
-# → outputs to ../Customer Copy/
+python3 build_customer_mac.py --arch arm64      # → ../Customer Copy Apple Silicon/
+python3 build_customer_mac.py --arch x86_64     # → ../Customer Copy Intel Mac/
+python build_customer_windows_copy.py           # Windows only → ../Customer Windows Copy/
 ```
 
 ## License keys (vendor only)
@@ -38,4 +39,4 @@ cd Source
 python3 generate_key.py <HARDWARE_ID>
 ```
 
-Never ship `generate_key.py` to customers — use **Customer Copy** only.
+Never ship `generate_key.py` to customers — use the **Customer Copy** folders only.

@@ -1,37 +1,21 @@
-Cursor-Panga — Phone Reseller CRM v2.1
-======================================
+Phone Reseller CRM v2.3 — Folder layout
+=======================================
 
-Folder layout:
+  Source/                        ← Developer project (Python)
+  Customer Copy Apple Silicon/   ← Mac M1/M2/M3/M4 customers
+  Customer Copy Intel Mac/       ← Mac Intel customers
+  Customer Windows Copy/         ← Windows customers
+  CUSTOMER_COPIES.md             ← Which folder to use
 
-  Source/           ← Full developer project (Python, templates, build scripts)
-  Customer Copy/    ← Ship this folder to shopkeepers (no source code)
+DEVELOPER
+─────────
+  cd Source && pip install -r requirements.txt && python3 app.py
 
-DEVELOPER (you)
-───────────────
-  cd Source
-  python3 -m venv venv && source venv/bin/activate
-  pip install flask werkzeug
-  python3 app.py                    ← run locally at http://localhost:5050
-
-  Rebuild customer app after changes:
-  python3 build_customer_copy.py    ← outputs to ../Customer Copy/
-
-  Generate license keys (never ship generate_key.py to customers):
-  python3 generate_key.py <HARDWARE_ID>
+  Rebuild customer copies:
+    python3 build_customer_mac.py --arch arm64
+    python3 build_customer_mac.py --arch x86_64
+    python build_customer_windows_copy.py   (Windows only)
 
 CUSTOMER
 ────────
-  Double-click: Customer Copy/Phone Reseller CRM.app
-  Read: Customer Copy/START HERE.txt
-
-NEW IN v2.1
-───────────
-  • Today dashboard (home screen)
-  • WhatsApp invoice + account balance share
-  • Gmail OTP forgot password (+ vendor WhatsApp fallback)
-  • Backup restore button
-  • Month report (print/PDF)
-  • Profit column on inventory
-  • IMEI camera scan (mobile browser)
-  • One Shop Details settings section
-  • Help guide for Cash Book / Accounts / Bank / Journal
+  See CUSTOMER_COPIES.md for the correct folder for your computer.

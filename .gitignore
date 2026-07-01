@@ -12,6 +12,8 @@ Source/dist/
 Source/Phone Reseller CRM.app/
 Source/crm.db
 
-# Note: Customer Copy/ is intentionally tracked (requested)
+# Note: Customer Copy folders are intentionally tracked (requested)
 Customer Copy/Data/
+Customer Copy Apple Silicon/Data/
+Customer Copy Intel Mac/Data/
 Customer Windows Copy/Data/
