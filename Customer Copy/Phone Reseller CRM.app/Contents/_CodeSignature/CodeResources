@@ -1262,7 +1262,7 @@
 		</data>
 		<key>Resources/base_library.zip</key>
 		<data>
-		E9QTvfL2vEogm0rgolTlS55nyeY=
+		GCGDPvz5S+vwhAjjB5WGwlh6mjI=
 		</data>
 		<key>Resources/click-8.4.2.dist-info/INSTALLER</key>
 		<data>
@@ -1442,7 +1442,7 @@
 		</data>
 		<key>Resources/templates/accounts.html</key>
 		<data>
-		CrSM1Lu2NXnwPb5NPBHaUbZchps=
+		Wc/VVwLWhSujIC4y5JEB8amqMDI=
 		</data>
 		<key>Resources/templates/activation.html</key>
 		<data>
@@ -1458,7 +1458,7 @@
 		</data>
 		<key>Resources/templates/cashbook.html</key>
 		<data>
-		b9Ghs41TFjoCCQV1X9KlWevUpuw=
+		sbm6Vmcv15TVmpVLLz76PvtNMpw=
 		</data>
 		<key>Resources/templates/help.html</key>
 		<data>
@@ -1466,11 +1466,11 @@
 		</data>
 		<key>Resources/templates/inventory.html</key>
 		<data>
-		ckl9c+GkqOaYxlD4fxY/9U/KXj0=
+		ihlZ3dSPlobe6gbFQxQceNDCHtU=
 		</data>
 		<key>Resources/templates/journal.html</key>
 		<data>
-		M1cgIRR1OwrVm8xOaebf7ZN3s9A=
+		C2UYxXQHSxts8Vrg1fKGp8+HvYY=
 		</data>
 		<key>Resources/templates/login.html</key>
 		<data>
@@ -1494,7 +1494,7 @@
 		</data>
 		<key>Resources/templates/today.html</key>
 		<data>
-		81SrQc16PMTY+ooZZv1eNINV7A4=
+		qgzfp+CcEH8BVh+armJVsmE0xf4=
 		</data>
 		<key>Resources/werkzeug-3.1.8.dist-info/INSTALLER</key>
 		<data>
@@ -4342,7 +4342,7 @@
 		<dict>
 			<key>hash2</key>
 			<data>
-			PUIrvpaWeQqCpEDxc7Q6BbKl8OxzcEL6TXVjb1r7Aas=
+			nmQw7eQjxjT4hjZ6cJ/3woT6AOjGQbatrwyd/ny7JRA=
 			</data>
 		</dict>
 		<key>Resources/click-8.4.2.dist-info/INSTALLER</key>
@@ -4687,7 +4687,7 @@
 		<dict>
 			<key>hash2</key>
 			<data>
-			KI/ppjDH6axYPUx2wij73S0DUh35/QKN3I1WgKI7nYk=
+			zcPOSedFzlMnkoh0lTB3yDOIou1tiqcFpPgXUqlX0/A=
 			</data>
 		</dict>
 		<key>Resources/templates/activation.html</key>
@@ -4715,7 +4715,7 @@
 		<dict>
 			<key>hash2</key>
 			<data>
-			+dbKHR/V+l+r5Wd/uksF0/6GjEh60IngJWy12xjFOW8=
+			cZhITrf0Hj/PnVp9uUtfKOKdtINjF6hReWwIUn4892k=
 			</data>
 		</dict>
 		<key>Resources/templates/help.html</key>
@@ -4729,14 +4729,14 @@
 		<dict>
 			<key>hash2</key>
 			<data>
-			g7FEjIEUguqRntBqiyt5yEsX6evfwaxaBrQ/tIfOhiA=
+			1PojhjF4ox+fkch9GBmNEpO9QAPDe3twOmTfU2WCHJ4=
 			</data>
 		</dict>
 		<key>Resources/templates/journal.html</key>
 		<dict>
 			<key>hash2</key>
 			<data>
-			7vQwyfKki+DVzSIYzjY68UcwvbTMeaT3zcd8rKmJUd4=
+			P0sopLhy3T13ivzaVSJ+kfuOM6pCV2rIbilkOlBBv10=
 			</data>
 		</dict>
 		<key>Resources/templates/login.html</key>
@@ -4778,7 +4778,7 @@
 		<dict>
 			<key>hash2</key>
 			<data>
-			QXtAknc4e4yGj5e0AVBCd4OWMnAbzf1Mx40k7Q2Ajys=
+			kTzUP3/AP/SQt/BqLyDOnJLhOtp/pS+ZeGlVTPIRB4s=
 			</data>
 		</dict>
 		<key>Resources/werkzeug-3.1.8.dist-info/INSTALLER</key>

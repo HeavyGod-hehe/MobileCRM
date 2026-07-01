@@ -100,7 +100,7 @@
   }
 
   window.deleteJv = async (id) => {
-    if (!confirm('Delete this journal voucher record?')) return;
+    if (!confirm('Delete this journal voucher? Both account entries will also be removed.')) return;
     await apiFetch(`/api/journal-vouchers/${id}`, { method: 'DELETE' });
     toast('Voucher deleted');
     loadJournalVouchers();

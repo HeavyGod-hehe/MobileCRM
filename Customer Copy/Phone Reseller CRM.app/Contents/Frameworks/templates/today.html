@@ -118,7 +118,7 @@
       boughtEmpty.classList.add('hidden');
       boughtBody.innerHTML = bought.map(p => `
         <tr class="table-row">
-          <td class="px-4 py-3 font-medium text-white">${esc(p.model)}</td>
+          <td class="px-4 py-3 font-medium text-white">${esc(p.model)}${p.status === 'Sold' ? ' <span class="text-xs text-emerald-400/80">(Sold)</span>' : ''}</td>
           <td class="px-4 py-3 font-mono text-xs text-slate-400">${esc(p.imei)||'—'}</td>
           <td class="px-4 py-3 text-slate-400">${esc(p.supplier_name)||'—'}</td>
           <td class="px-4 py-3 text-right text-blue-400 font-medium">${fmt(p.purchase_price)}</td>

@@ -188,10 +188,22 @@
           <p class="text-xs text-slate-500">Per-phone price × quantity</p>
         </div>
         <div>
+          <label class="block text-xs font-medium text-slate-400 mb-1.5">How Acquired *</label>
+          <select id="f-acquisition-type" class="input-field">
+            <option value="purchase">Purchase</option>
+            <option value="borrow">Borrow from Shopkeeper</option>
+          </select>
+        </div>
+        <div id="f-payable-wrap">
+          <label class="block text-xs font-medium text-slate-400 mb-1.5">Purchase Udhar (payable)</label>
+          <input type="number" id="f-payable-amount" min="0" step="1" value="0" class="input-field" placeholder="Amount still owed">
+          <p id="borrow-hint" class="hidden text-xs text-amber-400/90 mt-1">Borrowed phones post full value to the shopkeeper account (no cash out).</p>
+        </div>
+        <div>
           <label class="block text-xs font-medium text-slate-400 mb-1.5">Purchase Date &amp; Time</label>
           <input type="datetime-local" id="f-purchase-date" class="input-field">
         </div>
-        <div class="col-span-2">
+        <div id="purchase-payment-section" class="col-span-2">
           <label class="block text-xs font-medium text-slate-400 mb-1.5">Purchase Payment Method *</label>
           <select id="f-purchase-payment" required class="input-field">
             <option value="cash">Cash</option>
@@ -239,9 +251,9 @@
             <input type="text" id="f-supplier-contact" class="input-field">
           </div>
           <div class="sm:col-span-2">
-            <label class="block text-xs font-medium text-slate-400 mb-1.5">Supplier Account (optional)</label>
+            <label class="block text-xs font-medium text-slate-400 mb-1.5">Supplier / Shopkeeper Account</label>
             <div id="f-supplier-account-wrap"></div>
-            <p class="text-xs text-slate-600 mt-1">Default: No Account — link supplier to khata if needed</p>
+            <p class="text-xs text-slate-600 mt-1">Required when borrowing — links payable to accounts &amp; cash book</p>
           </div>
         </div>
       </div>
@@ -294,8 +306,13 @@
             <input type="number" id="f-sale-price" min="0" step="1" class="input-field">
           </div>
           <div>
-            <label class="block text-xs font-medium text-slate-400 mb-1.5">Receivable Amount</label>
+            <label class="block text-xs font-medium text-slate-400 mb-1.5">Receivable Amount (Udhar)</label>
             <input type="number" id="f-receivable" min="0" step="1" value="0" class="input-field">
+          </div>
+          <div class="sm:col-span-2">
+            <label class="block text-xs font-medium text-slate-400 mb-1.5">Buyer Account (for sale udhar)</label>
+            <div id="f-buyer-account-wrap"></div>
+            <p class="text-xs text-slate-600 mt-1">Required when receivable &gt; 0 — syncs to accounts &amp; cash book</p>
           </div>
           <div>
             <label class="block text-xs font-medium text-slate-400 mb-1.5">Sale Date &amp; Time</label>
@@ -396,6 +413,7 @@
   let expenseModalPhoneId = null;
   let expenseEditId = null;
   let supplierAccountPicker = null;
+  let buyerAccountPicker = null;
   let expenseAccountPicker = null;
   let inventoryAccounts = [];
   const saleSection = document.getElementById('sale-section');
@@ -418,6 +436,13 @@
     const parts = [p.imei, p.imei2].filter(Boolean);
     return parts.length ? parts.join(' / ') : '—';
   }
+
+  const acquisitionBadge = (p) => {
+    if ((p.acquisition_type || 'purchase') === 'borrow') {
+      return '<span class="badge-count bg-violet-500/20 text-violet-300 border border-violet-500/20 ml-1">Borrowed</span>';
+    }
+    return '';
+  };
 
   const statusBadge = (status) => {
     const colors = {
@@ -457,7 +482,7 @@
         <input type="checkbox" class="phone-select rounded border-white/20" data-id="${p.id}" ${checked}
           onchange="togglePhoneSelect(${p.id}, this.checked)">
       </td>
-      <td class="px-4 py-3.5 font-medium text-white cursor-pointer" onclick="viewPhone(${p.id})">${esc(p.model)}</td>
+      <td class="px-4 py-3.5 font-medium text-white cursor-pointer" onclick="viewPhone(${p.id})">${esc(p.model)}${acquisitionBadge(p)}</td>
       <td class="px-4 py-3.5 cursor-pointer" onclick="viewPhone(${p.id})">${statusBadge(p.status)}</td>
       <td class="px-4 py-3.5 cursor-pointer" onclick="viewPhone(${p.id})">${typeBadge(p.type)}</td>
       <td class="px-4 py-3.5 text-slate-400 cursor-pointer" onclick="viewPhone(${p.id})">${esc(p.condition)||'—'}</td>
@@ -638,8 +663,34 @@
         emptyLabel: 'No Account',
       });
     }
+    if (!buyerAccountPicker) {
+      buyerAccountPicker = createSearchableAccountSelect('f-buyer-account-wrap', {
+        placeholder: 'Search buyer account…',
+        allowEmpty: true,
+        emptyLabel: 'No Account',
+      });
+    }
     supplierAccountPicker.setAccounts(inventoryAccounts);
     expenseAccountPicker.setAccounts(inventoryAccounts);
+    buyerAccountPicker.setAccounts(inventoryAccounts);
+  }
+
+  function toggleAcquisitionFields() {
+    const isBorrow = document.getElementById('f-acquisition-type').value === 'borrow';
+    const isSold = document.getElementById('f-status').value === 'Sold';
+    const paySection = document.getElementById('purchase-payment-section');
+    const bankWrap = document.getElementById('f-purchase-bank-wrap');
+    const paySel = document.getElementById('f-purchase-payment');
+    const payableWrap = document.getElementById('f-payable-wrap');
+    const borrowHint = document.getElementById('borrow-hint');
+    paySection.classList.toggle('hidden', isBorrow);
+    bankWrap.classList.toggle('hidden', isBorrow || !paySel.value.startsWith('bank:'));
+    paySel.required = !isBorrow && !isSold;
+    borrowHint.classList.toggle('hidden', !isBorrow);
+    if (isBorrow) {
+      const price = parseFloat(document.getElementById('f-purchase-price').value) || 0;
+      document.getElementById('f-payable-amount').value = price;
+    }
   }
 
   async function loadPhones() {
@@ -857,11 +908,15 @@
     document.getElementById('f-sale-price').value = statusOverride === 'Sold' ? '' : (p.sale_price || '');
     document.getElementById('f-receivable').value = statusOverride === 'Sold' ? 0 : p.receivable_amount;
     document.getElementById('f-sale-date').value = toDatetimeLocal(p.sold_at);
+    document.getElementById('f-acquisition-type').value = p.acquisition_type || 'purchase';
+    document.getElementById('f-payable-amount').value = p.payable_amount || 0;
     supplierAccountPicker?.setValue(p.supplier_account_id || '');
+    buyerAccountPicker?.setValue(p.buyer_account_id || '');
     setPaymentFields('f-purchase', p.purchase_payment_method || 'cash', p.purchase_bank_id);
     setPaymentFields('f-sale', p.sale_payment_method || 'cash', p.sale_bank_id);
     updateImeiFields();
     toggleSaleSection();
+    toggleAcquisitionFields();
     updateTotalCostingPreview();
   }
 
@@ -894,6 +949,8 @@
         <div><span class="text-slate-500">Battery</span><p class="text-white">${esc(p.battery_health)||'—'}</p></div>
         <div><span class="text-slate-500">Variant</span><p class="text-white">${esc(p.variant)||'—'}</p></div>
         <div><span class="text-slate-500">Type</span><p>${typeBadge(p.type)}</p></div>
+        <div><span class="text-slate-500">Acquired</span><p class="text-white">${(p.acquisition_type || 'purchase') === 'borrow' ? 'Borrowed from shopkeeper' : 'Purchase'}</p></div>
+        <div><span class="text-slate-500">Payable</span><p class="text-white">${fmt(p.payable_amount || 0)}</p></div>
       </div>
       <div class="border-t border-white/8 pt-4">
         <p class="text-xs font-semibold uppercase text-slate-500 mb-2">Purchase Cost</p>
@@ -992,7 +1049,7 @@
     showPhoneModal('Edit Phone');
   };
   window.deletePhone = async (id) => {
-    if (!confirm('Delete this phone record?')) return;
+    if (!confirm('Delete this phone? Linked cash book and account entries will also be removed.')) return;
     await apiFetch(`/api/phones/${id}`, { method: 'DELETE' });
     toast('Phone deleted');
     loadPhones();
@@ -1014,6 +1071,9 @@
     document.getElementById('f-purchase-date').value = localDatetimeValue();
     document.getElementById('f-sale-date').value = localDatetimeValue();
     supplierAccountPicker?.setValue('');
+    buyerAccountPicker?.setValue('');
+    document.getElementById('f-acquisition-type').value = 'purchase';
+    document.getElementById('f-payable-amount').value = '0';
     setPaymentFields('f-purchase', 'cash', null);
     setPaymentFields('f-sale', 'cash', null);
     formExistingExpenseTotal = 0;
@@ -1022,14 +1082,19 @@
     renderEditExpenseList([]);
     renderPartnerInvestFields();
     updateImeiFields();
+    toggleAcquisitionFields();
     updateTotalCostingPreview();
     showPhoneModal('Add New Phone');
   });
   document.getElementById('btn-cancel').addEventListener('click', () => hidePhoneModal());
   document.getElementById('btn-cancel-x').addEventListener('click', () => hidePhoneModal());
   document.getElementById('modal-overlay').addEventListener('click', () => hidePhoneModal());
-  document.getElementById('f-status').addEventListener('change', toggleSaleSection);
+  document.getElementById('f-status').addEventListener('change', () => { toggleSaleSection(); toggleAcquisitionFields(); });
+  document.getElementById('f-acquisition-type').addEventListener('change', toggleAcquisitionFields);
   document.getElementById('f-purchase-price').addEventListener('input', () => {
+    if (document.getElementById('f-acquisition-type').value === 'borrow') {
+      document.getElementById('f-payable-amount').value = document.getElementById('f-purchase-price').value || 0;
+    }
     updateTotalCostingPreview();
     updateQtyTotalPreview();
   });
@@ -1055,6 +1120,8 @@
       status: document.getElementById('f-status').value,
       supplier_name: document.getElementById('f-supplier-name').value,
       supplier_contact: document.getElementById('f-supplier-contact').value,
+      acquisition_type: document.getElementById('f-acquisition-type').value,
+      payable_amount: document.getElementById('f-payable-amount').value || 0,
       investments: collectInvestments(),
     };
 
@@ -1065,6 +1132,11 @@
 
     const supplierAcct = supplierAccountPicker?.getValue();
     if (supplierAcct) payload.supplier_account_id = supplierAcct;
+    if (payload.acquisition_type === 'borrow' && !supplierAcct) {
+      toast('Select a shopkeeper account when borrowing a phone', 'error');
+      btn.disabled = false; btn.textContent = 'Save Phone';
+      return;
+    }
 
     if (id) {
       payload.imei = document.getElementById('f-imei').value;
@@ -1090,6 +1162,14 @@
       payload.buyer_contact = document.getElementById('f-buyer-contact').value;
       payload.sale_price = document.getElementById('f-sale-price').value;
       payload.receivable_amount = document.getElementById('f-receivable').value;
+      const buyerAcct = buyerAccountPicker?.getValue();
+      if (buyerAcct) payload.buyer_account_id = buyerAcct;
+      const receivable = parseFloat(payload.receivable_amount) || 0;
+      if (receivable > 0 && !buyerAcct) {
+        toast('Select a buyer account when recording sale udhar', 'error');
+        btn.disabled = false; btn.textContent = 'Save Phone';
+        return;
+      }
       payload.sold_at = document.getElementById('f-sale-date').value;
       const salePay = readPaymentFields('f-sale');
       payload.sale_payment_method = salePay.method;
@@ -1151,7 +1231,7 @@
   document.getElementById('btn-bulk-delete')?.addEventListener('click', async () => {
     const ids = [...selectedIds];
     if (!ids.length) return;
-    if (!confirm(`Delete ${ids.length} selected phone record(s)?`)) return;
+    if (!confirm(`Delete ${ids.length} selected phone(s)? Linked cash book and account entries will also be removed.`)) return;
     try {
       await apiFetch('/api/phones/bulk-delete', {
         method: 'POST',

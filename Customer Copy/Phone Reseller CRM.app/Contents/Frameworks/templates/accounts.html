@@ -138,13 +138,14 @@
       </div>
 
       <div class="glass-card rounded-xl p-5 mb-4 no-print">
-        <p class="text-xs font-semibold uppercase tracking-wider text-slate-500 mb-4">Quick Entry</p>
+        <p class="text-xs font-semibold uppercase tracking-wider text-slate-500 mb-1">Quick Entry</p>
+        <p id="entry-hint" class="text-xs text-slate-600 mb-4 hidden"></p>
         <form id="entry-form" class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
           <div>
             <label class="block text-xs font-medium text-slate-400 mb-1.5">Type *</label>
             <select id="e-type" required class="input-field">
-              <option value="credit">Credit (Udhar)</option>
-              <option value="debit">Payment (Wasool)</option>
+              <option value="credit">Credit</option>
+              <option value="debit">Debit</option>
             </select>
           </div>
           <div>
@@ -187,7 +188,7 @@
                 <th class="px-4 py-3 font-medium">Type</th>
                 <th class="px-4 py-3 font-medium">Note</th>
                 <th class="px-4 py-3 text-right font-medium">Credit</th>
-                <th class="px-4 py-3 text-right font-medium">Payment</th>
+                <th class="px-4 py-3 text-right font-medium">Debit</th>
                 <th class="px-4 py-3 text-right font-medium">Balance</th>
                 <th class="px-4 py-3 text-right font-medium no-print">Actions</th>
               </tr>
@@ -272,8 +273,8 @@
       <div>
         <label class="block text-xs font-medium text-slate-400 mb-1.5">Type</label>
         <select id="edit-e-type" class="input-field">
-          <option value="credit">Credit (Udhar)</option>
-          <option value="debit">Payment (Wasool)</option>
+          <option value="credit">Credit</option>
+          <option value="debit">Debit</option>
         </select>
       </div>
       <div>
@@ -286,6 +287,39 @@
       </div>
       <button type="submit" class="btn btn-primary w-full">Save Changes</button>
     </form>
+  </div>
+</div>
+
+<!-- Payment method picker (when cash/bank not selected) -->
+<div id="payment-pick-overlay" class="modal-overlay"></div>
+<div id="payment-pick-modal" class="modal-wrap">
+  <div class="modal-panel modal-panel-sm">
+    <div class="modal-header">
+      <h3 class="text-lg font-semibold text-white">Payment Method</h3>
+      <button type="button" id="payment-pick-close-x" class="btn btn-ghost btn-icon text-slate-400" aria-label="Close">
+        <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/></svg>
+      </button>
+    </div>
+    <div class="p-6 space-y-4">
+      <p id="payment-pick-msg" class="text-sm text-slate-400">How was this paid? The amount will be subtracted from cash in hand or your bank balance.</p>
+      <div>
+        <label class="block text-xs font-medium text-slate-400 mb-1.5">Pay from *</label>
+        <select id="pick-payment" class="input-field">
+          <option value="cash">Cash in Hand</option>
+          <option value="bank">Bank Account</option>
+        </select>
+      </div>
+      <div id="pick-bank-wrap" class="hidden">
+        <label class="block text-xs font-medium text-slate-400 mb-1.5">Bank Account *</label>
+        <select id="pick-bank" class="input-field">
+          <option value="">— Select bank —</option>
+        </select>
+      </div>
+      <div class="flex gap-3 pt-1">
+        <button type="button" id="pick-payment-confirm" class="btn btn-primary flex-1">Confirm &amp; Save</button>
+        <button type="button" id="pick-payment-cancel" class="btn btn-ghost">Cancel</button>
+      </div>
+    </div>
   </div>
 </div>
 {% endblock %}
@@ -301,6 +335,16 @@
   let bankTransactions = [];
   let searchQuery = '';
   let accountJumpPicker;
+  let pendingEntryPayload = null;
+
+  const selectedAccount = () => accounts.find(a => a.id === selectedId);
+
+  const entryNeedsPayment = (entryType) => {
+    const acct = selectedAccount();
+    if (!acct) return false;
+    const expense = acct.is_expense_category;
+    return (entryType === 'debit' && !expense) || (entryType === 'credit' && expense);
+  };
 
   const balanceLabel = (b) => {
     if (b > 0) return `<span class="text-emerald-400">You'll receive ${fmt(b)}</span>`;
@@ -426,6 +470,7 @@
     document.getElementById('ledger-name').textContent = a.name;
     document.getElementById('ledger-contact').textContent = a.contact || '';
     document.getElementById('ledger-balance').innerHTML = balanceLabel(a.balance);
+    updateEntryFormHint();
     document.getElementById('print-title').textContent = a.name + ' — Khata Statement';
     document.getElementById('print-subtitle').textContent = (a.contact ? a.contact + ' · ' : '') + new Date().toLocaleString();
     renderEntries();
@@ -459,7 +504,7 @@
         <td class="px-4 py-3.5 text-slate-400 whitespace-nowrap text-xs">${formatDate(e.created_at)}</td>
         <td class="px-4 py-3.5">${e.entry_type === 'credit'
           ? '<span class="type-badge type-nonpta">Credit</span>'
-          : '<span class="type-badge type-pta">Payment</span>'}</td>
+          : '<span class="type-badge type-pta">Debit</span>'}</td>
         <td class="px-4 py-3.5 text-slate-300">${esc(e.note) || '—'}</td>
         <td class="px-4 py-3.5 text-right tabular-nums text-amber-400 font-medium">${e.entry_type === 'credit' ? fmt(e.amount) : '—'}</td>
         <td class="px-4 py-3.5 text-right tabular-nums text-emerald-400 font-medium">${e.entry_type === 'debit' ? fmt(e.amount) : '—'}</td>
@@ -503,7 +548,7 @@
   };
 
   window.deleteEntry = async (id) => {
-    if (!confirm('Delete this entry?')) return;
+    if (!confirm('Delete this entry? Linked cash book entry will also be removed.')) return;
     await apiFetch(`/api/accounts/${selectedId}/entries/${id}`, { method: 'DELETE' });
     toast('Entry deleted');
     loadAccounts();
@@ -520,10 +565,10 @@
   function buildStatementText() {
     const a = statement.account;
     let lines = [`KHATA STATEMENT — ${a.name}`, a.contact ? `Contact: ${a.contact}` : '', `Generated: ${new Date().toLocaleString()}`, ''];
-    lines.push('Date\tType\tCredit\tPayment\tBalance\tNote');
+    lines.push('Date\tType\tCredit\tDebit\tBalance\tNote');
     lines.push('-'.repeat(70));
     for (const e of [...statement.entries].reverse()) {
-      lines.push(`${formatDate(e.created_at)}\t${e.entry_type === 'credit' ? 'Credit' : 'Payment'}\t${e.entry_type === 'credit' ? e.amount : ''}\t${e.entry_type === 'debit' ? e.amount : ''}\t${e.balance}\t${e.note || ''}`);
+      lines.push(`${formatDate(e.created_at)}\t${e.entry_type === 'credit' ? 'Credit' : 'Debit'}\t${e.entry_type === 'credit' ? e.amount : ''}\t${e.entry_type === 'debit' ? e.amount : ''}\t${e.balance}\t${e.note || ''}`);
     }
     lines.push('', `Closing: ${a.balance > 0 ? "Receive " + a.balance : a.balance < 0 ? "Give " + Math.abs(a.balance) : 'Settled'}`);
     return lines.filter((l, i) => i > 1 || l).join('\n');
@@ -545,22 +590,100 @@
   });
 
   function populateEntryBankSelect() {
-    const sel = document.getElementById('e-bank');
-    sel.innerHTML = '<option value="">— Select bank —</option>' +
-      banks.map(b => `<option value="${b.id}">${esc(b.name)}</option>`).join('');
+    const opts = banks.map(b => `<option value="${b.id}">${esc(b.name)}</option>`).join('');
+    document.getElementById('e-bank').innerHTML = '<option value="">— Select bank —</option>' + opts;
+    document.getElementById('pick-bank').innerHTML = '<option value="">— Select bank —</option>' + opts;
+  }
+
+  function updateEntryFormHint() {
+    const acct = selectedAccount();
+    const hint = document.getElementById('entry-hint');
+    if (!acct) { hint.classList.add('hidden'); return; }
+    if (acct.is_expense_category) {
+      hint.textContent = 'Expense category — Credit entries deduct from cash in hand or bank.';
+      hint.classList.remove('hidden');
+    } else {
+      hint.textContent = 'Person khata — Credit = they owe you. Debit = payment received (adds to cash/bank).';
+      hint.classList.remove('hidden');
+    }
+    toggleEntryPaymentFields();
   }
 
   function toggleEntryPaymentFields() {
-    const isWasool = document.getElementById('e-type').value === 'debit';
-    document.getElementById('e-payment-wrap').classList.toggle('hidden', !isWasool);
-    const isBank = isWasool && document.getElementById('e-payment').value === 'bank';
+    const entryType = document.getElementById('e-type').value;
+    const needsPay = entryNeedsPayment(entryType);
+    document.getElementById('e-payment-wrap').classList.toggle('hidden', !needsPay);
+    const isBank = needsPay && document.getElementById('e-payment').value === 'bank';
     document.getElementById('e-bank-wrap').classList.toggle('hidden', !isBank);
-    document.getElementById('e-payment').required = isWasool;
-    document.getElementById('e-bank').required = isBank;
+    document.getElementById('e-payment').required = false;
+    document.getElementById('e-bank').required = false;
+  }
+
+  function togglePickBankWrap() {
+    const isBank = document.getElementById('pick-payment').value === 'bank';
+    document.getElementById('pick-bank-wrap').classList.toggle('hidden', !isBank);
+    document.getElementById('pick-bank').required = isBank;
+  }
+
+  function openPaymentPickModal(payload) {
+    pendingEntryPayload = payload;
+    const acct = selectedAccount();
+    const expense = acct && acct.is_expense_category;
+    const msg = document.getElementById('payment-pick-msg');
+    if (expense && payload.entry_type === 'credit') {
+      msg.textContent = `Record expense in ${acct.name}? Amount will be subtracted from cash in hand or bank.`;
+    } else {
+      msg.textContent = 'Payment received — amount will be added to cash in hand or bank.';
+    }
+    document.getElementById('pick-payment').value = 'cash';
+    document.getElementById('pick-bank').value = '';
+    togglePickBankWrap();
+    openModal('payment-pick-overlay', 'payment-pick-modal');
+  }
+
+  function closePaymentPickModal() {
+    pendingEntryPayload = null;
+    closeModal('payment-pick-overlay', 'payment-pick-modal');
+  }
+
+  async function postAccountEntry(payload) {
+    await apiFetch(`/api/accounts/${selectedId}/entries`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    });
+    document.getElementById('entry-form').reset();
+    toggleEntryPaymentFields();
+    toast('Entry added');
+    loadAccounts();
   }
 
   document.getElementById('e-type').addEventListener('change', toggleEntryPaymentFields);
   document.getElementById('e-payment').addEventListener('change', toggleEntryPaymentFields);
+  document.getElementById('pick-payment').addEventListener('change', togglePickBankWrap);
+
+  document.getElementById('pick-payment-confirm').addEventListener('click', async () => {
+    if (!pendingEntryPayload) return;
+    const paymentSource = document.getElementById('pick-payment').value;
+    const payload = { ...pendingEntryPayload, payment_source: paymentSource };
+    if (paymentSource === 'bank') {
+      const bankId = document.getElementById('pick-bank').value;
+      if (!bankId) { toast('Select a bank account', 'error'); return; }
+      payload.bank_account_id = bankId;
+    }
+    const btn = document.getElementById('pick-payment-confirm');
+    btn.disabled = true;
+    try {
+      await postAccountEntry(payload);
+      closePaymentPickModal();
+    } catch (err) {
+      toast(err.message, 'error');
+    }
+    btn.disabled = false;
+  });
+  document.getElementById('pick-payment-cancel').addEventListener('click', closePaymentPickModal);
+  document.getElementById('payment-pick-close-x').addEventListener('click', closePaymentPickModal);
+  document.getElementById('payment-pick-overlay').addEventListener('click', closePaymentPickModal);
 
   document.getElementById('entry-form').addEventListener('submit', async (e) => {
     e.preventDefault();
@@ -573,21 +696,21 @@
         amount: document.getElementById('e-amount').value,
         note: document.getElementById('e-note').value,
       };
-      if (entryType === 'debit') {
-        payload.payment_source = document.getElementById('e-payment').value;
-        if (payload.payment_source === 'bank') {
-          payload.bank_account_id = document.getElementById('e-bank').value;
+      if (entryNeedsPayment(entryType)) {
+        const pay = document.getElementById('e-payment').value;
+        if (!pay) {
+          btn.disabled = false;
+          openPaymentPickModal(payload);
+          return;
+        }
+        payload.payment_source = pay;
+        if (pay === 'bank') {
+          const bankId = document.getElementById('e-bank').value;
+          if (!bankId) { toast('Select a bank account', 'error'); btn.disabled = false; return; }
+          payload.bank_account_id = bankId;
         }
       }
-      await apiFetch(`/api/accounts/${selectedId}/entries`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(payload),
-      });
-      document.getElementById('entry-form').reset();
-      toggleEntryPaymentFields();
-      toast('Entry added');
-      loadAccounts();
+      await postAccountEntry(payload);
     } catch(err) { toast(err.message, 'error'); }
     btn.disabled = false;
   });
