@@ -1,4 +1,5 @@
 import os
+import signal
 import subprocess
 import sys
 import urllib.request
@@ -151,6 +152,23 @@ def license_activate():
         return jsonify({"ok": True})
     except ValueError as e:
         return jsonify({"error": str(e)}), 400
+
+
+@app.route("/api/system/shutdown", methods=["POST"])
+def shutdown_system():
+    if not session.get("logged_in") or not session.get("user_id"):
+        return jsonify({"error": "Unauthorized"}), 401
+
+    def _shutdown() -> None:
+        try:
+            os.kill(os.getpid(), signal.SIGTERM)
+        except OSError:
+            os._exit(0)
+
+    import threading
+
+    threading.Timer(0.5, _shutdown).start()
+    return jsonify({"ok": True, "message": "CRM is closing..."})
 
 
 # --- Auth ---

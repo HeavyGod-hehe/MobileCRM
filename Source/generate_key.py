@@ -18,10 +18,16 @@ def main() -> None:
         nargs="?",
         help="Buyer's Hardware ID (16-char hex). Omit to show this machine's ID.",
     )
+    parser.add_argument(
+        "--device-id",
+        dest="device_id",
+        help="Generate a serial for this device / hardware ID.",
+    )
     args = parser.parse_args()
 
-    if args.hardware_id:
-        hw = args.hardware_id.strip().upper()
+    raw_id = args.device_id or args.hardware_id
+    if raw_id:
+        hw = raw_id.strip().upper()
         if len(hw) != 16 or not all(c in "0123456789ABCDEF" for c in hw):
             print("ERROR: Hardware ID must be 16 hexadecimal characters.", file=sys.stderr)
             sys.exit(1)
@@ -30,6 +36,7 @@ def main() -> None:
         print(f"This machine Hardware ID: {hw}\n")
 
     key = _sign_hardware_id(hw)
+    print(f"Device ID: {hw}")
     print(f"Activation Key: {key}")
 
 

@@ -6,6 +6,7 @@ import hashlib
 import hmac
 import json
 import os
+import platform
 import sys
 import uuid
 from pathlib import Path
@@ -23,7 +24,24 @@ def _app_dir() -> Path:
     return Path(__file__).parent
 
 
-LICENSE_FILE = Path(os.environ.get("CRM_LICENSE_PATH", str(_app_dir() / "license.json")))
+def _license_dir() -> Path:
+    if os.environ.get("CRM_LICENSE_PATH"):
+        return Path(os.environ["CRM_LICENSE_PATH"]).expanduser().resolve().parent
+    if getattr(sys, "frozen", False):
+        home = Path.home()
+        system = platform.system().lower()
+        if system == "darwin":
+            return home / "Library" / "Application Support" / "Phone Reseller CRM"
+        if system == "windows":
+            base = Path(os.environ.get("APPDATA", home / "AppData" / "Roaming"))
+            return base / "Phone Reseller CRM"
+        return home / ".phone-reseller-crm"
+    return _app_dir()
+
+
+LICENSE_FILE = Path(
+    os.environ.get("CRM_LICENSE_PATH", str(_license_dir() / "license.json"))
+)
 
 
 def get_hardware_id() -> str:
@@ -66,6 +84,7 @@ def save_license(activation_key: str) -> None:
     hw = get_hardware_id()
     if not verify_activation_key(hw, activation_key):
         raise ValueError("Invalid activation key for this machine")
+    LICENSE_FILE.parent.mkdir(parents=True, exist_ok=True)
     LICENSE_FILE.write_text(
         json.dumps({"hardware_id": hw, "activation_key": activation_key.strip().upper()}, indent=2),
         encoding="utf-8",

@@ -418,6 +418,19 @@ async function initSettingsPage() {
       toast(err.message, 'error');
     }
   });
+
+  document.getElementById('btn-close-crm')?.addEventListener('click', async () => {
+    if (!confirm('Close CRM now? The local server will stop and this window will no longer work until you reopen the app.')) return;
+    try {
+      const res = await apiFetch('/api/system/shutdown', { method: 'POST' });
+      alert(res.message || 'CRM is closing...');
+      setTimeout(() => {
+        window.close();
+      }, 600);
+    } catch (err) {
+      toast(err.message, 'error');
+    }
+  });
 }
 
 function renderShopPhoneRows(phones) {
