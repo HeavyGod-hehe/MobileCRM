@@ -629,6 +629,18 @@ function createSearchableAccountSelect(container, options = {}) {
       input.value = '';
       closeDropdown();
     },
+    setValue(id) {
+      if (!id) {
+        hidden.value = '';
+        input.value = allowEmpty ? emptyLabel : '';
+        closeDropdown();
+        return;
+      }
+      const acct = accounts.find((a) => String(a.id) === String(id));
+      if (acct) {
+        pick(String(acct.id), acct.name);
+      }
+    },
     requireSelection(message = 'Please select an account from the list') {
       if (hidden.value || allowEmpty) return true;
       toast(message, 'error');

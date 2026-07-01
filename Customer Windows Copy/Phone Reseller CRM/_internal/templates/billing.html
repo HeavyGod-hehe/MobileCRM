@@ -1,0 +1,357 @@
+{% extends "base.html" %}
+{% set active = 'billing' %}
+{% block title %}Billing — Welcome, {{ current_username }}{% endblock %}
+
+{% block content %}
+<section class="space-y-6">
+  <div class="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
+    <div>
+      <h1 class="text-2xl font-bold text-white tracking-tight">Billing &amp; Invoicing</h1>
+      <p class="text-slate-400 text-sm mt-1">Print invoice + send receipt on WhatsApp</p>
+    </div>
+    <div class="flex flex-wrap gap-2 no-print">
+      <button type="button" id="btn-save-invoice" class="btn btn-ghost">Save Invoice</button>
+      <button type="button" id="btn-whatsapp-invoice" class="btn btn-ghost" style="border-color:rgba(37,211,102,0.4);color:#25d366">WhatsApp</button>
+      <button type="button" id="btn-print-invoice" class="btn btn-primary">
+        Print Invoice
+      </button>
+    </div>
+  </div>
+
+  <div class="grid grid-cols-1 lg:grid-cols-2 gap-6">
+    <div class="glass-card rounded-xl p-6 no-print space-y-4">
+      <h2 class="text-lg font-semibold text-white">Invoice Creator</h2>
+
+      <div class="grid grid-cols-2 gap-4">
+        <div>
+          <label class="block text-xs font-medium text-slate-400 mb-1.5">Invoice #</label>
+          <input type="number" id="bill-invoice-num" class="input-field" min="1" step="1">
+        </div>
+        <div>
+          <label class="block text-xs font-medium text-slate-400 mb-1.5">Date</label>
+          <input type="date" id="bill-date" class="input-field">
+        </div>
+      </div>
+
+      <div>
+        <label class="block text-xs font-medium text-slate-400 mb-1.5">IMEI (search inventory)</label>
+        <div class="flex gap-2">
+          <input type="text" id="bill-imei" list="bill-imei-list" class="input-field font-mono text-sm flex-1" placeholder="Select or type IMEI">
+          <button type="button" id="btn-scan-imei-bill" class="btn btn-ghost btn-sm shrink-0" title="Scan IMEI">Scan</button>
+        </div>
+        <datalist id="bill-imei-list"></datalist>
+      </div>
+
+      <div class="grid grid-cols-2 gap-4">
+        <div class="col-span-2">
+          <label class="block text-xs font-medium text-slate-400 mb-1.5">Phone Model</label>
+          <input type="text" id="bill-model" class="input-field" placeholder="Auto-filled from IMEI">
+        </div>
+        <div>
+          <label class="block text-xs font-medium text-slate-400 mb-1.5">Variant</label>
+          <input type="text" id="bill-variant" class="input-field" placeholder="Auto-filled">
+        </div>
+        <div>
+          <label class="block text-xs font-medium text-slate-400 mb-1.5">Sale Price</label>
+          <input type="number" id="bill-cost" class="input-field" min="0" step="1" placeholder="0">
+        </div>
+        <div>
+          <label class="block text-xs font-medium text-slate-400 mb-1.5">Condition</label>
+          <input type="text" id="bill-condition" class="input-field" placeholder="Optional">
+        </div>
+        <div>
+          <label class="block text-xs font-medium text-slate-400 mb-1.5">Type</label>
+          <input type="text" id="bill-type" class="input-field" placeholder="PTA / NON-PTA">
+        </div>
+      </div>
+
+      <div class="grid grid-cols-2 gap-4">
+        <div>
+          <label class="block text-xs font-medium text-slate-400 mb-1.5">Customer Name</label>
+          <input type="text" id="bill-customer" class="input-field" placeholder="Bill to">
+        </div>
+        <div>
+          <label class="block text-xs font-medium text-slate-400 mb-1.5">Customer WhatsApp</label>
+          <input type="tel" id="bill-customer-phone" class="input-field" placeholder="0300-1234567">
+        </div>
+      </div>
+
+      <div>
+        <label class="block text-xs font-medium text-slate-400 mb-1.5">Warranty</label>
+        <select id="bill-warranty" class="input-field">
+          <option value="No Warranty">No Warranty</option>
+          <option value="3 Days Checking Warranty">3 Days Checking Warranty</option>
+          <option value="7 Days Checking Warranty">7 Days Checking Warranty</option>
+        </select>
+      </div>
+
+      <div>
+        <label class="block text-xs font-medium text-slate-400 mb-1.5">Invoice Notes</label>
+        <textarea id="bill-notes" class="input-field" rows="2" placeholder="Optional notes"></textarea>
+      </div>
+    </div>
+
+    <div class="space-y-4">
+      <div class="glass-card rounded-xl p-4 overflow-auto">
+        <p class="text-xs text-slate-500 mb-3 no-print">Preview (A4 layout)</p>
+        <div id="invoice-print-area">
+          <div class="invoice-preview" id="invoice-preview"></div>
+        </div>
+      </div>
+
+      <div class="glass-card rounded-xl p-4 no-print">
+        <h3 class="text-sm font-semibold text-white mb-3">Recent Invoices</h3>
+        <div id="invoice-history" class="space-y-2 max-h-48 overflow-y-auto text-sm"></div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<div id="imei-scanner-overlay" class="modal-overlay hidden"></div>
+<div id="imei-scanner-modal" class="modal-wrap hidden">
+  <div class="modal-panel modal-panel-sm">
+    <div class="modal-header">
+      <h3 class="text-lg font-semibold text-white">Scan IMEI</h3>
+      <button type="button" id="btn-close-scanner" class="btn btn-ghost btn-icon">×</button>
+    </div>
+    <div class="p-4">
+      <div id="imei-qr-reader" class="rounded-lg overflow-hidden bg-black min-h-[200px]"></div>
+      <p class="text-xs text-slate-500 mt-2">Point camera at IMEI barcode. Works on phone/tablet browsers.</p>
+    </div>
+  </div>
+</div>
+{% endblock %}
+
+{% block head %}
+<script src="https://unpkg.com/html5-qrcode@2.3.8/html5-qrcode.min.js"></script>
+{% endblock %}
+
+{% block scripts %}
+<script>
+  let billingInventory = [];
+  let shopInfo = { shop_name: 'My Phone Shop', shop_address: '', shop_phones: [] };
+  let selectedPhoneId = null;
+  let html5QrCode = null;
+
+  function getInvoicePayload() {
+    return {
+      invoice_number: parseInt(document.getElementById('bill-invoice-num').value) || undefined,
+      invoice_date: document.getElementById('bill-date').value,
+      customer_name: document.getElementById('bill-customer').value.trim(),
+      customer_phone: document.getElementById('bill-customer-phone').value.trim(),
+      phone_id: selectedPhoneId,
+      model: document.getElementById('bill-model').value.trim(),
+      variant: document.getElementById('bill-variant').value.trim(),
+      imei: document.getElementById('bill-imei').value.trim(),
+      phone_type: document.getElementById('bill-type').value.trim(),
+      condition: document.getElementById('bill-condition').value.trim(),
+      amount: parseFloat(document.getElementById('bill-cost').value) || 0,
+      warranty: document.getElementById('bill-warranty').value,
+      notes: document.getElementById('bill-notes').value.trim(),
+    };
+  }
+
+  function renderInvoicePreview() {
+    const p = getInvoicePayload();
+    const invNum = document.getElementById('bill-invoice-num').value;
+    const today = p.invoice_date
+      ? new Date(p.invoice_date).toLocaleDateString('en-PK', { year: 'numeric', month: 'long', day: 'numeric' })
+      : new Date().toLocaleDateString('en-PK', { year: 'numeric', month: 'long', day: 'numeric' });
+    const phones = shopInfo.shop_phones?.length ? shopInfo.shop_phones.join(' · ') : '';
+
+    document.getElementById('invoice-preview').innerHTML = `
+      <div class="invoice-letterhead">
+        <h2>${esc(shopInfo.shop_name || 'My Phone Shop')}</h2>
+        ${shopInfo.shop_address ? `<p>${esc(shopInfo.shop_address)}</p>` : ''}
+        ${phones ? `<p>Tel: ${esc(phones)}</p>` : ''}
+        ${shopInfo.shop_whatsapp ? `<p>WhatsApp: ${esc(shopInfo.shop_whatsapp)}</p>` : ''}
+      </div>
+      <div class="invoice-meta">
+        <div>
+          <strong>SALES INVOICE</strong><br>
+          Invoice #${esc(invNum || '—')}<br>
+          Date: ${esc(today)}
+        </div>
+        <div style="text-align:right">
+          ${p.customer_name ? `<strong>Bill To:</strong><br>${esc(p.customer_name)}` : '<em>Customer: _______________</em>'}
+          ${p.customer_phone ? `<br>${esc(p.customer_phone)}` : ''}
+        </div>
+      </div>
+      <table class="invoice-table">
+        <thead>
+          <tr>
+            <th>#</th><th>Description</th><th>IMEI</th><th>Details</th>
+            <th style="text-align:right">Amount (Rs.)</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td>1</td>
+            <td>${p.model ? esc(p.model) : '________________'}</td>
+            <td style="font-family:monospace;font-size:0.8rem">${p.imei ? esc(p.imei) : '—'}</td>
+            <td>${[p.variant, p.condition, p.phone_type].filter(Boolean).map(esc).join(' · ') || '—'}</td>
+            <td style="text-align:right">${p.amount ? Number(p.amount).toLocaleString('en-PK') : '—'}</td>
+          </tr>
+        </tbody>
+      </table>
+      <div class="invoice-total">Total: Rs. ${p.amount ? Number(p.amount).toLocaleString('en-PK') : '________'}</div>
+      <div class="invoice-warranty"><strong>Warranty:</strong> ${esc(p.warranty)}</div>
+      ${p.notes ? `<p style="margin-top:1rem;font-size:0.85rem"><strong>Notes:</strong> ${esc(p.notes)}</p>` : ''}
+      <div class="invoice-footer"><p>Thank you for your business!</p></div>`;
+  }
+
+  function fillFromPhone(phone) {
+    if (!phone) return;
+    selectedPhoneId = phone.id;
+    document.getElementById('bill-model').value = phone.model || '';
+    document.getElementById('bill-variant').value = phone.variant || '';
+    document.getElementById('bill-cost').value = phone.sale_price || phone.purchase_price || '';
+    document.getElementById('bill-condition').value = phone.condition || '';
+    document.getElementById('bill-type').value = phone.type || '';
+    if (phone.buyer_name) document.getElementById('bill-customer').value = phone.buyer_name;
+    if (phone.buyer_contact) document.getElementById('bill-customer-phone').value = phone.buyer_contact;
+    renderInvoicePreview();
+  }
+
+  async function loadBillingData() {
+    const data = await apiFetch('/api/billing/inventory');
+    billingInventory = data.inventory || [];
+    shopInfo = data.shop || shopInfo;
+    if (data.next_invoice_number) {
+      document.getElementById('bill-invoice-num').value = data.next_invoice_number;
+    }
+    document.getElementById('bill-date').value = new Date().toISOString().slice(0, 10);
+    const dl = document.getElementById('bill-imei-list');
+    dl.innerHTML = billingInventory.filter(p => p.imei).map(p =>
+      `<option value="${esc(p.imei)}">${esc(p.model)} — ${esc(p.status)}</option>`
+    ).join('');
+    renderInvoicePreview();
+    loadInvoiceHistory();
+  }
+
+  async function loadInvoiceHistory() {
+    const data = await apiFetch('/api/billing/invoices');
+    const el = document.getElementById('invoice-history');
+    const list = data.invoices || [];
+    if (!list.length) {
+      el.innerHTML = '<p class="text-slate-500 text-xs">No saved invoices yet</p>';
+      return;
+    }
+    el.innerHTML = list.slice(0, 15).map(inv => `
+      <button type="button" class="w-full text-left p-2 rounded-lg hover:bg-white/5 border border-white/5 invoice-history-item" data-id="${inv.id}">
+        <span class="font-medium text-white">#${inv.invoice_number}</span>
+        <span class="text-slate-400"> — ${esc(inv.customer_name || inv.model || 'Invoice')}</span>
+        <span class="text-emerald-400 float-right">${fmt(inv.amount)}</span>
+      </button>`).join('');
+    el.querySelectorAll('.invoice-history-item').forEach(btn => {
+      btn.addEventListener('click', () => {
+        const inv = list.find(i => i.id === parseInt(btn.dataset.id));
+        if (!inv) return;
+        document.getElementById('bill-invoice-num').value = inv.invoice_number;
+        document.getElementById('bill-date').value = inv.invoice_date || '';
+        document.getElementById('bill-customer').value = inv.customer_name || '';
+        document.getElementById('bill-customer-phone').value = inv.customer_phone || '';
+        document.getElementById('bill-model').value = inv.model || '';
+        document.getElementById('bill-variant').value = inv.variant || '';
+        document.getElementById('bill-imei').value = inv.imei || '';
+        document.getElementById('bill-type').value = inv.phone_type || '';
+        document.getElementById('bill-condition').value = inv.condition || '';
+        document.getElementById('bill-cost').value = inv.amount || '';
+        document.getElementById('bill-warranty').value = inv.warranty || 'No Warranty';
+        document.getElementById('bill-notes').value = inv.notes || '';
+        selectedPhoneId = inv.phone_id;
+        renderInvoicePreview();
+      });
+    });
+  }
+
+  document.getElementById('bill-imei').addEventListener('input', (e) => {
+    const val = e.target.value.trim();
+    const match = billingInventory.find(p => p.imei && p.imei.toLowerCase() === val.toLowerCase());
+    if (match) fillFromPhone(match);
+    else { selectedPhoneId = null; renderInvoicePreview(); }
+  });
+
+  ['bill-invoice-num','bill-date','bill-model','bill-variant','bill-cost','bill-condition','bill-type','bill-customer','bill-customer-phone','bill-warranty','bill-notes'].forEach(id => {
+    document.getElementById(id).addEventListener('input', renderInvoicePreview);
+    document.getElementById(id).addEventListener('change', renderInvoicePreview);
+  });
+
+  document.getElementById('btn-print-invoice').addEventListener('click', () => {
+    renderInvoicePreview();
+    window.print();
+  });
+
+  document.getElementById('btn-save-invoice').addEventListener('click', async () => {
+    try {
+      await apiFetch('/api/billing/invoices', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(getInvoicePayload()),
+      });
+      toast('Invoice saved');
+      loadBillingData();
+    } catch (err) { toast(err.message, 'error'); }
+  });
+
+  document.getElementById('btn-whatsapp-invoice').addEventListener('click', async () => {
+    const p = getInvoicePayload();
+    const phone = p.customer_phone;
+    if (!phone) { toast('Enter customer WhatsApp number', 'error'); return; }
+    const msg = buildInvoiceWhatsAppMessage(shopInfo, {
+      ...p,
+      invoice_number: document.getElementById('bill-invoice-num').value,
+      invoice_date: document.getElementById('bill-date').value,
+    });
+    openWhatsAppShare(phone, msg);
+  });
+
+  async function openImeiScanner(onResult) {
+    if (typeof Html5Qrcode === 'undefined') {
+      toast('Scanner library not loaded', 'error');
+      return;
+    }
+    document.getElementById('imei-scanner-overlay').classList.remove('hidden');
+    document.getElementById('imei-scanner-modal').classList.remove('hidden');
+    html5QrCode = new Html5Qrcode('imei-qr-reader');
+    try {
+      await html5QrCode.start(
+        { facingMode: 'environment' },
+        { fps: 10, qrbox: { width: 250, height: 120 } },
+        (decoded) => {
+          const digits = decoded.replace(/\D/g, '');
+          if (digits.length >= 14) {
+            onResult(digits.slice(-15));
+            closeImeiScanner();
+          }
+        },
+        () => {}
+      );
+    } catch (err) {
+      toast('Camera not available: ' + err.message, 'error');
+      closeImeiScanner();
+    }
+  }
+
+  async function closeImeiScanner() {
+    document.getElementById('imei-scanner-overlay').classList.add('hidden');
+    document.getElementById('imei-scanner-modal').classList.add('hidden');
+    if (html5QrCode) {
+      try { await html5QrCode.stop(); } catch (_) {}
+      html5QrCode.clear();
+      html5QrCode = null;
+    }
+  }
+
+  document.getElementById('btn-scan-imei-bill').addEventListener('click', () => {
+    openImeiScanner((imei) => {
+      document.getElementById('bill-imei').value = imei;
+      document.getElementById('bill-imei').dispatchEvent(new Event('input'));
+    });
+  });
+  document.getElementById('btn-close-scanner').addEventListener('click', closeImeiScanner);
+  document.getElementById('imei-scanner-overlay').addEventListener('click', closeImeiScanner);
+
+  loadBillingData();
+</script>
+{% endblock %}
