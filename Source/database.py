@@ -3343,9 +3343,10 @@ def compute_today_summary(conn, user_id):
     bought = conn.execute(
         """
         SELECT * FROM phones
-        WHERE user_id = ? AND status IN ('Bought', 'In Repair')
+        WHERE user_id = ?
+          AND status IN ('Bought', 'In Repair', 'Sold')
           AND (
-            date(purchase_date) = date('now', 'localtime')
+            date(COALESCE(NULLIF(TRIM(purchase_date), ''), created_at)) = date('now', 'localtime')
             OR date(created_at) = date('now', 'localtime')
           )
         ORDER BY created_at DESC
