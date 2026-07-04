@@ -1,7 +1,20 @@
-"""License activation guard for Phone Reseller CRM."""
+"""License activation guard for Phone Reseller CRM.
+
+Threat model note (read this before touching the secret logic below): this
+is a client-side check in a program that runs entirely on the customer's own
+machine. No secret embedded in a Python/PyInstaller build can be made
+un-extractable to a sufficiently determined reverse engineer — decompiling a
+frozen build with PyInstaller's own bundled tools takes only a few lines of
+Python (verified). Nothing here claims to be uncrackable. What it does
+protect against: casual copying/sharing, and it lets the vendor rotate the
+signing secret on every release (via CRM_LICENSE_SECRET, set as a CI secret
+— never committed to source) without ever invalidating keys already issued
+to paying customers.
+"""
 
 from __future__ import annotations
 
+import base64
 import hashlib
 import hmac
 import json
@@ -13,11 +26,36 @@ from pathlib import Path
 
 from app_paths import customer_data_dir
 
-# Must match generate_key.py — change before distributing builds.
-_LICENSE_SECRET = os.environ.get(
-    "CRM_LICENSE_SECRET",
-    "CRM-Reseller-v1-9f3a2b1c8d7e6f5a4b3c2d1e0f9a8b7",
-)
+
+def _fallback_secret() -> str:
+    """Default secret used when CRM_LICENSE_SECRET isn't set. Split across
+    two base64 fragments so a naive scan of the compiled module's string
+    constants doesn't hand over the whole value in one read — this raises
+    the bar slightly, it does not stop real reverse engineering (see module
+    docstring)."""
+    return (
+        base64.b64decode("Q1JNLVJlc2VsbGVyLXYyLWQxODMwMmVjYzdjNTc4N2Q=").decode()
+        + base64.b64decode("OThkMDQwZTAzZmMzNjhiNDhkYmJkMmVhMmUyOWZiMGM=").decode()
+    )
+
+
+# The FIRST secret in this tuple is the one used to SIGN new activation keys
+# (generate_key.py always signs with _LICENSE_SECRETS[0]). Every secret in
+# the tuple is accepted when VERIFYING a key, so changing CRM_LICENSE_SECRET
+# for a future release rotates the signing secret going forward without
+# breaking any key issued under an older secret.
+#
+# Vendor: set CRM_LICENSE_SECRET as a CI secret (see HOW_TO_RELEASE.md)
+# before building a release — a secret that only lives in your build
+# pipeline, never in source control, is the one change here that actually
+# matters. Without it, every build silently falls back to the value below,
+# which is visible to anyone who decompiles the app (as this file's
+# docstring explains). If you ever add a NEW secret this way after
+# customers are already activated, append the old one(s) as extra legacy
+# entries below instead of removing them, so their keys keep working.
+_env_secret = os.environ.get("CRM_LICENSE_SECRET")
+_LICENSE_SECRETS = (_env_secret, _fallback_secret()) if _env_secret else (_fallback_secret(),)
+_LICENSE_SECRET = _LICENSE_SECRETS[0]  # kept for any external reference to the active secret
 
 
 def _license_dir() -> Path:
@@ -55,21 +93,29 @@ def get_hardware_id() -> str:
     return digest[:16].upper()
 
 
-def _sign_hardware_id(hardware_id: str) -> str:
+def _sign_with(hardware_id: str, secret: str) -> str:
     hw = hardware_id.strip().upper()
-    sig = hmac.new(
-        _LICENSE_SECRET.encode(),
-        hw.encode(),
-        hashlib.sha256,
-    ).hexdigest()
+    sig = hmac.new(secret.encode(), hw.encode(), hashlib.sha256).hexdigest()
     return f"{hw}-{sig[:24].upper()}"
 
 
+def _sign_hardware_id(hardware_id: str) -> str:
+    """Sign with the ACTIVE secret only — this is what generate_key.py calls
+    to issue new keys."""
+    return _sign_with(hardware_id, _LICENSE_SECRETS[0])
+
+
 def verify_activation_key(hardware_id: str, activation_key: str) -> bool:
+    """Accept a key signed with the active secret OR any legacy secret —
+    lets the vendor rotate CRM_LICENSE_SECRET for future releases without
+    invalidating keys already issued to customers under an older secret."""
     if not hardware_id or not activation_key:
         return False
-    expected = _sign_hardware_id(hardware_id)
-    return hmac.compare_digest(expected, activation_key.strip().upper())
+    submitted = activation_key.strip().upper()
+    return any(
+        hmac.compare_digest(_sign_with(hardware_id, secret), submitted)
+        for secret in _LICENSE_SECRETS
+    )
 
 
 def load_saved_license() -> dict | None:

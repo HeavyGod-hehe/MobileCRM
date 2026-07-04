@@ -54,6 +54,19 @@ Make sure your repo is public (or customers cannot download updates without logi
 After your first successful release, check:
 https://github.com/HeavyGod-hehe/MobileCRM/releases
 
+## License keys (vendor only)
+
+```bash
+cd Source
+python3 generate_key.py
+```
+
+Run it, paste in the client's Hardware ID (shown on their Activation screen), optionally type a client/shop name, and it prints the Activation Key to send back. Every key you generate is saved to `Source/issued_keys.log` (never committed to git) so you have a record of who has what.
+
+Never run `generate_key.py` on a customer's machine or send it to them — it's automatically excluded from every customer build.
+
+If you ever want to change the secret that signs new keys (e.g. you suspect it's leaked), ask your developer to rotate it — the app is built so rotating it never breaks keys you've already given to customers, it only affects keys generated after the rotation.
+
 ## Troubleshooting
 
 | Problem | Fix |

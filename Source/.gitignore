@@ -5,3 +5,6 @@ crm.db
 build/
 dist/
 Phone Reseller CRM.app/
+issued_keys.log
+license.json
+license.json.tmp
