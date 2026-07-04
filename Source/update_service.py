@@ -133,7 +133,7 @@ def fetch_manifest(url: str | None = None) -> dict[str, Any] | None:
     if not manifest_url:
         return None
     try:
-        data = _http_get_json(manifest_url)
+        data = _http_get_json(manifest_url, timeout=4)
         if isinstance(data, dict) and data.get("version"):
             return data
     except (urllib.error.URLError, TimeoutError, json.JSONDecodeError, OSError):
@@ -158,7 +158,7 @@ def check_for_updates() -> dict[str, Any]:
         update_available = is_newer_version(remote_version, current)
     else:
         try:
-            remote_version = _http_get_text(LEGACY_VERSION_URL, timeout=6)
+            remote_version = _http_get_text(LEGACY_VERSION_URL, timeout=4)
             update_available = is_newer_version(remote_version, current)
             page_url = "https://github.com/HeavyGod-hehe/MobileCRM/tree/Version007"
         except (urllib.error.URLError, TimeoutError, OSError):
