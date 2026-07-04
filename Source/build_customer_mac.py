@@ -144,39 +144,53 @@ def _build_to_temp(arch: str) -> Path:
         return Path(persist) / "Phone Reseller CRM.app"
 
 
-def build_universal_copy(out: Path | None = None) -> Path:
+def build_universal_copy(
+    out: Path | None = None,
+    arm64_app: Path | None = None,
+    x86_64_app: Path | None = None,
+) -> Path:
     if sys.platform != "darwin":
         raise SystemExit(
             "macOS customer builds must run on macOS.\n"
             "Use GitHub Actions or a Mac to build."
         )
 
-    machine = platform.machine()
-    if machine not in ("arm64", "x86_64"):
-        raise SystemExit(f"Unsupported Mac architecture: {machine}")
-
     out = out or ARCH_OUTPUT["universal"]
-    ensure_pyinstaller()
 
-    print("Building arm64 slice …")
-    try:
-        arm_app = _build_to_temp("arm64")
-    except Exception as exc:
-        raise SystemExit(
-            "Could not build the Apple Silicon (arm64) slice.\n"
-            "Run this on an Apple Silicon Mac, or build arm64 and x86_64 copies separately and merge with CI.\n"
-            f"Details: {exc}"
-        ) from exc
+    if arm64_app or x86_64_app:
+        if not (arm64_app and x86_64_app):
+            raise SystemExit("--arm64-app and --x86-64-app must both be given together")
+        arm_app = Path(arm64_app)
+        intel_app = Path(x86_64_app)
+        if not arm_app.is_dir():
+            raise SystemExit(f"Prebuilt arm64 app not found: {arm_app}")
+        if not intel_app.is_dir():
+            raise SystemExit(f"Prebuilt x86_64 app not found: {intel_app}")
+    else:
+        machine = platform.machine()
+        if machine not in ("arm64", "x86_64"):
+            raise SystemExit(f"Unsupported Mac architecture: {machine}")
+        ensure_pyinstaller()
 
-    print("Building x86_64 slice …")
-    try:
-        intel_app = _build_to_temp("x86_64")
-    except Exception as exc:
-        raise SystemExit(
-            "Could not build the Intel (x86_64) slice.\n"
-            "On Apple Silicon, install Rosetta and an x64 Python wheel set.\n"
-            f"Details: {exc}"
-        ) from exc
+        print("Building arm64 slice …")
+        try:
+            arm_app = _build_to_temp("arm64")
+        except Exception as exc:
+            raise SystemExit(
+                "Could not build the Apple Silicon (arm64) slice.\n"
+                "Run this on an Apple Silicon Mac, or build arm64 and x86_64 copies separately and merge with CI.\n"
+                f"Details: {exc}"
+            ) from exc
+
+        print("Building x86_64 slice …")
+        try:
+            intel_app = _build_to_temp("x86_64")
+        except Exception as exc:
+            raise SystemExit(
+                "Could not build the Intel (x86_64) slice.\n"
+                "On Apple Silicon, install Rosetta and an x64 Python wheel set.\n"
+                f"Details: {exc}"
+            ) from exc
 
     if out.exists():
         shutil.rmtree(out)
@@ -187,6 +201,7 @@ def build_universal_copy(out: Path | None = None) -> Path:
     merge_app_bundles(arm_app, intel_app, merged_app)
 
     main_binary = merged_app / "Contents" / "MacOS" / "PhoneResellerCRM"
+    main_binary.chmod(0o755)
     verify_universal(main_binary)
 
     arm_picker = arm_app.parent / "FolderPicker"
@@ -297,14 +312,19 @@ def verify_arch(app_binary: Path, expected: str) -> None:
         )
 
 
-def build_mac_copy(arch: str, out: Path | None = None) -> Path:
+def build_mac_copy(
+    arch: str,
+    out: Path | None = None,
+    arm64_app: Path | None = None,
+    x86_64_app: Path | None = None,
+) -> Path:
     if sys.platform != "darwin":
         raise SystemExit(
             "macOS customer builds must run on macOS.\n"
             "Use GitHub Actions or a Mac to build."
         )
     if arch == "universal":
-        return build_universal_copy(out)
+        return build_universal_copy(out, arm64_app=arm64_app, x86_64_app=x86_64_app)
     if arch not in ("arm64", "x86_64"):
         raise ValueError(f"arch must be one of {list(ARCH_OUTPUT)}")
 
@@ -353,8 +373,20 @@ def main() -> None:
         choices=sorted(ARCH_OUTPUT),
         help="Target Mac CPU: arm64, x86_64, or universal (Intel + Apple Silicon)",
     )
+    parser.add_argument(
+        "--arm64-app",
+        type=Path,
+        default=None,
+        help="Prebuilt arm64 .app to merge (universal only; skips building from source)",
+    )
+    parser.add_argument(
+        "--x86-64-app",
+        type=Path,
+        default=None,
+        help="Prebuilt x86_64 .app to merge (universal only; skips building from source)",
+    )
     args = parser.parse_args()
-    build_mac_copy(args.arch)
+    build_mac_copy(args.arch, arm64_app=args.arm64_app, x86_64_app=args.x86_64_app)
 
 
 if __name__ == "__main__":
