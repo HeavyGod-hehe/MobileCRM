@@ -54,10 +54,10 @@ CONDITION_OPTIONS = [
 DEFAULT_USER = {"username": "shahir", "password": "test123"}
 
 DEFAULT_SETTINGS = {
-    "partner1_name": "Talha",
-    "partner1_capital": "241000",
-    "partner2_name": "Me",
-    "partner2_capital": "241000",
+    "partner1_name": "",
+    "partner1_capital": "0",
+    "partner2_name": "",
+    "partner2_capital": "0",
     "cash_in_hand": "0",
     "theme": "default-dark",
     "shop_name": "My Phone Shop",
