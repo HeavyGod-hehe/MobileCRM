@@ -1,7 +1,7 @@
 # Mobile CRM - Logic Review & Stress Test Report
 
-**Generated:** 2026-07-04 06:52:29
-**Database:** `/tmp/crm_final5.db` (0.29 MB)
+**Generated:** 2026-07-04 15:09:59
+**Database:** `/tmp/crm_finalcheck2.db` (0.29 MB)
 
 ## Summary
 
@@ -17,8 +17,8 @@
 |--------|---------------|
 | Account Entries | 159 |
 | Bank Transactions | 52 |
-| Bulk Create 50 Phones Ms | 14.0 |
-| Bulk Sold 25 Phones Ms | 6.4 |
+| Bulk Create 50 Phones Ms | 12.4 |
+| Bulk Sold 25 Phones Ms | 5.3 |
 | Cash Book Entries | 421 |
 | Cash In Hand | -7099925.0 |
 | Dashboard Net Profit | 810000.0 |
@@ -33,31 +33,31 @@
 | Phones Sold | 51 |
 | Phones Total | 210 |
 | Return Logs | 2 |
-| Stress Total Ms | 127.9 |
+| Stress Total Ms | 125.3 |
 | Today Bought | 209 |
 | Today Sold | 26 |
 | Total In Bank | -2662500.0 |
 
 ## Test results
 
-- [PASS] **Purchase + udhar ledger sync** - OK (3ms)
-- [PASS] **Borrow phone ledger sync** - OK (2ms)
+- [PASS] **Purchase + udhar ledger sync** - OK (4ms)
+- [PASS] **Borrow phone ledger sync** - OK (3ms)
 - [PASS] **Sale + receivable ledger sync** - OK (3ms)
 - [PASS] **Phone expense -> cash book sync** - OK (2ms)
 - [PASS] **Food expense -> cash out sync** - OK (2ms)
-- [PASS] **Wasool debit -> cash in sync** - OK (3ms)
+- [PASS] **Wasool debit -> cash in sync** - OK (2ms)
 - [PASS] **Delete phone cascades ledger** - OK (3ms)
 - [PASS] **Delete account entry cascades cash book** - OK (3ms)
-- [PASS] **Journal voucher create/delete** - OK (3ms)
+- [PASS] **Journal voucher create/delete** - OK (2ms)
 - [PASS] **Purchase return flow** - OK (2ms)
 - [PASS] **Sale return flow** - OK (3ms)
-- [PASS] **Today summary includes sold-as-bought** - OK (4ms)
+- [PASS] **Today summary includes sold-as-bought** - OK (3ms)
 - [PASS] **Update phone investments (bug fix)** - OK (3ms)
 - [PASS] **Udhar dashboard no double-count** - OK (4ms)
 - [PASS] **Duplicate IMEI rejected** - OK (2ms)
 - [PASS] **Sale price edit re-syncs cash book** - OK (4ms)
 - [PASS] **Bulk sold udhar requires buyer account** - OK (3ms)
-- [PASS] **Fixed expense posts to cash book** - OK (3ms)
+- [PASS] **Fixed expense posts to cash book** - OK (2ms)
 - [PASS] **Zero cash balance + new account** - OK (4ms)
 - [PASS] **No orphan cash ledger links** - 
 - [PASS] **No orphan account ledger links** - 

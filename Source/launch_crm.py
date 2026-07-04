@@ -4,7 +4,9 @@
 from __future__ import annotations
 
 import os
+import platform
 import socket
+import subprocess
 import sys
 import threading
 import time
@@ -69,6 +71,52 @@ def find_free_port(start: int, host: str = HOST, max_attempts: int = 20) -> int:
     return start
 
 
+def _find_chromium_browser() -> str | None:
+    """Locate Chrome or Edge if installed — the only common browsers with a
+    reliable "open maximized" command-line flag. There's no cross-browser
+    way to force Safari/Firefox to open maximized, so those fall back to a
+    normal (unmaximized) window via webbrowser.open()."""
+    system = platform.system()
+    candidates: list[str] = []
+    if system == "Darwin":
+        candidates = [
+            "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
+            "/Applications/Microsoft Edge.app/Contents/MacOS/Microsoft Edge",
+        ]
+    elif system == "Windows":
+        program_dirs = [
+            os.environ.get("PROGRAMFILES", ""),
+            os.environ.get("PROGRAMFILES(X86)", ""),
+        ]
+        rel_paths = [
+            r"Google\Chrome\Application\chrome.exe",
+            r"Microsoft\Edge\Application\msedge.exe",
+        ]
+        for base in program_dirs:
+            if not base:
+                continue
+            for rel in rel_paths:
+                candidates.append(os.path.join(base, rel))
+    for path in candidates:
+        if Path(path).is_file():
+            return path
+    return None
+
+
+def open_maximized(url: str) -> None:
+    """Open the CRM in a maximized browser window if possible, otherwise
+    fall back to a normal browser window (whatever the OS default is)."""
+    if os.environ.get("CRM_OPEN_MAXIMIZED", "1") != "0":
+        browser_path = _find_chromium_browser()
+        if browser_path:
+            try:
+                subprocess.Popen([browser_path, "--new-window", "--start-maximized", url])
+                return
+            except OSError:
+                pass
+    webbrowser.open(url)
+
+
 def open_browser_when_ready(host: str, port: int) -> None:
     url = f"http://{host}:{port}"
     for _ in range(40):
@@ -78,7 +126,7 @@ def open_browser_when_ready(host: str, port: int) -> None:
                 break
         except OSError:
             continue
-    webbrowser.open(url)
+    open_maximized(url)
 
 
 def main() -> None:
@@ -90,7 +138,7 @@ def main() -> None:
     if existing_port is not None:
         url = f"http://{HOST}:{existing_port}"
         _log(f"CRM already running at {url} — opening browser")
-        webbrowser.open(url)
+        open_maximized(url)
         return
 
     port = find_free_port(DEFAULT_PORT)

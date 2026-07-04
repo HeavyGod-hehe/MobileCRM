@@ -2,6 +2,7 @@ import os
 import sqlite3
 import subprocess
 import sys
+import threading
 import urllib.request
 from pathlib import Path
 
@@ -33,6 +34,7 @@ ENTRY_TYPES = db.ENTRY_TYPES
 
 _DB_READY = False
 _DB_ERROR = None
+_DB_INIT_LOCK = threading.Lock()
 
 AUTH_EXEMPT_ENDPOINTS = frozenset({
     "login_page", "auth_status", "auth_login", "auth_signup",
@@ -130,9 +132,28 @@ def ensure_db():
     global _DB_READY, _DB_ERROR
     if _DB_ERROR:
         return _DB_ERROR_HTML.format(detail=_DB_ERROR, db_path=db.DB_PATH), 500
-    if not _DB_READY:
+    if _DB_READY:
+        return
+    # Flask runs threaded, so several requests can land here at once on
+    # first launch (index page + its static assets). Without this lock,
+    # multiple threads called db.init_db() concurrently, and one of the
+    # migration steps would collide with another's open transaction,
+    # raising "database is locked" — which then got cached as a permanent
+    # _DB_ERROR, breaking the app for the rest of the process's life even
+    # though the actual lock was transient. Serializing here fixes both:
+    # only one thread actually runs init_db(), and a transient lock error
+    # (if one still occurs, e.g. another process touching the file) is not
+    # treated as permanent corruption.
+    with _DB_INIT_LOCK:
+        if _DB_READY:
+            return
         try:
             db.init_db()
+        except sqlite3.OperationalError:
+            # Transient (e.g. "database is locked") — don't cache this as
+            # permanent, and don't let the request fall through to a view
+            # that also needs a ready database. Ask the browser to retry.
+            return "Starting up, please retry…", 503
         except sqlite3.DatabaseError as exc:
             _DB_ERROR = str(exc)
             return _DB_ERROR_HTML.format(detail=_DB_ERROR, db_path=db.DB_PATH), 500
@@ -716,13 +737,22 @@ def create_phone():
         if err:
             return jsonify({"error": err}), 400
 
-    quantity = int(data.get("quantity") or 1)
-    with db.db_session() as conn:
-        if quantity > 1:
-            phones = db.create_phones_bulk(conn, user_id, data)
-            return jsonify(phones), 201
-        phone = db.create_phone(conn, user_id, data)
-        return jsonify(phone), 201
+    try:
+        quantity = int(data.get("quantity") or 1)
+    except (TypeError, ValueError):
+        return jsonify({"error": "Quantity must be a whole number"}), 400
+    if quantity < 1:
+        return jsonify({"error": "Quantity must be at least 1"}), 400
+
+    try:
+        with db.db_session() as conn:
+            if quantity > 1:
+                phones = db.create_phones_bulk(conn, user_id, data)
+                return jsonify(phones), 201
+            phone = db.create_phone(conn, user_id, data)
+            return jsonify(phone), 201
+    except ValueError as exc:
+        return jsonify({"error": str(exc)}), 400
 
 
 @app.route("/api/phones/<int:phone_id>", methods=["PUT"])
@@ -736,11 +766,14 @@ def update_phone(phone_id):
         if err:
             return jsonify({"error": err}), 400
 
-    with db.db_session() as conn:
-        phone = db.update_phone(conn, user_id, phone_id, data)
-        if not phone:
-            return jsonify({"error": "Phone not found"}), 404
-        return jsonify(phone)
+    try:
+        with db.db_session() as conn:
+            phone = db.update_phone(conn, user_id, phone_id, data)
+            if not phone:
+                return jsonify({"error": "Phone not found"}), 404
+            return jsonify(phone)
+    except ValueError as exc:
+        return jsonify({"error": str(exc)}), 400
 
 
 @app.route("/api/phones/bulk-delete", methods=["POST"])
@@ -1487,7 +1520,14 @@ def backup_export():
 @app.errorhandler(sqlite3.DatabaseError)
 def handle_database_error(exc):
     """Corruption discovered mid-session (not just at startup) — show a clear
-    message instead of a blank 500, and stop retrying against the broken file."""
+    message instead of a blank 500, and stop retrying against the broken file.
+    A transient sqlite3.OperationalError (e.g. "database is locked" from a
+    momentary collision with another writer) is NOT corruption — don't cache
+    it as permanent, just ask the browser to retry."""
+    if isinstance(exc, sqlite3.OperationalError):
+        if request.path.startswith("/api/"):
+            return jsonify({"error": "Database busy, please retry"}), 503
+        return "Database busy, please retry…", 503
     global _DB_ERROR
     _DB_ERROR = str(exc)
     if request.path.startswith("/api/"):

@@ -3,7 +3,7 @@
 const THEME_KEY = 'crm-theme';
 
 const UI_DESIGNS = [
-  { id: 'default-dark', name: 'Glass Dark', desc: 'Frosted glass morphism', colors: ['#030712', '#10b981', '#0f172a'] },
+  { id: 'default-dark', name: 'Glass Dark', desc: 'Frosted glass morphism (original)', colors: ['#030712', '#10b981', '#0f172a'] },
   { id: 'light', name: 'Clean Minimal', desc: 'Flat light professional', colors: ['#f1f5f9', '#059669', '#ffffff'] },
   { id: 'cyberpunk', name: 'Cyber Neon', desc: 'Neon grid futuristic', colors: ['#0a0014', '#ff0080', '#00ffff'] },
   { id: 'emerald', name: 'Finance Classic', desc: 'Emerald banking style', colors: ['#022c22', '#34d399', '#064e3b'] },
@@ -13,6 +13,9 @@ const UI_DESIGNS = [
   { id: 'luxury', name: 'Luxury Gold', desc: 'Dark elegant gold accents', colors: ['#0d0d0d', '#d4af37', '#1a1a1a'] },
   { id: 'neumorph', name: 'Soft Neumorph', desc: 'Soft shadows & pills', colors: ['#e0e5ec', '#6366f1', '#f0f3f8'] },
   { id: 'brutalist', name: 'Brutalist Bold', desc: 'Hard edges bold type', colors: ['#fafafa', '#000000', '#ffff00'] },
+  { id: 'academy-light', name: 'Academy Light', desc: 'Sidebar + pastel KPI cards', colors: ['#f8fafc', '#059669', '#ecfdf5'], layout: 'sidebar' },
+  { id: 'saas-dark-pro', name: 'SaaS Dark Pro', desc: 'Sidebar + dense stats, neon accents', colors: ['#080b14', '#22d3ee', '#0ea5e9'], layout: 'sidebar' },
+  { id: 'minimal-admin', name: 'Minimal Admin', desc: 'Sidebar + icon-circle cards, light/dark toggle', colors: ['#fafafa', '#18181b', '#ffffff'], layout: 'sidebar', hasModeToggle: true },
 ];
 
 /** All modals: [overlayId, wrapId] — used for Escape-to-close. */
@@ -105,19 +108,47 @@ function animateValue(el, end, formatter, duration = 600) {
   requestAnimationFrame(step);
 }
 
-function applyTheme(theme) {
+const MODE_KEY = 'crm-theme-mode';
+
+function applyTheme(theme, opts) {
+  opts = opts || {};
+  const design = UI_DESIGNS.find(t => t.id === theme);
   document.documentElement.setAttribute('data-theme', theme);
+  document.documentElement.setAttribute('data-layout', design && design.layout ? design.layout : 'original');
   localStorage.setItem(THEME_KEY, theme);
+
+  const modeBtn = document.getElementById('btn-mode-toggle');
+  if (design && design.hasModeToggle) {
+    const mode = opts.keepMode ? (localStorage.getItem(MODE_KEY) || 'light') : 'light';
+    document.documentElement.setAttribute('data-mode', mode);
+    localStorage.setItem(MODE_KEY, mode);
+    modeBtn?.classList.remove('hidden');
+  } else {
+    document.documentElement.removeAttribute('data-mode');
+    modeBtn?.classList.add('hidden');
+  }
+
   document.querySelectorAll('.theme-option').forEach(el => {
     el.classList.toggle('active', el.dataset.theme === theme);
   });
+
+  // Sidebar layout only makes sense expanded on desktop; always start closed
+  // on mobile widths so it doesn't cover the page.
+  const sidebar = document.getElementById('app-sidebar');
+  if (sidebar && window.innerWidth <= 900) sidebar.classList.remove('open');
 }
 
-function renderThemeDropdown() {
-  const grid = document.getElementById('theme-options');
-  if (!grid) return;
+function toggleThemeMode() {
+  const current = document.documentElement.getAttribute('data-mode') || 'light';
+  const next = current === 'light' ? 'dark' : 'light';
+  document.documentElement.setAttribute('data-mode', next);
+  localStorage.setItem(MODE_KEY, next);
+}
+
+function renderThemeGrid(container, onPicked) {
+  if (!container) return;
   const current = localStorage.getItem(THEME_KEY) || 'default-dark';
-  grid.innerHTML = UI_DESIGNS.map(t => `
+  container.innerHTML = UI_DESIGNS.map(t => `
     <button type="button" class="theme-option${t.id === current ? ' active' : ''}" data-theme="${t.id}">
       <div class="theme-preview">
         <span style="background:${t.colors[0]}"></span>
@@ -129,7 +160,7 @@ function renderThemeDropdown() {
         <p class="theme-option-desc">${t.desc}</p>
       </div>
     </button>`).join('');
-  grid.querySelectorAll('.theme-option').forEach(btn => {
+  container.querySelectorAll('.theme-option').forEach(btn => {
     btn.addEventListener('click', () => {
       applyTheme(btn.dataset.theme);
       apiFetch('/api/settings', {
@@ -137,9 +168,15 @@ function renderThemeDropdown() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ theme: btn.dataset.theme }),
       }).catch(() => {});
-      document.getElementById('theme-dropdown')?.classList.add('hidden');
       toast(`Design: ${UI_DESIGNS.find(x => x.id === btn.dataset.theme)?.name}`);
+      if (onPicked) onPicked();
     });
+  });
+}
+
+function renderThemeDropdown() {
+  renderThemeGrid(document.getElementById('theme-options'), () => {
+    document.getElementById('theme-dropdown')?.classList.add('hidden');
   });
 }
 
@@ -156,6 +193,11 @@ function initThemePicker() {
     if (!document.getElementById('theme-picker-wrap')?.contains(e.target)) {
       dropdown.classList.add('hidden');
     }
+  });
+
+  document.getElementById('btn-mode-toggle')?.addEventListener('click', toggleThemeMode);
+  document.getElementById('btn-sidebar-toggle')?.addEventListener('click', () => {
+    document.getElementById('app-sidebar')?.classList.toggle('open');
   });
 }
 
@@ -208,6 +250,7 @@ async function initSettingsPage() {
   const emailForm = document.getElementById('email-settings-form');
   if (!authForm) return;
 
+  renderThemeGrid(document.getElementById('settings-theme-options'));
   loadAppVersion();
   initUpdateUi();
   checkForUpdates({ banner: Boolean(document.getElementById('update-banner')) });
@@ -617,9 +660,10 @@ async function loadAppBranding() {
       try { localStorage.setItem('crm-shop-name', auth.shop_name); } catch (_) {}
     }
     const saved = localStorage.getItem(THEME_KEY);
-    if (auth.theme && auth.theme !== saved) {
-      applyTheme(auth.theme);
-    }
+    // Always apply (not just on mismatch) so data-layout/data-mode get
+    // computed by the real applyTheme() logic on every load — the inline
+    // pre-paint script in base.html only sets data-theme, not layout/mode.
+    applyTheme(auth.theme || saved || 'default-dark', { keepMode: true });
     return auth;
   } catch (_) {
     return null;
@@ -654,11 +698,32 @@ function initModalEscapeHandler() {
   });
 }
 
+function initPageTransitions() {
+  // Subtle fade-out before a same-tab internal navigation, so the page
+  // change feels like one continuous transition instead of an abrupt
+  // white/dark flash between server-rendered pages. Kept short (120ms) so
+  // it never feels like it's slowing navigation down.
+  document.addEventListener('click', (e) => {
+    const link = e.target.closest('a[href]');
+    if (!link) return;
+    const url = new URL(link.href, window.location.href);
+    const isInternal = url.origin === window.location.origin;
+    const opensNewTab = link.target === '_blank' || e.metaKey || e.ctrlKey || e.shiftKey;
+    if (!isInternal || opensNewTab || link.hasAttribute('download')) return;
+    const main = document.querySelector('.page-enter');
+    if (!main) return;
+    e.preventDefault();
+    main.classList.add('page-leave');
+    setTimeout(() => { window.location.href = link.href; }, 120);
+  });
+}
+
 async function initApp() {
   initModalEscapeHandler();
   initWelcome();
   initThemePicker();
   initSettingsNav();
+  initPageTransitions();
   checkForUpdates({ banner: true });
   const auth = await loadAppBranding();
   if (auth?.show_welcome) {

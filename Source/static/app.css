@@ -34,6 +34,13 @@ body {
   from { opacity: 0; transform: translateY(14px); }
   to   { opacity: 1; transform: translateY(0); }
 }
+.page-leave {
+  animation: page-out 0.12s ease-in both;
+}
+@keyframes page-out {
+  from { opacity: 1; transform: translateY(0); }
+  to   { opacity: 0; transform: translateY(-6px); }
+}
 
 .stagger > * {
   animation: page-in 0.4s var(--ease-out) both;
@@ -614,6 +621,18 @@ input[type=number]::-webkit-outer-spin-button { opacity: 1; }
 .theme-preview span { width: 14px; height: 14px; border-radius: 4px; border: 1px solid rgba(255,255,255,0.1); }
 .theme-option-name { font-size: 0.8rem; font-weight: 600; color: #f1f5f9; }
 .theme-option-desc { font-size: 0.65rem; color: #64748b; margin-top: 1px; }
+
+/* Larger grid variant used on the Settings page (vs. the compact header dropdown) */
+.theme-options-grid-settings {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+  gap: 0.625rem;
+}
+[data-theme="light"] .theme-option, [data-theme="academy-light"] .theme-option, [data-theme="minimal-admin"] .theme-option {
+  background: #f8fafc; border-color: #e2e8f0;
+}
+[data-theme="light"] .theme-option-name, [data-theme="academy-light"] .theme-option-name, [data-theme="minimal-admin"] .theme-option-name { color: #1e293b; }
+[data-theme="light"] .theme-option.active, [data-theme="academy-light"] .theme-option.active, [data-theme="minimal-admin"] .theme-option.active { background: #d1fae5; border-color: #6ee7b7; }
 
 .login-panel { animation: welcome-pop 0.5s var(--ease-spring) both; }
 
@@ -1215,6 +1234,39 @@ input[type=number]::-webkit-outer-spin-button { opacity: 1; }
 [data-theme="light"] .btn-primary { border-radius: var(--ui-radius); box-shadow: none; }
 [data-theme="light"] .hero-card { background: #fff; border: 2px solid #059669; box-shadow: none; }
 [data-theme="light"] .table-row:hover { background: #f1f5f9; }
+/* .btn-ghost and a few other components default to near-white-on-dark
+   styling — nearly invisible on any light background theme. Fixed here
+   for "light" and reused by the newer light templates below. */
+[data-theme="light"] .btn-ghost, [data-theme="academy-light"] .btn-ghost, [data-theme="minimal-admin"] .btn-ghost {
+  background: #f1f5f9; color: #475569; border-color: #e2e8f0;
+}
+[data-theme="light"] .btn-ghost:hover, [data-theme="academy-light"] .btn-ghost:hover, [data-theme="minimal-admin"] .btn-ghost:hover {
+  background: #e2e8f0; color: #1e293b;
+}
+[data-theme="light"] .list-item-row, [data-theme="academy-light"] .list-item-row, [data-theme="minimal-admin"] .list-item-row,
+[data-theme="light"] .account-item, [data-theme="academy-light"] .account-item, [data-theme="minimal-admin"] .account-item,
+[data-theme="light"] .filter-tabs, [data-theme="academy-light"] .filter-tabs, [data-theme="minimal-admin"] .filter-tabs,
+[data-theme="light"] .update-progress-track, [data-theme="academy-light"] .update-progress-track, [data-theme="minimal-admin"] .update-progress-track {
+  background: #f1f5f9; border-color: #e2e8f0;
+}
+[data-theme="light"] .account-item:hover, [data-theme="academy-light"] .account-item:hover, [data-theme="minimal-admin"] .account-item:hover {
+  background: #e2e8f0;
+}
+[data-theme="light"] .account-item.selected, [data-theme="academy-light"] .account-item.selected, [data-theme="minimal-admin"] .account-item.selected {
+  background: #d1fae5; border-color: #6ee7b7;
+}
+/* Several pages inline Tailwind's dark-panel utilities directly in markup
+   (bg-slate-800/NN, bg-slate-900/NN, border-white/NN) for subtle highlight
+   boxes — invisible-to-wrong-looking on any light background theme. Catch
+   all of them with a substring attribute selector rather than chasing each
+   occurrence individually. */
+[data-theme="light"] [class*="bg-slate-800"], [data-theme="academy-light"] [class*="bg-slate-800"], [data-theme="minimal-admin"] [class*="bg-slate-800"],
+[data-theme="light"] [class*="bg-slate-900"], [data-theme="academy-light"] [class*="bg-slate-900"], [data-theme="minimal-admin"] [class*="bg-slate-900"] {
+  background-color: #f1f5f9 !important;
+}
+[data-theme="light"] [class*="border-white"], [data-theme="academy-light"] [class*="border-white"], [data-theme="minimal-admin"] [class*="border-white"] {
+  border-color: #e2e8f0 !important;
+}
 
 [data-theme="cyberpunk"] {
   --glass: rgba(20, 0, 40, 0.9);
@@ -1604,5 +1656,231 @@ input[type=number]::-webkit-outer-spin-button { opacity: 1; }
     padding: 0;
     box-shadow: none;
   }
+}
+
+/* ============================================================
+   Sidebar shell — shared structural layout for the new templates.
+   Hidden entirely for the original top-tabs themes; only shown
+   when [data-layout="sidebar"] is set on <html>.
+   ============================================================ */
+.sidebar-only { display: none; }
+.app-shell { display: block; }
+
+[data-layout="sidebar"] .original-only { display: none !important; }
+[data-layout="sidebar"] .sidebar-only { display: inline-flex; }
+[data-layout="sidebar"] .app-shell {
+  display: flex;
+  align-items: flex-start;
+  max-width: none;
+}
+[data-layout="sidebar"] .nav-bar .max-w-7xl { max-width: none; }
+
+.app-sidebar {
+  width: 240px;
+  flex-shrink: 0;
+  min-height: calc(100vh - 3.5rem);
+  border-right: 1px solid rgba(255,255,255,0.06);
+  background: rgba(15, 23, 42, 0.4);
+  display: none;
+  transition: transform 0.25s var(--ease-out);
+}
+[data-layout="sidebar"] .app-sidebar { display: block; }
+
+.app-sidebar-nav { padding: 1.25rem 0.75rem; position: sticky; top: 3.5rem; }
+.app-sidebar-group-label {
+  font-size: 0.68rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: rgba(148, 163, 184, 0.7);
+  padding: 0.9rem 0.75rem 0.4rem;
+}
+.app-sidebar-group-label:first-child { padding-top: 0.25rem; }
+.app-sidebar-link {
+  display: flex;
+  align-items: center;
+  gap: 0.65rem;
+  padding: 0.55rem 0.75rem;
+  border-radius: 0.5rem;
+  font-size: 0.875rem;
+  font-weight: 500;
+  color: #94a3b8;
+  transition: background 0.15s ease, color 0.15s ease;
+}
+.app-sidebar-link:hover { color: #fff; background: rgba(255,255,255,0.05); }
+.app-sidebar-link.active {
+  color: #fff;
+  background: linear-gradient(135deg, #059669, #10b981);
+  box-shadow: 0 2px 12px -2px rgba(16, 185, 129, 0.5);
+}
+.app-sidebar-link svg { flex-shrink: 0; }
+
+[data-layout="sidebar"] .app-main { flex: 1; min-width: 0; }
+
+@media (max-width: 900px) {
+  [data-layout="sidebar"] .app-sidebar {
+    position: fixed;
+    top: 3.5rem;
+    left: 0;
+    bottom: 0;
+    z-index: 40;
+    transform: translateX(-100%);
+    box-shadow: 8px 0 24px -8px rgba(0,0,0,0.4);
+  }
+  [data-layout="sidebar"] .app-sidebar.open { transform: translateX(0); }
+}
+
+/* ============================================================
+   Template: Academy Light — soft pastel KPI cards, grouped sidebar,
+   light background, top banner-style alerts.
+   ============================================================ */
+[data-theme="academy-light"] {
+  --glass: #ffffff;
+  --glow-emerald: none;
+  --ui-radius: 0.75rem;
+}
+[data-theme="academy-light"] body { background: #f8fafc; color: #1e293b; }
+[data-theme="academy-light"] .text-white { color: #1e293b !important; }
+[data-theme="academy-light"] .bg-mesh { background: #f1f5f9; }
+[data-theme="academy-light"] .nav-bar { background: #fff; border-color: #e2e8f0; box-shadow: 0 1px 3px rgba(0,0,0,0.05); }
+[data-theme="academy-light"] .app-sidebar { background: #fff; border-color: #eef2f6; }
+[data-theme="academy-light"] .app-sidebar-link { color: #64748b; }
+[data-theme="academy-light"] .app-sidebar-link:hover { background: #f1f5f9; color: #0f172a; }
+[data-theme="academy-light"] .app-sidebar-link.active { background: #d1fae5; color: #047857; box-shadow: none; }
+[data-theme="academy-light"] .app-sidebar-group-label { color: #94a3b8; }
+[data-theme="academy-light"] .glass-card, [data-theme="academy-light"] .section-panel {
+  background: #fff; border: 1px solid #eef2f6; box-shadow: 0 1px 2px rgba(0,0,0,0.03); border-radius: var(--ui-radius);
+}
+[data-theme="academy-light"] .section-header { background: #fafbfc; border-color: #eef2f6; }
+[data-theme="academy-light"] .input-field { background: #fff; color: #1e293b; border-color: #dde3ea; border-radius: 0.5rem; }
+[data-theme="academy-light"] .modal-panel { background: #fff; border-radius: 1rem; }
+[data-theme="academy-light"] .btn-primary { border-radius: 0.5rem; box-shadow: none; }
+[data-theme="academy-light"] .table-row:hover { background: #f8fafc; }
+[data-theme="academy-light"] .update-banner { background: #fef9c3; border-color: #fde68a; color: #854d0e; }
+/* Pastel KPI cards — rotate through soft tints instead of dark glass */
+[data-theme="academy-light"] .hero-card, [data-theme="academy-light"] .stat-card {
+  border-radius: var(--ui-radius); box-shadow: none; border: 1px solid transparent;
+}
+[data-theme="academy-light"] .hero-card { background: #ecfdf5; border-color: #bbf7d0; }
+[data-theme="academy-light"] .hero-card:nth-of-type(2) { background: #eff6ff; border-color: #bfdbfe; }
+[data-theme="academy-light"] .hero-card:nth-of-type(3) { background: #fefce8; border-color: #fde68a; }
+[data-theme="academy-light"] .stat-card { background: #f8fafc; border-color: #eef2f6; }
+[data-theme="academy-light"] .stat-card:hover { transform: none; border-color: #dde3ea; }
+[data-theme="academy-light"] .hero-card p, [data-theme="academy-light"] .stat-card p { color: #475569 !important; }
+[data-theme="academy-light"] .hero-card .text-emerald-400, [data-theme="academy-light"] .hero-card .text-emerald-400\/90 { color: #059669 !important; }
+[data-theme="academy-light"] .hero-card .text-blue-400, [data-theme="academy-light"] .hero-card .text-blue-400\/90 { color: #2563eb !important; }
+[data-theme="academy-light"] .hero-card .text-amber-400, [data-theme="academy-light"] .hero-card .text-amber-400\/90 { color: #b45309 !important; }
+
+/* ============================================================
+   Template: SaaS Dark Pro — dense stat stacks, neon accents,
+   dark navy background, grouped sidebar.
+   ============================================================ */
+[data-theme="saas-dark-pro"] {
+  --glass: rgba(15, 20, 34, 0.85);
+  --glow-emerald: 0 0 30px -6px rgba(34, 211, 238, 0.35);
+  --ui-radius: 0.6rem;
+}
+[data-theme="saas-dark-pro"] body { background: #080b14; }
+[data-theme="saas-dark-pro"] .bg-mesh {
+  background:
+    radial-gradient(ellipse 70% 40% at 15% -10%, rgba(34, 211, 238, 0.10), transparent),
+    radial-gradient(ellipse 60% 40% at 90% 5%, rgba(167, 139, 250, 0.10), transparent),
+    #080b14;
+}
+[data-theme="saas-dark-pro"] .nav-bar { background: rgba(10, 13, 22, 0.9); border-color: rgba(34,211,238,0.12); }
+[data-theme="saas-dark-pro"] .app-sidebar { background: rgba(10, 13, 22, 0.7); border-color: rgba(34,211,238,0.1); }
+[data-theme="saas-dark-pro"] .app-sidebar-link.active { background: linear-gradient(135deg, #0ea5e9, #22d3ee); box-shadow: 0 0 16px -2px rgba(34,211,238,0.6); }
+[data-theme="saas-dark-pro"] .glass-card, [data-theme="saas-dark-pro"] .section-panel {
+  background: var(--glass); border-color: rgba(34,211,238,0.1); border-radius: var(--ui-radius);
+}
+[data-theme="saas-dark-pro"] .section-header { background: rgba(10,13,22,0.6); border-color: rgba(34,211,238,0.08); }
+/* Dense stat stacking — tighter padding/gaps than the default cards */
+[data-theme="saas-dark-pro"] .hero-card {
+  padding: 1rem !important; border-radius: var(--ui-radius);
+  border: 1px solid rgba(34,211,238,0.18);
+  background: linear-gradient(135deg, rgba(14, 165, 233, 0.10) 0%, rgba(10,13,22,0.9) 65%);
+  box-shadow: var(--glow-emerald);
+}
+[data-theme="saas-dark-pro"] .hero-card p:first-child { font-size: 0.72rem; margin-bottom: 0.35rem; }
+[data-theme="saas-dark-pro"] .hero-card p.text-3xl, [data-theme="saas-dark-pro"] .hero-card p.text-4xl, [data-theme="saas-dark-pro"] .hero-card p.text-5xl {
+  font-size: 1.6rem !important;
+}
+[data-theme="saas-dark-pro"] .stat-card { padding: 0.75rem !important; background: rgba(15,20,34,0.7); border-color: rgba(34,211,238,0.1); }
+[data-theme="saas-dark-pro"] .stat-card p.text-xl { font-size: 1.05rem !important; }
+[data-theme="saas-dark-pro"] .grid.stagger, [data-theme="saas-dark-pro"] section .grid { gap: 0.6rem; }
+[data-theme="saas-dark-pro"] .btn-primary { background: linear-gradient(135deg, #0ea5e9, #22d3ee); box-shadow: 0 0 16px -4px rgba(34,211,238,0.6); }
+[data-theme="saas-dark-pro"] .nav-link.active, [data-theme="saas-dark-pro"] .app-sidebar-link.active { background: linear-gradient(135deg, #0ea5e9, #22d3ee); }
+
+/* ============================================================
+   Template: Minimal Admin — light mode, icon-circle KPI cards,
+   header light/dark toggle, clean minimal lines.
+   ============================================================ */
+[data-theme="minimal-admin"] {
+  --glass: #ffffff;
+  --glow-emerald: none;
+  --ui-radius: 0.65rem;
+}
+[data-theme="minimal-admin"] body { background: #fafafa; color: #18181b; }
+[data-theme="minimal-admin"] .text-white { color: #18181b !important; }
+[data-theme="minimal-admin"] .bg-mesh { background: #fafafa; }
+[data-theme="minimal-admin"] .nav-bar { background: #fff; border-color: #ececec; box-shadow: none; }
+[data-theme="minimal-admin"] .app-sidebar { background: #fff; border-color: #ececec; }
+[data-theme="minimal-admin"] .app-sidebar-link { color: #71717a; }
+[data-theme="minimal-admin"] .app-sidebar-link:hover { background: #f4f4f5; color: #18181b; }
+[data-theme="minimal-admin"] .app-sidebar-link.active { background: #18181b; color: #fff; box-shadow: none; }
+[data-theme="minimal-admin"] .glass-card, [data-theme="minimal-admin"] .section-panel, [data-theme="minimal-admin"] .stat-card {
+  background: #fff; border: 1px solid #ececec; box-shadow: none; border-radius: var(--ui-radius);
+}
+[data-theme="minimal-admin"] .section-header { background: #fff; border-color: #ececec; }
+[data-theme="minimal-admin"] .input-field { background: #fff; color: #18181b; border-color: #e4e4e7; border-radius: 0.5rem; }
+[data-theme="minimal-admin"] .btn-primary { background: #18181b; box-shadow: none; border-radius: 0.5rem; }
+[data-theme="minimal-admin"] .table-row:hover { background: #fafafa; }
+/* Icon-circle KPI cards */
+[data-theme="minimal-admin"] .hero-card {
+  background: #fff; border: 1px solid #ececec; box-shadow: none; border-radius: var(--ui-radius);
+  position: relative; padding-left: 4.25rem !important;
+}
+[data-theme="minimal-admin"] .hero-card::before {
+  content: ''; position: absolute; left: 1.25rem; top: 1.25rem; width: 2.25rem; height: 2.25rem;
+  border-radius: 50%; background: #f4f4f5;
+}
+[data-theme="minimal-admin"] .hero-card p { color: #71717a !important; }
+[data-theme="minimal-admin"] .hero-card p.text-3xl, [data-theme="minimal-admin"] .hero-card p.text-4xl, [data-theme="minimal-admin"] .hero-card p.text-5xl { color: #18181b !important; }
+
+/* Minimal Admin dark-mode sub-toggle (data-mode="dark" layered on top) */
+[data-theme="minimal-admin"][data-mode="dark"] body { background: #111113; color: #f4f4f5; }
+[data-theme="minimal-admin"][data-mode="dark"] .text-white { color: #f4f4f5 !important; }
+[data-theme="minimal-admin"][data-mode="dark"] .bg-mesh { background: #111113; }
+[data-theme="minimal-admin"][data-mode="dark"] .nav-bar { background: #18181b; border-color: #27272a; }
+[data-theme="minimal-admin"][data-mode="dark"] .app-sidebar { background: #18181b; border-color: #27272a; }
+[data-theme="minimal-admin"][data-mode="dark"] .app-sidebar-link { color: #a1a1aa; }
+[data-theme="minimal-admin"][data-mode="dark"] .app-sidebar-link:hover { background: #27272a; color: #fff; }
+[data-theme="minimal-admin"][data-mode="dark"] .app-sidebar-link.active { background: #f4f4f5; color: #18181b; }
+[data-theme="minimal-admin"][data-mode="dark"] .glass-card, [data-theme="minimal-admin"][data-mode="dark"] .section-panel,
+[data-theme="minimal-admin"][data-mode="dark"] .stat-card, [data-theme="minimal-admin"][data-mode="dark"] .hero-card {
+  background: #18181b; border-color: #27272a;
+}
+[data-theme="minimal-admin"][data-mode="dark"] .hero-card::before { background: #27272a; }
+[data-theme="minimal-admin"][data-mode="dark"] .hero-card p { color: #a1a1aa !important; }
+[data-theme="minimal-admin"][data-mode="dark"] .hero-card p.text-3xl, [data-theme="minimal-admin"][data-mode="dark"] .hero-card p.text-4xl, [data-theme="minimal-admin"][data-mode="dark"] .hero-card p.text-5xl { color: #fff !important; }
+[data-theme="minimal-admin"][data-mode="dark"] .input-field { background: #18181b; color: #f4f4f5; border-color: #27272a; }
+[data-theme="minimal-admin"][data-mode="dark"] .btn-primary { background: #f4f4f5; color: #18181b; }
+[data-theme="minimal-admin"][data-mode="dark"] .table-row:hover { background: #1f1f22; }
+[data-theme="minimal-admin"][data-mode="dark"] .btn-ghost { background: #27272a; color: #d4d4d8; border-color: #3f3f46; }
+[data-theme="minimal-admin"][data-mode="dark"] .btn-ghost:hover { background: #3f3f46; color: #fff; }
+[data-theme="minimal-admin"][data-mode="dark"] .list-item-row, [data-theme="minimal-admin"][data-mode="dark"] .account-item,
+[data-theme="minimal-admin"][data-mode="dark"] .filter-tabs, [data-theme="minimal-admin"][data-mode="dark"] .update-progress-track {
+  background: #18181b; border-color: #27272a;
+}
+[data-theme="minimal-admin"][data-mode="dark"] [class*="bg-slate-800"], [data-theme="minimal-admin"][data-mode="dark"] [class*="bg-slate-900"] {
+  background-color: #18181b !important;
+}
+[data-theme="minimal-admin"][data-mode="dark"] [class*="border-white"] {
+  border-color: #27272a !important;
+}
+
+@media print {
+  .sidebar-only, .app-sidebar, #btn-mode-toggle { display: none !important; }
+  .app-shell { display: block !important; }
 }
 
