@@ -134,6 +134,25 @@ jobs:
         id: ver
         run: echo "version=$(tr -d '[:space:]' < Source/VERSION)" >> "$GITHUB_OUTPUT"
 
+      - name: Restore executable permissions lost by artifact download
+        # actions/download-artifact does not reliably preserve the Unix
+        # executable bit on files built on a different runner OS (these Mac
+        # binaries were built on macos-latest, downloaded here on
+        # ubuntu-latest) — confirmed by actually launching a downloaded
+        # release build, which failed to start because its binary had lost
+        # +x. Restore it explicitly, right before these get zipped for
+        # customers, so it can't silently regress again upstream.
+        run: |
+          for dir in artifacts/mac-intel artifacts/mac-arm64 artifacts/mac-universal; do
+            app="$dir/Phone Reseller CRM.app"
+            if [ -d "$app" ]; then
+              find "$app" -type f \( -name "PhoneResellerCRM" -o -name "FolderPicker" \) -exec chmod +x {} \;
+            fi
+            if [ -f "$dir/FolderPicker" ]; then
+              chmod +x "$dir/FolderPicker"
+            fi
+          done
+
       - name: Package release zips
         run: |
           set -euo pipefail
