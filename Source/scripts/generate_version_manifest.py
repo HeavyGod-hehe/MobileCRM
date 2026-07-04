@@ -32,17 +32,22 @@ def build_manifest(version: str, repo: str, tag: str, notes: str = "") -> dict:
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--version", required=True)
-    parser.add_argument("--repo", required=True, help="owner/name e.g. HeavyGod-hehe/MobileCRM")
+    parser.add_argument("--repo", required=True, help="owner/name e.g. HeavyGod-hehe/MobileCRM-releases")
     parser.add_argument("--tag", required=True, help="release tag e.g. v2.3.0")
     parser.add_argument("--notes", default="")
+    parser.add_argument(
+        "--output", default=str(OUT),
+        help="Where to write version.json (default: Source/releases/version.json)",
+    )
     args = parser.parse_args()
 
-    OUT.parent.mkdir(parents=True, exist_ok=True)
-    OUT.write_text(
+    out_path = Path(args.output)
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    out_path.write_text(
         json.dumps(build_manifest(args.version, args.repo, args.tag, args.notes), indent=2) + "\n",
         encoding="utf-8",
     )
-    print(f"Wrote {OUT}")
+    print(f"Wrote {out_path}")
 
 
 if __name__ == "__main__":

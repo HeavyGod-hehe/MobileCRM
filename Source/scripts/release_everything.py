@@ -23,8 +23,9 @@ ROOT = Path(__file__).resolve().parents[2]  # MobileCRM repo root
 SOURCE = ROOT / "Source"
 VERSION_FILE = SOURCE / "VERSION"
 REPO = "HeavyGod-hehe/MobileCRM"
+RELEASES_REPO = "HeavyGod-hehe/MobileCRM-releases"  # public repo — actual downloads land here
 ACTIONS_URL = f"https://github.com/{REPO}/actions/workflows/release.yml"
-RELEASES_URL = f"https://github.com/{REPO}/releases"
+RELEASES_URL = f"https://github.com/{RELEASES_REPO}/releases"
 
 
 def run(cmd: list[str], *, cwd: Path | None = None, check: bool = True) -> subprocess.CompletedProcess:

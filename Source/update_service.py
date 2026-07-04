@@ -24,14 +24,17 @@ from typing import Any
 
 from app_paths import customer_data_dir, customer_install_dir
 
-# All customer apps check this file on GitHub for updates (no setup needed per customer).
+# All customer apps check this file for updates (no setup needed per customer).
+# Points at a SEPARATE public releases repo, not the private source repo —
+# the source repo (and the licensing code in it) never needs to be public
+# for the updater to work. See HOW_TO_RELEASE.md.
 DEFAULT_MANIFEST_URL = os.environ.get(
     "CRM_UPDATE_MANIFEST_URL",
-    "https://raw.githubusercontent.com/HeavyGod-hehe/MobileCRM/Version007/Source/releases/version.json",
+    "https://raw.githubusercontent.com/HeavyGod-hehe/MobileCRM-releases/main/version.json",
 )
 LEGACY_VERSION_URL = os.environ.get(
     "CRM_GITHUB_VERSION_URL",
-    "https://raw.githubusercontent.com/HeavyGod-hehe/MobileCRM/Version007/Source/VERSION",
+    "https://raw.githubusercontent.com/HeavyGod-hehe/MobileCRM-releases/main/VERSION",
 )
 
 _USER_AGENT = "PhoneResellerCRM-Updater/1.0"
@@ -253,6 +256,7 @@ def _spawn_windows_updater(new_app_dir: Path, target: dict[str, Any], parent_pid
     install = target["install_dir"]
     app_dir = target["app_dir"]
     launcher = target["launcher"]
+    launcher_name = launcher.name
     backup = install / f"{app_dir.name}.update-backup"
     script = _updates_dir() / "apply_update.bat"
     script.write_text(
@@ -265,12 +269,28 @@ if not errorlevel 1 (
   timeout /t 1 /nobreak >nul
   goto wait
 )
+if not exist "{new_app_dir}\\{launcher_name}" (
+  rem Downloaded update looks incomplete/broken — leave the working
+  rem install untouched and relaunch it instead of installing something
+  rem that might not run.
+  start "" "{launcher}"
+  del /f /q "%~f0"
+  exit /b 1
+)
 if exist "{backup}" rmdir /s /q "{backup}"
 if exist "{app_dir}" move /Y "{app_dir}" "{backup}"
 move /Y "{new_app_dir}" "{app_dir}"
-start "" "{launcher}"
-timeout /t 3 /nobreak >nul
-if exist "{backup}" rmdir /s /q "{backup}"
+if exist "{app_dir}\\{launcher_name}" (
+  start "" "{launcher}"
+  timeout /t 3 /nobreak >nul
+  if exist "{backup}" rmdir /s /q "{backup}"
+) else (
+  rem The move somehow produced a broken install — restore the backup
+  rem so the customer isn't left with nothing.
+  if exist "{app_dir}" rmdir /s /q "{app_dir}"
+  if exist "{backup}" move /Y "{backup}" "{app_dir}"
+  start "" "{launcher}"
+)
 del /f /q "%~f0"
 """,
         encoding="utf-8",
@@ -288,19 +308,38 @@ del /f /q "%~f0"
 def _spawn_mac_updater(new_app_bundle: Path, target: dict[str, Any], parent_pid: int) -> Path:
     install = target["install_dir"]
     app_bundle = target["app_bundle"]
+    launcher_rel = "Contents/MacOS/PhoneResellerCRM"
     backup = install / "Phone Reseller CRM.app.update-backup"
     script = _updates_dir() / "apply_update.command"
     script.write_text(
         f"""#!/bin/bash
-set -e
+# No `set -e` here on purpose — this script's job IS the safety net, so a
+# transient non-zero exit from e.g. `open` must not abort it mid-way and
+# skip the backup cleanup below.
 sleep 2
 while kill -0 {parent_pid} 2>/dev/null; do sleep 1; done
+if [ ! -f "{new_app_bundle}/{launcher_rel}" ]; then
+  # Downloaded update looks incomplete/broken — leave the working install
+  # untouched and relaunch it instead of installing something that might
+  # not run.
+  open "{app_bundle}" || true
+  rm -f "$0"
+  exit 1
+fi
 rm -rf "{backup}"
 if [ -d "{app_bundle}" ]; then mv "{app_bundle}" "{backup}"; fi
 mv "{new_app_bundle}" "{app_bundle}"
-open "{app_bundle}"
-sleep 2
-rm -rf "{backup}"
+if [ -f "{app_bundle}/{launcher_rel}" ]; then
+  open "{app_bundle}" || true
+  sleep 2
+  rm -rf "{backup}"
+else
+  # The move somehow produced a broken install — restore the backup so
+  # the customer isn't left with nothing.
+  rm -rf "{app_bundle}"
+  if [ -d "{backup}" ]; then mv "{backup}" "{app_bundle}"; fi
+  open "{app_bundle}" || true
+fi
 rm -f "$0"
 """,
         encoding="utf-8",

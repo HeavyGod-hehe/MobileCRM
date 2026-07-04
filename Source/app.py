@@ -28,11 +28,6 @@ if getattr(sys, "frozen", False):
     _ver_path = Path(sys._MEIPASS) / "VERSION"
     APP_VERSION = _ver_path.read_text(encoding="utf-8").strip() if _ver_path.is_file() else "1.0.0"
 
-GITHUB_VERSION_URL = os.environ.get(
-    "CRM_GITHUB_VERSION_URL",
-    "https://raw.githubusercontent.com/HeavyGod-hehe/MobileCRM/Version007/Source/VERSION",
-)
-
 PHONE_STATUSES = db.PHONE_STATUSES
 ENTRY_TYPES = db.ENTRY_TYPES
 

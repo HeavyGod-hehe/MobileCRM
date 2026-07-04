@@ -49,10 +49,21 @@ Use this if you only want to rebuild without changing `VERSION`.
 
 ## First-time setup (once)
 
-Make sure your repo is public (or customers cannot download updates without login).
+Customer apps check for updates on a **separate public repo** — not this one. Your actual source code (including the licensing logic) stays private; only the update manifest and built app downloads live in the public repo. Set this up once:
 
-After your first successful release, check:
-https://github.com/HeavyGod-hehe/MobileCRM/releases
+1. **Create a new repo on GitHub**: go to github.com/new, name it `MobileCRM-releases`, set visibility to **Public**, click Create. Leave it empty — nothing else to do here.
+
+2. **Create a token so this repo can publish to it**: on GitHub, go to your profile picture → **Settings** → **Developer settings** → **Personal access tokens** → **Fine-grained tokens** → **Generate new token**.
+   - Repository access: **Only select repositories** → pick `MobileCRM-releases`
+   - Permissions: **Contents** → **Read and write**
+   - Generate, then copy the token (you won't see it again).
+
+3. **Add that token as a secret in THIS (private) repo**: this repo → **Settings** → **Secrets and variables** → **Actions** → **New repository secret**.
+   - Name: `RELEASES_REPO_TOKEN`
+   - Value: paste the token from step 2
+
+After that, your normal 3-step routine above works exactly the same — releases just get published to `MobileCRM-releases` instead of this repo. Check progress at:
+https://github.com/HeavyGod-hehe/MobileCRM-releases/releases
 
 ## License keys (vendor only)
 

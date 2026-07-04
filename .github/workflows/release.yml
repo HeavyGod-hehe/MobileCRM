@@ -95,8 +95,19 @@ jobs:
     name: Publish release + version.json
     needs: [build-mac-arm64, build-mac-intel, build-mac-universal, build-windows]
     runs-on: ubuntu-latest
+    env:
+      RELEASES_REPO: HeavyGod-hehe/MobileCRM-releases
     steps:
       - uses: actions/checkout@v4
+
+      # Customer apps fetch version.json from this SEPARATE public repo, not
+      # this (private) source repo — see HOW_TO_RELEASE.md for why. Requires
+      # a RELEASES_REPO_TOKEN secret with write access to that repo.
+      - uses: actions/checkout@v4
+        with:
+          repository: ${{ env.RELEASES_REPO }}
+          token: ${{ secrets.RELEASES_REPO_TOKEN }}
+          path: releases-repo
 
       - uses: actions/download-artifact@v4
         with:
@@ -121,9 +132,9 @@ jobs:
           zip -ry "../../dist/PhoneResellerCRM-Windows-${VERSION}.zip" "Phone Reseller CRM"
           ls -la ../../dist/
 
-      - name: Create or update GitHub Release
+      - name: Create or update GitHub Release (on the public releases repo)
         env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_TOKEN: ${{ secrets.RELEASES_REPO_TOKEN }}
         run: |
           set -euo pipefail
           VERSION="${{ steps.ver.outputs.version }}"
@@ -133,28 +144,31 @@ jobs:
           Customer apps: open **Settings → Software Update → Install update**.
           Your **Data** folder (database & backups) is not touched."
 
-          if gh release view "$TAG" --repo "${{ github.repository }}" >/dev/null 2>&1; then
-            gh release upload "$TAG" dist/*.zip --clobber --repo "${{ github.repository }}"
-            gh release edit "$TAG" --notes "$NOTES" --repo "${{ github.repository }}"
+          if gh release view "$TAG" --repo "$RELEASES_REPO" >/dev/null 2>&1; then
+            gh release upload "$TAG" dist/*.zip --clobber --repo "$RELEASES_REPO"
+            gh release edit "$TAG" --notes "$NOTES" --repo "$RELEASES_REPO"
           else
             gh release create "$TAG" dist/*.zip \
               --title "Phone Reseller CRM ${VERSION}" \
               --notes "$NOTES" \
-              --repo "${{ github.repository }}"
+              --repo "$RELEASES_REPO"
           fi
 
-      - name: Update version.json manifest
+      - name: Update version.json manifest (in the releases repo)
         run: |
           python Source/scripts/generate_version_manifest.py \
             --version "${{ steps.ver.outputs.version }}" \
-            --repo "${{ github.repository }}" \
-            --tag "v${{ steps.ver.outputs.version }}"
+            --repo "$RELEASES_REPO" \
+            --tag "v${{ steps.ver.outputs.version }}" \
+            --output releases-repo/version.json
+          cp Source/VERSION releases-repo/VERSION
 
-      - name: Commit manifest for auto-updater
+      - name: Commit manifest to releases repo
+        working-directory: releases-repo
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add Source/releases/version.json
+          git add version.json VERSION
           if git diff --staged --quiet; then
             echo "version.json unchanged"
           else
