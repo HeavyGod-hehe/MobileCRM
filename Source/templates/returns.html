@@ -20,6 +20,10 @@
       <p class="text-sm text-slate-400">Return stock to a supplier. Select a bought phone from the dropdown. Refund is posted to Cash Book and linked supplier account when selected.</p>
       <form id="purchase-return-form" class="grid grid-cols-1 sm:grid-cols-2 gap-4 max-w-2xl">
         <div class="sm:col-span-2">
+          <label class="block text-xs font-medium text-slate-400 mb-1.5">Search by IMEI</label>
+          <input type="search" id="pr-imei-search" class="input-field" placeholder="Type an IMEI to filter the list below" autocomplete="off">
+        </div>
+        <div class="sm:col-span-2">
           <label class="block text-xs font-medium text-slate-400 mb-1.5">Bought Phone *</label>
           <select id="pr-phone" class="input-field" required>
             <option value="">— Select bought phone —</option>
@@ -52,6 +56,10 @@
     <div id="panel-sale" class="hidden space-y-5">
       <p class="text-sm text-slate-400">Customer returning a sold phone. Select from sold inventory. Refund is posted to Cash Book and customer account when selected.</p>
       <form id="sale-return-form" class="grid grid-cols-1 sm:grid-cols-2 gap-4 max-w-2xl">
+        <div class="sm:col-span-2">
+          <label class="block text-xs font-medium text-slate-400 mb-1.5">Search by IMEI</label>
+          <input type="search" id="sr-imei-search" class="input-field" placeholder="Type an IMEI to filter the list below" autocomplete="off">
+        </div>
         <div class="sm:col-span-2">
           <label class="block text-xs font-medium text-slate-400 mb-1.5">Sold Phone *</label>
           <select id="sr-phone" class="input-field" required>
@@ -137,6 +145,22 @@
       items.map(p => `<option value="${p.id}">${esc(phoneLabel(p))}</option>`).join('');
   }
 
+  function filterByImei(items, query) {
+    const q = query.trim().toLowerCase().replace(/[\s-]/g, '');
+    if (!q) return items;
+    return items.filter(p => {
+      const imei = (p.imei || '').toLowerCase().replace(/[\s-]/g, '');
+      const imei2 = (p.imei2 || '').toLowerCase().replace(/[\s-]/g, '');
+      return imei.includes(q) || imei2.includes(q);
+    });
+  }
+
+  function applyImeiSearch(searchId, selectId, items, placeholder) {
+    const query = document.getElementById(searchId).value;
+    const filtered = filterByImei(items, query);
+    fillPhoneSelect(selectId, filtered, filtered.length ? placeholder : 'No phones match that IMEI');
+  }
+
   function onPurchasePhoneChange() {
     const id = parseInt(document.getElementById('pr-phone').value, 10);
     const phone = purchaseInventory.find(p => p.id === id);
@@ -219,6 +243,10 @@
 
   document.getElementById('pr-phone').addEventListener('change', onPurchasePhoneChange);
   document.getElementById('sr-phone').addEventListener('change', onSalePhoneChange);
+  document.getElementById('pr-imei-search').addEventListener('input', () =>
+    applyImeiSearch('pr-imei-search', 'pr-phone', purchaseInventory, '— Select bought phone —'));
+  document.getElementById('sr-imei-search').addEventListener('input', () =>
+    applyImeiSearch('sr-imei-search', 'sr-phone', saleInventory, '— Select sold phone —'));
 
   document.getElementById('purchase-return-form').addEventListener('submit', async (e) => {
     e.preventDefault();

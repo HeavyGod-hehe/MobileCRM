@@ -1,13 +1,13 @@
 # Mobile CRM - Logic Review & Stress Test Report
 
-**Generated:** 2026-07-01 12:29:25
-**Database:** `\tmp\crm_stress_test.db` (0.21 MB)
+**Generated:** 2026-07-04 06:16:26
+**Database:** `/private/tmp/claude-501/-Users-abdulrehmannaeem-MobileCRM/255da014-7fcf-45f0-9be5-2626534b4492/scratchpad/crm_final.db` (0.29 MB)
 
 ## Summary
 
 | Metric | Value |
 |--------|-------|
-| Tests passed | **21** |
+| Tests passed | **22** |
 | Tests failed | **0** |
 | Warnings | 0 |
 
@@ -16,51 +16,52 @@
 | Metric | Count / Value |
 |--------|---------------|
 | Account Entries | 159 |
-| Bank Transactions | 51 |
-| Bulk Create 50 Phones Ms | 15.9 |
-| Bulk Sold 25 Phones Ms | 8.3 |
-| Cash Book Entries | 415 |
-| Cash In Hand | -7331425.0 |
+| Bank Transactions | 52 |
+| Bulk Create 50 Phones Ms | 13.8 |
+| Bulk Sold 25 Phones Ms | 6.1 |
+| Cash Book Entries | 421 |
+| Cash In Hand | -7099925.0 |
 | Dashboard Net Profit | 810000.0 |
 | Dashboard Stock Worth | 12375800.0 |
 | Dashboard Udhar | 1023500.0 |
-| Db Size Mb | 0.21 |
+| Db Size Mb | 0.29 |
 | Journal Vouchers | 20 |
-| Ledger Links | 389 |
+| Ledger Links | 392 |
 | Orphan Ledger Account Links | 0 |
 | Orphan Ledger Cash Links | 0 |
 | Phones Bought | 158 |
 | Phones Sold | 51 |
 | Phones Total | 210 |
 | Return Logs | 2 |
-| Stress Total Ms | 287.2 |
+| Stress Total Ms | 131.5 |
 | Today Bought | 209 |
 | Today Sold | 26 |
-| Total In Bank | -2667500.0 |
+| Total In Bank | -2662500.0 |
 
 ## Test results
 
-- [PASS] **Purchase + udhar ledger sync** - OK (31ms)
-- [PASS] **Borrow phone ledger sync** - OK (30ms)
-- [PASS] **Sale + receivable ledger sync** - OK (28ms)
-- [PASS] **Phone expense -> cash book sync** - OK (22ms)
-- [PASS] **Food expense -> cash out sync** - OK (17ms)
-- [PASS] **Wasool debit -> cash in sync** - OK (17ms)
-- [PASS] **Delete phone cascades ledger** - OK (21ms)
-- [PASS] **Delete account entry cascades cash book** - OK (26ms)
-- [PASS] **Journal voucher create/delete** - OK (23ms)
-- [PASS] **Purchase return flow** - OK (23ms)
-- [PASS] **Sale return flow** - OK (21ms)
-- [PASS] **Today summary includes sold-as-bought** - OK (20ms)
-- [PASS] **Update phone investments (bug fix)** - OK (20ms)
-- [PASS] **Udhar dashboard no double-count** - OK (28ms)
-- [PASS] **Duplicate IMEI rejected** - OK (20ms)
-- [PASS] **Sale price edit re-syncs cash book** - OK (20ms)
-- [PASS] **Bulk sold udhar requires buyer account** - OK (25ms)
-- [PASS] **Fixed expense posts to cash book** - OK (20ms)
+- [PASS] **Purchase + udhar ledger sync** - OK (4ms)
+- [PASS] **Borrow phone ledger sync** - OK (4ms)
+- [PASS] **Sale + receivable ledger sync** - OK (4ms)
+- [PASS] **Phone expense -> cash book sync** - OK (3ms)
+- [PASS] **Food expense -> cash out sync** - OK (2ms)
+- [PASS] **Wasool debit -> cash in sync** - OK (3ms)
+- [PASS] **Delete phone cascades ledger** - OK (3ms)
+- [PASS] **Delete account entry cascades cash book** - OK (3ms)
+- [PASS] **Journal voucher create/delete** - OK (3ms)
+- [PASS] **Purchase return flow** - OK (3ms)
+- [PASS] **Sale return flow** - OK (3ms)
+- [PASS] **Today summary includes sold-as-bought** - OK (4ms)
+- [PASS] **Update phone investments (bug fix)** - OK (4ms)
+- [PASS] **Udhar dashboard no double-count** - OK (4ms)
+- [PASS] **Duplicate IMEI rejected** - OK (3ms)
+- [PASS] **Sale price edit re-syncs cash book** - OK (4ms)
+- [PASS] **Bulk sold udhar requires buyer account** - OK (2ms)
+- [PASS] **Fixed expense posts to cash book** - OK (3ms)
+- [PASS] **Zero cash balance + new account** - OK (4ms)
 - [PASS] **No orphan cash ledger links** - 
 - [PASS] **No orphan account ledger links** - 
-- [PASS] **Bulk delete reduces ledger links** - links 389 -> 358, cb 415 -> 385
+- [PASS] **Bulk delete reduces ledger links** - links 392 -> 360, cb 421 -> 390
 
 ## Sync architecture verified
 

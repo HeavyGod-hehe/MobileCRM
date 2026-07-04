@@ -102,8 +102,19 @@ def db_session():
         conn.close()
 
 
+def _recover_crashed_table_rebuild(conn, live_table, staging_table):
+    """If a previous run crashed between dropping `live_table` and renaming
+    `staging_table` into place, finish the rename now — before any
+    `CREATE TABLE IF NOT EXISTS` below can recreate `live_table` empty and
+    strand the real data in the staging table forever."""
+    if _table_exists(conn, staging_table) and not _table_exists(conn, live_table):
+        conn.execute(f"ALTER TABLE {staging_table} RENAME TO {live_table}")
+
+
 def init_db():
     with db_session() as conn:
+        _recover_crashed_table_rebuild(conn, "phones", "phones_migrated")
+        _recover_crashed_table_rebuild(conn, "phones", "phones_status_migrated")
         conn.executescript(
             """
             CREATE TABLE IF NOT EXISTS settings (
@@ -221,6 +232,8 @@ def init_db():
                 (key, value),
             )
         _migrate_multi_user(conn)
+        _migrate_purchase_invoices(conn)
+        _migrate_indexes(conn)
         ensure_customer_data_layout(conn)
 
 
@@ -250,6 +263,31 @@ def _run_migration_script(conn, script, staging_table=None):
             conn.execute(f"DROP TABLE IF EXISTS {staging_table}")
 
 
+def _verify_and_swap_table(conn, source_table, staging_table):
+    """Abort (instead of silently losing data) if the rebuild dropped rows or
+    columns the live table currently has, then drop the old table and rename
+    the staging table into place. Guards against a migration's hardcoded
+    column list going stale after later migrations add new columns."""
+    source_cols = {r["name"] for r in conn.execute(f"PRAGMA table_info({source_table})").fetchall()}
+    staging_cols = {r["name"] for r in conn.execute(f"PRAGMA table_info({staging_table})").fetchall()}
+    missing_cols = source_cols - staging_cols
+    if missing_cols:
+        raise RuntimeError(
+            f"Migration aborted: rebuilding '{source_table}' would drop column(s) "
+            f"{sorted(missing_cols)} that still have data. Not proceeding — "
+            "your existing data has not been touched."
+        )
+    source_count = conn.execute(f"SELECT COUNT(*) AS c FROM {source_table}").fetchone()["c"]
+    staging_count = conn.execute(f"SELECT COUNT(*) AS c FROM {staging_table}").fetchone()["c"]
+    if staging_count != source_count:
+        raise RuntimeError(
+            f"Migration aborted: rebuilding '{source_table}' produced {staging_count} rows, "
+            f"expected {source_count}. Not proceeding — your existing data has not been touched."
+        )
+    conn.execute(f"DROP TABLE {source_table}")
+    conn.execute(f"ALTER TABLE {staging_table} RENAME TO {source_table}")
+
+
 def _migrate_phone_columns(conn):
     columns = {
         "imei": "TEXT NOT NULL DEFAULT ''",
@@ -274,9 +312,25 @@ def _migrate_phones_table(conn):
         conn.execute("DROP TABLE IF EXISTS phones_migrated")
         return
 
+    # Carry forward every column the live table currently has (not just the
+    # columns known when this migration was first written), so columns added
+    # by later migrations (IMEI, bank links, etc.) are never silently dropped
+    # if this legacy rebuild ever fires again on a mid-upgrade database.
+    base_cols = (
+        "id", "model", "condition", "type", "purchase_price",
+        "supplier_name", "supplier_contact", "status",
+        "payable_amount", "advance_received",
+        "buyer_name", "buyer_contact", "sale_price", "receivable_amount",
+        "sold_at", "created_at",
+    )
+    existing_cols = [r["name"] for r in conn.execute("PRAGMA table_info(phones)").fetchall()]
+    extra_cols = [c for c in existing_cols if c not in base_cols]
+    extra_defs = "".join(f",\n            {c} TEXT" for c in extra_cols)
+    extra_list = "".join(f", {c}" for c in extra_cols)
+
     _run_migration_script(
         conn,
-        """
+        f"""
         CREATE TABLE phones_migrated (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             model TEXT NOT NULL,
@@ -294,7 +348,7 @@ def _migrate_phones_table(conn):
             sale_price REAL,
             receivable_amount REAL NOT NULL DEFAULT 0,
             sold_at TEXT,
-            created_at TEXT NOT NULL DEFAULT (datetime('now'))
+            created_at TEXT NOT NULL DEFAULT (datetime('now')){extra_defs}
         );
 
         INSERT INTO phones_migrated (
@@ -302,7 +356,7 @@ def _migrate_phones_table(conn):
             supplier_name, supplier_contact, status,
             payable_amount, advance_received,
             buyer_name, buyer_contact, sale_price, receivable_amount,
-            sold_at, created_at
+            sold_at, created_at{extra_list}
         )
         SELECT
             id, model, condition, type, purchase_price,
@@ -314,14 +368,12 @@ def _migrate_phones_table(conn):
             END,
             payable_amount, advance_received,
             buyer_name, buyer_contact, sale_price, receivable_amount,
-            sold_at, created_at
+            sold_at, created_at{extra_list}
         FROM phones;
-
-        DROP TABLE phones;
-        ALTER TABLE phones_migrated RENAME TO phones;
         """,
         staging_table="phones_migrated",
     )
+    _verify_and_swap_table(conn, "phones", "phones_migrated")
 
 
 def _migrate_phone_statuses(conn):
@@ -336,17 +388,18 @@ def _migrate_phone_statuses(conn):
         conn.execute("DROP TABLE IF EXISTS phones_status_migrated")
         return
 
-    if _table_exists(conn, "phones_status_migrated") and not _table_exists(conn, "phones"):
-        conn.execute("ALTER TABLE phones_status_migrated RENAME TO phones")
-        return
-
-    has_user_id = _column_exists(conn, "phones", "user_id")
-    user_id_col = (
-        ",\n            user_id INTEGER REFERENCES users(id)"
-        if has_user_id
-        else ""
+    base_cols = (
+        "id", "model", "condition", "type", "purchase_price",
+        "supplier_name", "supplier_contact", "status",
+        "payable_amount", "advance_received",
+        "buyer_name", "buyer_contact", "sale_price", "receivable_amount",
+        "sold_at", "created_at", "imei", "box_status", "battery_health",
+        "variant", "purchase_date",
     )
-    user_id_copy = ", user_id" if has_user_id else ""
+    existing_cols = [r["name"] for r in conn.execute("PRAGMA table_info(phones)").fetchall()]
+    extra_cols = [c for c in existing_cols if c not in base_cols]
+    extra_defs = "".join(f",\n            {c} TEXT" for c in extra_cols)
+    extra_list = "".join(f", {c}" for c in extra_cols)
 
     _run_migration_script(
         conn,
@@ -373,7 +426,7 @@ def _migrate_phone_statuses(conn):
             box_status TEXT NOT NULL DEFAULT '',
             battery_health TEXT NOT NULL DEFAULT '',
             variant TEXT NOT NULL DEFAULT '',
-            purchase_date TEXT NOT NULL DEFAULT ''{user_id_col}
+            purchase_date TEXT NOT NULL DEFAULT ''{extra_defs}
         );
 
         INSERT INTO phones_status_migrated (
@@ -382,7 +435,7 @@ def _migrate_phone_statuses(conn):
             payable_amount, advance_received,
             buyer_name, buyer_contact, sale_price, receivable_amount,
             sold_at, created_at, imei, box_status, battery_health, variant,
-            purchase_date{user_id_copy}
+            purchase_date{extra_list}
         )
         SELECT
             id, model, condition, type, purchase_price,
@@ -390,14 +443,12 @@ def _migrate_phone_statuses(conn):
             payable_amount, advance_received,
             buyer_name, buyer_contact, sale_price, receivable_amount,
             sold_at, created_at, imei, box_status, battery_health, variant,
-            purchase_date{user_id_copy}
+            purchase_date{extra_list}
         FROM phones;
-
-        DROP TABLE phones;
-        ALTER TABLE phones_status_migrated RENAME TO phones;
         """,
         staging_table="phones_status_migrated",
     )
+    _verify_and_swap_table(conn, "phones", "phones_status_migrated")
 
 
 def _migrate_returns_table(conn):
@@ -1027,6 +1078,55 @@ def _migrate_multi_user(conn):
             )
 
 
+def _migrate_purchase_invoices(conn):
+    conn.executescript(
+        """
+        CREATE TABLE IF NOT EXISTS purchase_invoices (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            invoice_number INTEGER NOT NULL,
+            supplier_name TEXT NOT NULL DEFAULT '',
+            supplier_contact TEXT NOT NULL DEFAULT '',
+            phone_id INTEGER,
+            model TEXT NOT NULL DEFAULT '',
+            variant TEXT NOT NULL DEFAULT '',
+            imei TEXT NOT NULL DEFAULT '',
+            phone_type TEXT NOT NULL DEFAULT '',
+            condition TEXT NOT NULL DEFAULT '',
+            amount REAL NOT NULL DEFAULT 0,
+            notes TEXT NOT NULL DEFAULT '',
+            invoice_date TEXT NOT NULL DEFAULT (date('now')),
+            user_id INTEGER REFERENCES users(id),
+            created_at TEXT NOT NULL DEFAULT (datetime('now'))
+        );
+        """
+    )
+
+
+def _migrate_indexes(conn):
+    """Add indexes on the columns every list/report screen filters or joins
+    on. Missing until now — fine with a handful of phones, but every screen
+    becomes a full table scan as a shop's history grows into the thousands
+    of rows. Purely additive, no data is touched."""
+    indexes = (
+        ("idx_phones_user_id", "phones", "user_id"),
+        ("idx_phones_imei", "phones", "imei"),
+        ("idx_phones_imei2", "phones", "imei2"),
+        ("idx_accounts_user_id", "accounts", "user_id"),
+        ("idx_account_entries_account_id", "account_entries", "account_id"),
+        ("idx_cash_book_user_id", "cash_book_entries", "user_id"),
+        ("idx_cash_book_account_id", "cash_book_entries", "account_id"),
+        ("idx_cash_book_bank_account_id", "cash_book_entries", "bank_account_id"),
+        ("idx_phone_expenses_phone_id", "phone_expenses", "phone_id"),
+        ("idx_phone_expenses_account_id", "phone_expenses", "account_id"),
+        ("idx_bank_transactions_bank_account_id", "bank_transactions", "bank_account_id"),
+        ("idx_journal_vouchers_user_id", "journal_vouchers", "user_id"),
+        ("idx_invoices_user_id", "invoices", "user_id"),
+        ("idx_purchase_invoices_user_id", "purchase_invoices", "user_id"),
+    )
+    for name, table, column in indexes:
+        conn.execute(f"CREATE INDEX IF NOT EXISTS {name} ON {table}({column})")
+
+
 def _copy_legacy_settings_to_user(conn, user_id, legacy=None):
     legacy = legacy or {}
     for key in ("partner1_name", "partner1_capital", "partner2_name", "partner2_capital", "cash_in_hand"):
@@ -1532,6 +1632,16 @@ def update_partner(conn, user_id, partner_id, data):
 
 
 def delete_partner(conn, user_id, partner_id):
+    investment = conn.execute(
+        "SELECT COUNT(*) AS c FROM phone_investments WHERE partner_id = ?",
+        (partner_id,),
+    ).fetchone()
+    if investment["c"] > 0:
+        raise ValueError(
+            f"Can't delete this partner — they're linked to {investment['c']} phone "
+            "investment record(s), and deleting would erase that history. "
+            "Remove those investment links first if you're sure."
+        )
     conn.execute(
         "DELETE FROM partners WHERE id = ? AND user_id = ?",
         (partner_id, user_id),
@@ -1928,6 +2038,14 @@ def _reverse_phone_purchase_ledger(conn, user_id, phone_id):
 
 
 def _validate_phone_payments(conn, user_id, data, status):
+    if "purchase_price" in data and float(data.get("purchase_price") or 0) < 0:
+        raise ValueError("Purchase price cannot be negative")
+    if "payable_amount" in data and float(data.get("payable_amount") or 0) < 0:
+        raise ValueError("Payable amount cannot be negative")
+    if "sale_price" in data and data.get("sale_price") not in (None, "") and float(data["sale_price"]) < 0:
+        raise ValueError("Sale price cannot be negative")
+    if "receivable_amount" in data and float(data.get("receivable_amount") or 0) < 0:
+        raise ValueError("Receivable amount cannot be negative")
     if status in ("Bought", "In Repair"):
         acquisition = (data.get("acquisition_type") or "purchase").strip().lower()
         if acquisition == "borrow":
@@ -1939,6 +2057,10 @@ def _validate_phone_payments(conn, user_id, data, status):
             raise ValueError("Select a bank account for purchase payment")
         if method == "bank" and not get_bank(conn, user_id, int(data["purchase_bank_id"])):
             raise ValueError("Selected bank account not found")
+        payable = float(data.get("payable_amount") or 0)
+        purchase_price = float(data.get("purchase_price") or 0)
+        if payable > purchase_price:
+            raise ValueError("Payable amount cannot exceed purchase price")
     if status == "Sold":
         method = data.get("sale_payment_method") or "cash"
         if method not in ("cash", "bank"):
@@ -1956,6 +2078,12 @@ def _validate_phone_payments(conn, user_id, data, status):
 
 
 def create_phone(conn, user_id, data):
+    if not conn.in_transaction:
+        # Grab SQLite's write lock before the duplicate-IMEI check runs, so two
+        # near-simultaneous saves (two staff, two tabs) can't both pass the
+        # check before either commits — the second one now waits here and
+        # re-checks against the first's already-committed row.
+        conn.execute("BEGIN IMMEDIATE")
     status = data.get("status", "Bought")
     _validate_phone_payments(conn, user_id, data, status)
     _check_imei_duplicate(conn, user_id, data.get("imei"), data.get("imei2"))
@@ -2025,8 +2153,12 @@ def create_phones_bulk(conn, user_id, data):
         phone_data = dict(data)
         phone_data["purchase_price"] = unit_price
         if i < len(imeis) and isinstance(imeis[i], dict):
-            phone_data["imei"] = imeis[i].get("imei", "")
-            phone_data["imei2"] = imeis[i].get("imei2", "")
+            unit = imeis[i]
+            phone_data["imei"] = unit.get("imei", "")
+            phone_data["imei2"] = unit.get("imei2", "")
+            for field in ("condition", "box_status", "battery_health", "variant"):
+                if (unit.get(field) or "").strip():
+                    phone_data[field] = unit[field]
         else:
             phone_data["imei"] = imeis[i] if i < len(imeis) else ""
             phone_data["imei2"] = imei2s[i] if i < len(imei2s) else ""
@@ -2041,6 +2173,8 @@ def create_phones_bulk(conn, user_id, data):
 
 
 def update_phone(conn, user_id, phone_id, data):
+    if not conn.in_transaction and ("imei" in data or "imei2" in data):
+        conn.execute("BEGIN IMMEDIATE")
     existing = conn.execute(
         "SELECT * FROM phones WHERE id = ? AND user_id = ?",
         (phone_id, user_id),
@@ -2049,6 +2183,12 @@ def update_phone(conn, user_id, phone_id, data):
         return None
 
     new_status = data.get("status", existing["status"])
+    if existing["status"] == "Returned to Supplier" and new_status != "Returned to Supplier":
+        raise ValueError(
+            "This phone was returned to the supplier — its purchase record was already "
+            "settled, so it can't be marked Sold/Bought/In Repair again. Add it as a new "
+            "phone if you got it back into stock."
+        )
     merged_input = {**dict(existing), **data}
     _validate_phone_payments(conn, user_id, merged_input, new_status)
     if "imei" in data or "imei2" in data:
@@ -2202,7 +2342,11 @@ def bulk_mark_sold(conn, user_id, items, default_sale_price=None):
         if receivable > 0 and not data.get("buyer_account_id"):
             errors.append(f"Phone #{phone_id}: buyer account required for udhar")
             continue
-        phone = update_phone(conn, user_id, phone_id, data)
+        try:
+            phone = update_phone(conn, user_id, phone_id, data)
+        except ValueError as exc:
+            errors.append(f"Phone #{phone_id}: {exc}")
+            continue
         if phone:
             updated.append(phone)
     if errors and not updated:
@@ -2429,11 +2573,14 @@ def process_purchase_return(conn, user_id, data):
     if phone["status"] not in INVENTORY_STATUSES:
         raise ValueError("Only Bought or In Repair items can be returned to supplier")
 
+    paid_now = max(0.0, float(phone.get("purchase_price") or 0) - float(phone.get("payable_amount") or 0))
     refund = float(
         data.get("refund_amount")
         if data.get("refund_amount") not in (None, "")
-        else phone.get("total_costing") or phone["purchase_price"]
+        else paid_now
     )
+    if refund < 0:
+        raise ValueError("Refund amount cannot be negative")
     account_id = data.get("account_id") or phone.get("supplier_account_id")
     if account_id in (None, "", 0):
         account_id = None
@@ -2452,7 +2599,16 @@ def process_purchase_return(conn, user_id, data):
         (phone["id"], user_id),
     )
 
-    _reverse_phone_ledger(conn, user_id, phone["id"])
+    # Cancel any outstanding debt owed to the supplier for this phone (udhar/borrow).
+    # Do NOT reverse the original "phone_purchase" cash entry or phone_expenses —
+    # that cash already left the drawer / was spent, and is real history. The refund
+    # posted below is what accounts for money coming back, on top of that history.
+    _reverse_ledger_for_source(conn, user_id, "phone_payable", phone["id"])
+    _reverse_ledger_for_source(conn, user_id, "phone_borrow", phone["id"])
+    conn.execute(
+        "UPDATE phones SET purchase_account_entry_id = NULL WHERE id = ? AND user_id = ?",
+        (phone["id"], user_id),
+    )
 
     cursor = conn.execute(
         """
@@ -2511,11 +2667,14 @@ def process_sale_return(conn, user_id, data):
     if phone["status"] != "Sold":
         raise ValueError("Only sold items can be processed as sale returns")
 
+    received_now = max(0.0, float(phone.get("sale_price") or 0) - float(phone.get("receivable_amount") or 0))
     refund = float(
         data.get("refund_amount")
         if data.get("refund_amount") not in (None, "")
-        else phone.get("sale_price") or 0
+        else received_now
     )
+    if refund < 0:
+        raise ValueError("Refund amount cannot be negative")
     account_id = data.get("account_id")
     if account_id in (None, "", 0):
         account_id = None
@@ -2543,7 +2702,9 @@ def process_sale_return(conn, user_id, data):
         (phone["id"], user_id),
     )
 
-    _reverse_ledger_for_source(conn, user_id, "phone_sale", phone["id"])
+    # Cancel the buyer's outstanding receivable (they no longer owe anything for a
+    # returned phone). Do NOT reverse "phone_sale" — the cash actually received at
+    # sale time is real history; the refund posted below accounts for giving it back.
     _reverse_ledger_for_source(conn, user_id, "phone_receivable", phone["id"])
 
     cursor = conn.execute(
@@ -2709,9 +2870,27 @@ def update_bank(conn, user_id, bank_id, data):
     return get_bank(conn, user_id, bank_id)
 
 
+def _bank_still_referenced(conn, bank_id):
+    checks = [
+        ("phones", "purchase_bank_id", "one or more phones list it as the purchase payment bank"),
+        ("phones", "sale_bank_id", "one or more phones list it as the sale payment bank"),
+        ("account_entries", "bank_account_id", "it's linked to an account entry"),
+    ]
+    for table, column, reason in checks:
+        row = conn.execute(
+            f"SELECT 1 FROM {table} WHERE {column} = ? LIMIT 1", (bank_id,)
+        ).fetchone()
+        if row:
+            return reason
+    return None
+
+
 def delete_bank(conn, user_id, bank_id):
     if not get_bank(conn, user_id, bank_id):
         return
+    still_used = _bank_still_referenced(conn, bank_id)
+    if still_used:
+        raise ValueError(f"Can't delete this bank account — {still_used}. Remove that first.")
     linked_cash = conn.execute(
         """
         SELECT id FROM cash_book_entries
@@ -3249,9 +3428,31 @@ def update_account(conn, user_id, account_id, data):
     return get_account(conn, user_id, account_id)
 
 
+def _account_still_referenced(conn, account_id):
+    """Return a plain-language reason this account can't be deleted yet, or None."""
+    checks = [
+        ("phones", "supplier_account_id", "one or more phones list it as the supplier"),
+        ("phones", "buyer_account_id", "one or more phones list it as the buyer"),
+        ("phone_expenses", "account_id", "it's linked to a phone expense"),
+        ("return_logs", "account_id", "it's linked to a return record"),
+        ("journal_vouchers", "debit_account_id", "it's used in a journal voucher"),
+        ("journal_vouchers", "credit_account_id", "it's used in a journal voucher"),
+    ]
+    for table, column, reason in checks:
+        row = conn.execute(
+            f"SELECT 1 FROM {table} WHERE {column} = ? LIMIT 1", (account_id,)
+        ).fetchone()
+        if row:
+            return reason
+    return None
+
+
 def delete_account(conn, user_id, account_id):
     if not get_account(conn, user_id, account_id):
         return
+    still_used = _account_still_referenced(conn, account_id)
+    if still_used:
+        raise ValueError(f"Can't delete this account — {still_used}. Remove that first.")
     for row in conn.execute(
         "SELECT id FROM account_entries WHERE account_id = ?",
         (account_id,),
@@ -3333,6 +3534,10 @@ def create_entry(conn, account_id, data, user_id=None):
     bank_account_id = data.get("bank_account_id")
 
     is_expense = user_id and is_expense_category_account(conn, account_id)
+    # Cash/bank sync is required for debit entries and expense-category credits
+    # (real money is guaranteed to move). It's optional but still honored for a
+    # plain credit entry (e.g. paying down what you owe a supplier) whenever the
+    # user explicitly picks Cash or Bank — that selection means real cash moved.
     needs_payment = entry_type == "debit" or (entry_type == "credit" and is_expense)
 
     if payment_source and payment_source not in ("cash", "bank"):
@@ -3346,7 +3551,7 @@ def create_entry(conn, account_id, data, user_id=None):
         if user_id and not get_bank(conn, user_id, bank_account_id):
             raise ValueError("Bank account not found")
 
-    if user_id and needs_payment and payment_source in ("cash", "bank"):
+    if user_id and payment_source in ("cash", "bank"):
         cash_direction = "in" if entry_type == "debit" else "out"
         return _create_account_entry_synced(
             conn, user_id, account_id, entry_type, amount, note,
@@ -3366,12 +3571,27 @@ def create_entry(conn, account_id, data, user_id=None):
     return dict(row)
 
 
+def _journal_voucher_for_entry(conn, entry_id):
+    """Return the journal voucher id if this account entry is one leg of a voucher."""
+    row = conn.execute(
+        "SELECT id FROM journal_vouchers WHERE debit_entry_id = ? OR credit_entry_id = ?",
+        (entry_id, entry_id),
+    ).fetchone()
+    return row["id"] if row else None
+
+
 def update_entry(conn, entry_id, data, user_id=None):
     existing = conn.execute(
         "SELECT * FROM account_entries WHERE id = ?", (entry_id,)
     ).fetchone()
     if not existing:
         return None
+    voucher_id = _journal_voucher_for_entry(conn, entry_id)
+    if voucher_id is not None:
+        raise ValueError(
+            f"This entry belongs to Journal Voucher #{voucher_id} — edit or delete it "
+            "from the Journal page so both sides stay in sync."
+        )
 
     entry_type = data.get("entry_type", existing["entry_type"])
     amount = float(data["amount"]) if "amount" in data else float(existing["amount"])
@@ -3421,6 +3641,12 @@ def update_entry(conn, entry_id, data, user_id=None):
 
 
 def delete_entry(conn, entry_id, user_id=None):
+    voucher_id = _journal_voucher_for_entry(conn, entry_id)
+    if voucher_id is not None:
+        raise ValueError(
+            f"This entry belongs to Journal Voucher #{voucher_id} — delete it "
+            "from the Journal page so both sides stay in sync."
+        )
     if user_id is None:
         row = conn.execute(
             """
@@ -3493,7 +3719,7 @@ def create_journal_voucher(conn, user_id, data):
     if not debit_acct or not credit_acct:
         raise ValueError("Invalid account selected")
 
-    voucher_date = data.get("voucher_date") or conn.execute("SELECT date('now')").fetchone()[0]
+    voucher_date = data.get("voucher_date") or _local_date(conn)
     reference = data.get("reference", "")
     narration = data.get("narration", "")
 
@@ -3691,7 +3917,7 @@ def compute_today_summary(conn, user_id):
 def compute_month_report(conn, user_id, year_month=None):
     if not year_month:
         year_month = conn.execute(
-            "SELECT strftime('%Y-%m', 'now') AS ym"
+            "SELECT strftime('%Y-%m', 'now', 'localtime') AS ym"
         ).fetchone()["ym"]
 
     sold = conn.execute(
@@ -3744,6 +3970,11 @@ def _next_invoice_number(conn, user_id):
 
 def create_invoice(conn, user_id, data):
     """Create a printable invoice record (does not post to cash book — sale already synced in inventory)."""
+    if not conn.in_transaction:
+        # Hold the write lock across the "pick next number" + insert so two
+        # near-simultaneous saves (e.g. a double-click) can't both grab the
+        # same invoice number.
+        conn.execute("BEGIN IMMEDIATE")
     inv_num = data.get("invoice_number") or _next_invoice_number(conn, user_id)
     cursor = conn.execute(
         """
@@ -3766,9 +3997,7 @@ def create_invoice(conn, user_id, data):
             float(data.get("amount") or 0),
             data.get("warranty", ""),
             data.get("notes", ""),
-            data.get("invoice_date") or conn.execute(
-                "SELECT date('now')"
-            ).fetchone()[0],
+            data.get("invoice_date") or _local_date(conn),
             user_id,
         ),
     )
@@ -3787,6 +4016,72 @@ def list_invoices(conn, user_id, limit=50):
     rows = conn.execute(
         """
         SELECT * FROM invoices WHERE user_id = ?
+        ORDER BY created_at DESC, id DESC LIMIT ?
+        """,
+        (user_id, limit),
+    ).fetchall()
+    return [dict(r) for r in rows]
+
+
+# --- Purchase Invoices ---
+
+def _next_purchase_invoice_number(conn, user_id):
+    settings = get_user_settings(conn, user_id)
+    counter = int(settings.get("purchase_invoice_counter") or 1000)
+    max_row = conn.execute(
+        "SELECT MAX(invoice_number) AS m FROM purchase_invoices WHERE user_id = ?",
+        (user_id,),
+    ).fetchone()
+    current_max = max_row["m"] or 0
+    num = max(counter, current_max + 1)
+    update_user_settings(conn, user_id, {"purchase_invoice_counter": str(num + 1)})
+    return num
+
+
+def create_purchase_invoice(conn, user_id, data):
+    """Create a printable purchase-invoice record (paperwork only — does not post to cash book)."""
+    if not conn.in_transaction:
+        conn.execute("BEGIN IMMEDIATE")
+    inv_num = data.get("invoice_number") or _next_purchase_invoice_number(conn, user_id)
+    cursor = conn.execute(
+        """
+        INSERT INTO purchase_invoices (
+            invoice_number, supplier_name, supplier_contact, phone_id,
+            model, variant, imei, phone_type, condition, amount,
+            notes, invoice_date, user_id
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        (
+            int(inv_num),
+            data.get("supplier_name", ""),
+            data.get("supplier_contact", ""),
+            data.get("phone_id"),
+            data.get("model", ""),
+            data.get("variant", ""),
+            data.get("imei", ""),
+            data.get("phone_type", ""),
+            data.get("condition", ""),
+            float(data.get("amount") or 0),
+            data.get("notes", ""),
+            data.get("invoice_date") or _local_date(conn),
+            user_id,
+        ),
+    )
+    return get_purchase_invoice(conn, user_id, cursor.lastrowid)
+
+
+def get_purchase_invoice(conn, user_id, invoice_id):
+    row = conn.execute(
+        "SELECT * FROM purchase_invoices WHERE id = ? AND user_id = ?",
+        (invoice_id, user_id),
+    ).fetchone()
+    return dict(row) if row else None
+
+
+def list_purchase_invoices(conn, user_id, limit=50):
+    rows = conn.execute(
+        """
+        SELECT * FROM purchase_invoices WHERE user_id = ?
         ORDER BY created_at DESC, id DESC LIMIT ?
         """,
         (user_id, limit),
@@ -3819,12 +4114,36 @@ def list_backup_files(conn, user_id):
     ]
 
 
+def _validate_backup_file(path: Path) -> None:
+    """Open the candidate backup and confirm it's an intact CRM database
+    before it's allowed to overwrite the live one. A corrupted, empty, or
+    unrelated .db file gets rejected here instead of destroying today's data."""
+    try:
+        check_conn = sqlite3.connect(str(path))
+    except sqlite3.Error as exc:
+        raise ValueError(f"Backup file could not be opened: {exc}") from exc
+    try:
+        result = check_conn.execute("PRAGMA integrity_check").fetchone()
+        if not result or result[0] != "ok":
+            raise ValueError("Backup file failed SQLite's integrity check — it may be corrupted")
+        table = check_conn.execute(
+            "SELECT 1 FROM sqlite_master WHERE type='table' AND name='phones'"
+        ).fetchone()
+        if not table:
+            raise ValueError("This doesn't look like a Phone Reseller CRM backup file")
+    except sqlite3.DatabaseError as exc:
+        raise ValueError(f"Backup file is not a valid database: {exc}") from exc
+    finally:
+        check_conn.close()
+
+
 def restore_database_from_backup(backup_path: str) -> str:
     src = Path(backup_path).expanduser().resolve()
     if not src.is_file():
         raise ValueError("Backup file not found")
     if src.suffix.lower() != ".db":
         raise ValueError("Please select a .db backup file")
+    _validate_backup_file(src)
 
     dest = DB_PATH.resolve()
     safety = dest.with_suffix(".db.pre_restore")

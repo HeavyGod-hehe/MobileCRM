@@ -419,7 +419,10 @@ async function initSettingsPage() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ backup_path: path }),
       });
-      alert(res.message || 'Restored. Please sign in again.');
+      const safetyNote = res.safety_copy
+        ? `\n\nYour previous database was saved here before restoring, just in case:\n${res.safety_copy}`
+        : '';
+      alert((res.message || 'Restored. Please sign in again.') + safetyNote);
       window.location.href = '/login';
     } catch (err) {
       toast(err.message, 'error');

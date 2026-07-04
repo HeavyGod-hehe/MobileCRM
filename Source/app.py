@@ -1,4 +1,5 @@
 import os
+import sqlite3
 import subprocess
 import sys
 import urllib.request
@@ -36,6 +37,7 @@ PHONE_STATUSES = db.PHONE_STATUSES
 ENTRY_TYPES = db.ENTRY_TYPES
 
 _DB_READY = False
+_DB_ERROR = None
 
 AUTH_EXEMPT_ENDPOINTS = frozenset({
     "login_page", "auth_status", "auth_login", "auth_signup",
@@ -107,11 +109,38 @@ def _require_amount(data, field="amount"):
     return value, None
 
 
+_DB_ERROR_HTML = """
+<!doctype html><html><head><title>Database problem</title>
+<style>body{{font-family:system-ui,sans-serif;background:#0f172a;color:#e2e8f0;
+display:flex;align-items:center;justify-content:center;min-height:100vh;margin:0;padding:2rem}}
+.box{{max-width:560px;background:#1e293b;border-radius:12px;padding:2rem;
+border:1px solid rgba(248,113,113,0.3)}}
+h1{{color:#f87171;font-size:1.25rem;margin-top:0}}
+code{{background:#0f172a;padding:0.15rem 0.4rem;border-radius:4px;word-break:break-all}}
+</style></head><body><div class="box">
+<h1>Your database file couldn't be opened</h1>
+<p>The CRM's data file appears to be damaged or unreadable:</p>
+<p><code>{detail}</code></p>
+<p>Your data has <strong>not</strong> been deleted or overwritten — only the file
+at <code>{db_path}</code> could not be read.</p>
+<p><strong>What to do:</strong> go to your Backups folder and restore the most
+recent backup file (Settings &rarr; Storage &amp; Backups, or find the
+<code>Backups</code> folder next to the app), then reopen the CRM.</p>
+</div></body></html>
+"""
+
+
 @app.before_request
 def ensure_db():
-    global _DB_READY
+    global _DB_READY, _DB_ERROR
+    if _DB_ERROR:
+        return _DB_ERROR_HTML.format(detail=_DB_ERROR, db_path=db.DB_PATH), 500
     if not _DB_READY:
-        db.init_db()
+        try:
+            db.init_db()
+        except sqlite3.DatabaseError as exc:
+            _DB_ERROR = str(exc)
+            return _DB_ERROR_HTML.format(detail=_DB_ERROR, db_path=db.DB_PATH), 500
         _DB_READY = True
 
 
@@ -377,6 +406,11 @@ def billing_page():
     return render_template("billing.html")
 
 
+@app.route("/purchase-invoice")
+def purchase_invoice_page():
+    return render_template("purchase_invoice.html")
+
+
 @app.route("/api/settings/shop", methods=["GET"])
 def get_shop_settings_api():
     user_id = _current_user_id()
@@ -576,6 +610,58 @@ def billing_phone_api(phone_id):
         if not phone:
             return jsonify({"error": "Phone not found"}), 404
         return jsonify(phone)
+
+
+# --- Purchase Invoices ---
+
+@app.route("/api/purchase-invoice/inventory")
+def purchase_invoice_inventory_api():
+    user_id = _current_user_id()
+    with db.db_session() as conn:
+        settings = db.get_user_settings(conn, user_id)
+        counter = int(settings.get("purchase_invoice_counter") or 1000)
+        max_row = conn.execute(
+            "SELECT MAX(invoice_number) AS m FROM purchase_invoices WHERE user_id = ?",
+            (user_id,),
+        ).fetchone()
+        next_num = max(counter, (max_row["m"] or 0) + 1)
+        return jsonify({
+            "inventory": db.list_phones_for_purchase_return(conn, user_id),
+            "shop": db.get_shop_info(conn, user_id),
+            "next_invoice_number": next_num,
+        })
+
+
+@app.route("/api/purchase-invoice/invoices", methods=["GET"])
+def list_purchase_invoices_api():
+    user_id = _current_user_id()
+    with db.db_session() as conn:
+        settings = db.get_user_settings(conn, user_id)
+        counter = int(settings.get("purchase_invoice_counter") or 1000)
+        max_row = conn.execute(
+            "SELECT MAX(invoice_number) AS m FROM purchase_invoices WHERE user_id = ?",
+            (user_id,),
+        ).fetchone()
+        next_num = max(counter, (max_row["m"] or 0) + 1)
+        return jsonify({
+            "invoices": db.list_purchase_invoices(conn, user_id),
+            "next_invoice_number": next_num,
+        })
+
+
+@app.route("/api/purchase-invoice/invoices", methods=["POST"])
+def create_purchase_invoice_api():
+    user_id = _current_user_id()
+    data = request.get_json(force=True)
+    if not (data.get("model") or "").strip() and not (data.get("supplier_name") or "").strip():
+        return jsonify({"error": "Enter a phone model or supplier name"}), 400
+    amount, err = _require_amount(data)
+    if err:
+        return jsonify({"error": err}), 400
+    data["amount"] = amount
+    with db.db_session() as conn:
+        invoice = db.create_purchase_invoice(conn, user_id, data)
+        return jsonify(invoice), 201
 
 
 # --- Phones ---
@@ -967,9 +1053,12 @@ def update_partner_api(partner_id):
 @app.route("/api/partners/<int:partner_id>", methods=["DELETE"])
 def delete_partner_api(partner_id):
     user_id = _current_user_id()
-    with db.db_session() as conn:
-        db.delete_partner(conn, user_id, partner_id)
-        return jsonify({"ok": True})
+    try:
+        with db.db_session() as conn:
+            db.delete_partner(conn, user_id, partner_id)
+            return jsonify({"ok": True})
+    except ValueError as exc:
+        return jsonify({"error": str(exc)}), 400
 
 
 @app.route("/api/partners/reinvest-profit", methods=["POST"])
@@ -1047,6 +1136,8 @@ def create_bank_api():
 def update_bank_api(bank_id):
     user_id = _current_user_id()
     data = request.get_json(force=True)
+    if "name" in data and not (data.get("name") or "").strip():
+        return jsonify({"error": "Bank name is required"}), 400
     with db.db_session() as conn:
         bank = db.update_bank(conn, user_id, bank_id, data)
         if not bank:
@@ -1057,9 +1148,12 @@ def update_bank_api(bank_id):
 @app.route("/api/banks/<int:bank_id>", methods=["DELETE"])
 def delete_bank_api(bank_id):
     user_id = _current_user_id()
-    with db.db_session() as conn:
-        db.delete_bank(conn, user_id, bank_id)
-        return jsonify({"ok": True})
+    try:
+        with db.db_session() as conn:
+            db.delete_bank(conn, user_id, bank_id)
+            return jsonify({"ok": True})
+    except ValueError as exc:
+        return jsonify({"error": str(exc)}), 400
 
 
 @app.route("/api/banks/<int:bank_id>/transactions", methods=["GET"])
@@ -1090,6 +1184,18 @@ def create_bank_transaction_api(bank_id):
         return jsonify(entry), 201
 
 
+def _get_owned_bank_transaction(conn, user_id, bank_id, tx_id):
+    """Verify the bank belongs to this user AND the transaction belongs to
+    that bank, before any edit/delete — otherwise a user could act on another
+    user's transaction just by guessing an id in the URL."""
+    if not db.get_bank(conn, user_id, bank_id):
+        return None
+    return conn.execute(
+        "SELECT id FROM bank_transactions WHERE id = ? AND bank_account_id = ?",
+        (tx_id, bank_id),
+    ).fetchone()
+
+
 @app.route("/api/banks/<int:bank_id>/transactions/<int:tx_id>", methods=["PUT"])
 def update_bank_transaction_api(bank_id, tx_id):
     user_id = _current_user_id()
@@ -1100,6 +1206,8 @@ def update_bank_transaction_api(bank_id, tx_id):
             return jsonify({"error": err}), 400
         data["amount"] = amount
     with db.db_session() as conn:
+        if not _get_owned_bank_transaction(conn, user_id, bank_id, tx_id):
+            return jsonify({"error": "Transaction not found"}), 404
         entry = db.update_bank_transaction(conn, tx_id, data, user_id=user_id)
         if not entry:
             return jsonify({"error": "Transaction not found"}), 404
@@ -1110,6 +1218,8 @@ def update_bank_transaction_api(bank_id, tx_id):
 def delete_bank_transaction_api(bank_id, tx_id):
     user_id = _current_user_id()
     with db.db_session() as conn:
+        if not _get_owned_bank_transaction(conn, user_id, bank_id, tx_id):
+            return jsonify({"error": "Transaction not found"}), 404
         db.delete_bank_transaction(conn, tx_id, user_id=user_id)
         return jsonify({"ok": True})
 
@@ -1148,11 +1258,21 @@ def create_cash_book_entry_api():
 def update_cash_book_entry_api(entry_id):
     user_id = _current_user_id()
     data = request.get_json(force=True)
-    with db.db_session() as conn:
-        entry = db.update_cash_book_entry(conn, user_id, entry_id, data)
-        if not entry:
-            return jsonify({"error": "Entry not found"}), 404
-        return jsonify(entry)
+    if "amount" in data:
+        amount, err = _require_amount(data)
+        if err:
+            return jsonify({"error": err}), 400
+        data["amount"] = amount
+    if "entry_type" in data and data.get("entry_type") not in db.CASH_BOOK_TYPES:
+        return jsonify({"error": "Entry type must be in or out"}), 400
+    try:
+        with db.db_session() as conn:
+            entry = db.update_cash_book_entry(conn, user_id, entry_id, data)
+            if not entry:
+                return jsonify({"error": "Entry not found"}), 404
+            return jsonify(entry)
+    except ValueError as exc:
+        return jsonify({"error": str(exc)}), 400
 
 
 @app.route("/api/cash-book/<int:entry_id>", methods=["DELETE"])
@@ -1236,6 +1356,8 @@ def create_account_api():
 def update_account_api(account_id):
     user_id = _current_user_id()
     data = request.get_json(force=True)
+    if "name" in data and not (data.get("name") or "").strip():
+        return jsonify({"error": "Name is required"}), 400
     with db.db_session() as conn:
         account = db.update_account(conn, user_id, account_id, data)
         if not account:
@@ -1246,11 +1368,14 @@ def update_account_api(account_id):
 @app.route("/api/accounts/<int:account_id>", methods=["DELETE"])
 def delete_account_api(account_id):
     user_id = _current_user_id()
-    with db.db_session() as conn:
-        if not db.get_account(conn, user_id, account_id):
-            return jsonify({"error": "Account not found"}), 404
-        db.delete_account(conn, user_id, account_id)
-        return jsonify({"ok": True})
+    try:
+        with db.db_session() as conn:
+            if not db.get_account(conn, user_id, account_id):
+                return jsonify({"error": "Account not found"}), 404
+            db.delete_account(conn, user_id, account_id)
+            return jsonify({"ok": True})
+    except ValueError as exc:
+        return jsonify({"error": str(exc)}), 400
 
 
 @app.route("/api/accounts/<int:account_id>/statement")
@@ -1306,7 +1431,10 @@ def update_entry_api(account_id, entry_id):
         ).fetchone()
         if not row:
             return jsonify({"error": "Entry not found"}), 404
-        entry = db.update_entry(conn, entry_id, data, user_id=user_id)
+        try:
+            entry = db.update_entry(conn, entry_id, data, user_id=user_id)
+        except ValueError as exc:
+            return jsonify({"error": str(exc)}), 400
         return jsonify(entry)
 
 
@@ -1322,7 +1450,10 @@ def delete_entry_api(account_id, entry_id):
         ).fetchone()
         if not row:
             return jsonify({"error": "Entry not found"}), 404
-        db.delete_entry(conn, entry_id, user_id=user_id)
+        try:
+            db.delete_entry(conn, entry_id, user_id=user_id)
+        except ValueError as exc:
+            return jsonify({"error": str(exc)}), 400
         return jsonify({"ok": True})
 
 
@@ -1333,6 +1464,17 @@ def backup_export():
     user_id = _current_user_id()
     with db.db_session() as conn:
         return jsonify(db.export_all_data(conn, user_id))
+
+
+@app.errorhandler(sqlite3.DatabaseError)
+def handle_database_error(exc):
+    """Corruption discovered mid-session (not just at startup) — show a clear
+    message instead of a blank 500, and stop retrying against the broken file."""
+    global _DB_ERROR
+    _DB_ERROR = str(exc)
+    if request.path.startswith("/api/"):
+        return jsonify({"error": f"Database problem: {_DB_ERROR}"}), 500
+    return _DB_ERROR_HTML.format(detail=_DB_ERROR, db_path=db.DB_PATH), 500
 
 
 if __name__ == "__main__":

@@ -278,10 +278,14 @@
 
   window.deletePartner = async (id) => {
     const p = partners.find(x => x.id === id);
-    if (!confirm(`Delete partner "${p?.name || 'this partner'}"? Their investment records on phones will also be removed.`)) return;
-    await apiFetch(`/api/partners/${id}`, { method: 'DELETE' });
-    toast('Partner deleted');
-    loadOverview();
+    if (!confirm(`Delete partner "${p?.name || 'this partner'}"?`)) return;
+    try {
+      await apiFetch(`/api/partners/${id}`, { method: 'DELETE' });
+      toast('Partner deleted');
+      loadOverview();
+    } catch (err) {
+      toast(err.message, 'error');
+    }
   };
 
   async function updatePartnerCapital(id, capital) {

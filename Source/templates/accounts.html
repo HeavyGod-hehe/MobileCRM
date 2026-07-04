@@ -551,9 +551,13 @@
 
   window.deleteEntry = async (id) => {
     if (!confirm('Delete this entry? Linked cash book entry will also be removed.')) return;
-    await apiFetch(`/api/accounts/${selectedId}/entries/${id}`, { method: 'DELETE' });
-    toast('Entry deleted');
-    loadAccounts();
+    try {
+      await apiFetch(`/api/accounts/${selectedId}/entries/${id}`, { method: 'DELETE' });
+      toast('Entry deleted');
+      loadAccounts();
+    } catch (err) {
+      toast(err.message, 'error');
+    }
   };
 
   window.deleteBankTx = async (id) => {
@@ -601,7 +605,7 @@
     const acct = selectedAccount();
     const hint = document.getElementById('entry-hint');
     if (!acct) { hint.classList.add('hidden'); return; }
-    hint.textContent = 'Credit = amount they owe you. Debit = payment received — select Cash or Bank to sync with cash book.';
+    hint.textContent = 'Credit = amount they owe you (or you paying them down). Debit = payment received. Pick Cash or Bank whenever real money moves, so it syncs with cash book.';
     hint.classList.remove('hidden');
     toggleEntryPaymentFields();
   }
@@ -692,9 +696,11 @@
         amount: document.getElementById('e-amount').value,
         note: document.getElementById('e-note').value,
       };
-      if (entryNeedsPayment(entryType)) {
-        const pay = document.getElementById('e-payment').value;
-        if (!pay) { toast('Select payment method — Cash or Bank', 'error'); btn.disabled = false; return; }
+      const pay = document.getElementById('e-payment').value;
+      if (entryNeedsPayment(entryType) && !pay) {
+        toast('Select payment method — Cash or Bank', 'error'); btn.disabled = false; return;
+      }
+      if (pay) {
         payload.payment_source = pay;
         if (pay === 'bank') {
           const bankId = document.getElementById('e-bank').value;
@@ -710,18 +716,22 @@
   document.getElementById('entry-edit-form').addEventListener('submit', async (e) => {
     e.preventDefault();
     const entryId = document.getElementById('edit-entry-id').value;
-    await apiFetch(`/api/accounts/${selectedId}/entries/${entryId}`, {
-      method: 'PUT',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        entry_type: document.getElementById('edit-e-type').value,
-        amount: document.getElementById('edit-e-amount').value,
-        note: document.getElementById('edit-e-note').value,
-      }),
-    });
-    closeModal('entry-edit-overlay', 'entry-edit-modal');
-    toast('Entry updated');
-    loadAccounts();
+    try {
+      await apiFetch(`/api/accounts/${selectedId}/entries/${entryId}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          entry_type: document.getElementById('edit-e-type').value,
+          amount: document.getElementById('edit-e-amount').value,
+          note: document.getElementById('edit-e-note').value,
+        }),
+      });
+      closeModal('entry-edit-overlay', 'entry-edit-modal');
+      toast('Entry updated');
+      loadAccounts();
+    } catch (err) {
+      toast(err.message, 'error');
+    }
   });
   document.getElementById('entry-edit-overlay').addEventListener('click', () => closeModal('entry-edit-overlay', 'entry-edit-modal'));
   document.getElementById('entry-edit-close-x')?.addEventListener('click', () => closeModal('entry-edit-overlay', 'entry-edit-modal'));
@@ -742,11 +752,15 @@
   });
   document.getElementById('btn-delete-account').addEventListener('click', async () => {
     if (!confirm('Delete this account and all entries?')) return;
-    await apiFetch(`/api/accounts/${selectedId}`, { method: 'DELETE' });
-    selectedId = null;
-    showAccountPlaceholder();
-    toast('Account deleted');
-    loadAccounts();
+    try {
+      await apiFetch(`/api/accounts/${selectedId}`, { method: 'DELETE' });
+      selectedId = null;
+      showAccountPlaceholder();
+      toast('Account deleted');
+      loadAccounts();
+    } catch (err) {
+      toast(err.message, 'error');
+    }
   });
   document.getElementById('acct-cancel').addEventListener('click', hideAcctModal);
   document.getElementById('acct-cancel-x').addEventListener('click', hideAcctModal);
@@ -754,16 +768,22 @@
   document.getElementById('acct-form').addEventListener('submit', async (e) => {
     e.preventDefault();
     const id = document.getElementById('acct-id').value;
-    const payload = { name: document.getElementById('acct-name').value, contact: document.getElementById('acct-contact').value };
-    const account = await apiFetch(id ? `/api/accounts/${id}` : '/api/accounts', {
-      method: id ? 'PUT' : 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(payload),
-    });
-    if (!id) selectedId = account.id;
-    hideAcctModal();
-    toast(id ? 'Account updated' : 'Account created');
-    loadAccounts();
+    const name = document.getElementById('acct-name').value.trim();
+    if (!name) { toast('Enter an account name', 'error'); return; }
+    const payload = { name, contact: document.getElementById('acct-contact').value };
+    try {
+      const account = await apiFetch(id ? `/api/accounts/${id}` : '/api/accounts', {
+        method: id ? 'PUT' : 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+      });
+      if (!id) selectedId = account.id;
+      hideAcctModal();
+      toast(id ? 'Account updated' : 'Account created');
+      loadAccounts();
+    } catch (err) {
+      toast(err.message, 'error');
+    }
   });
 
   // Bank modals
@@ -785,12 +805,16 @@
   });
   document.getElementById('btn-delete-bank').addEventListener('click', async () => {
     if (!confirm('Delete this bank account and all transactions?')) return;
-    await apiFetch(`/api/banks/${selectedBankId}`, { method: 'DELETE' });
-    selectedBankId = null;
-    showAccountPlaceholder();
-    toast('Bank account deleted');
-    loadBanks();
-    loadAccounts();
+    try {
+      await apiFetch(`/api/banks/${selectedBankId}`, { method: 'DELETE' });
+      selectedBankId = null;
+      showAccountPlaceholder();
+      toast('Bank account deleted');
+      loadBanks();
+      loadAccounts();
+    } catch (err) {
+      toast(err.message, 'error');
+    }
   });
   document.getElementById('bank-cancel').addEventListener('click', () => closeModal('bank-overlay', 'bank-modal'));
   document.getElementById('bank-cancel-x').addEventListener('click', () => closeModal('bank-overlay', 'bank-modal'));
@@ -798,35 +822,45 @@
   document.getElementById('bank-form').addEventListener('submit', async (e) => {
     e.preventDefault();
     const id = document.getElementById('bank-id').value;
-    const payload = { name: document.getElementById('bank-name-input').value };
+    const name = document.getElementById('bank-name-input').value.trim();
+    if (!name) { toast('Enter a bank account name', 'error'); return; }
+    const payload = { name };
     if (!id) payload.initial_balance = document.getElementById('bank-initial').value;
-    const bank = await apiFetch(id ? `/api/banks/${id}` : '/api/banks', {
-      method: id ? 'PUT' : 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(payload),
-    });
-    if (!id) selectedBankId = bank.id;
-    closeModal('bank-overlay', 'bank-modal');
-    toast(id ? 'Bank updated' : 'Bank account created');
-    loadBanks();
-    loadAccounts();
+    try {
+      const bank = await apiFetch(id ? `/api/banks/${id}` : '/api/banks', {
+        method: id ? 'PUT' : 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+      });
+      if (!id) selectedBankId = bank.id;
+      closeModal('bank-overlay', 'bank-modal');
+      toast(id ? 'Bank updated' : 'Bank account created');
+      loadBanks();
+      loadAccounts();
+    } catch (err) {
+      toast(err.message, 'error');
+    }
   });
 
   document.getElementById('bank-tx-form').addEventListener('submit', async (e) => {
     e.preventDefault();
-    await apiFetch(`/api/banks/${selectedBankId}/transactions`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        transaction_type: document.getElementById('bt-type').value,
-        amount: document.getElementById('bt-amount').value,
-        note: document.getElementById('bt-note').value,
-      }),
-    });
-    document.getElementById('bank-tx-form').reset();
-    toast('Transaction added');
-    loadBanks();
-    loadAccounts();
+    try {
+      await apiFetch(`/api/banks/${selectedBankId}/transactions`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          transaction_type: document.getElementById('bt-type').value,
+          amount: document.getElementById('bt-amount').value,
+          note: document.getElementById('bt-note').value,
+        }),
+      });
+      document.getElementById('bank-tx-form').reset();
+      toast('Transaction added');
+      loadBanks();
+      loadAccounts();
+    } catch (err) {
+      toast(err.message, 'error');
+    }
   });
 
   document.getElementById('btn-whatsapp-ledger')?.addEventListener('click', () => {

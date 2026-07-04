@@ -2,13 +2,27 @@
 
 from __future__ import annotations
 
-import shutil
+import sqlite3
 import threading
 import time
 from datetime import datetime
 from pathlib import Path
 
 import database as db
+
+
+def _snapshot_database(source_conn: sqlite3.Connection, dest_path: Path) -> None:
+    """Write a consistent copy of the live database using SQLite's own backup
+    API instead of copying the file — a raw file copy taken while the app is
+    mid-write can capture a torn, unusable snapshot. sqlite3's backup() takes
+    a proper read lock and is safe to run alongside concurrent writers."""
+    if dest_path.exists():
+        dest_path.unlink()
+    backup_conn = sqlite3.connect(str(dest_path))
+    try:
+        source_conn.backup(backup_conn)
+    finally:
+        backup_conn.close()
 
 BACKUP_INTERVAL_SECONDS = int(
     __import__("os").environ.get("CRM_BACKUP_INTERVAL_SECONDS", "3600")
@@ -31,7 +45,7 @@ def backup_user_data(user_id: int, *, force: bool = False) -> str | None:
         stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
         username = db.backup_username_slug(conn, user_id)
         dest = dest_dir / f"{username}_crm_backup_{stamp}.db"
-        shutil.copy2(db.DB_PATH, dest)
+        _snapshot_database(conn, dest)
 
         db.update_user_settings(conn, user_id, {
             "last_backup_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),

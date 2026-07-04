@@ -94,10 +94,14 @@ def save_license(activation_key: str) -> None:
     if not verify_activation_key(hw, activation_key):
         raise ValueError("Invalid activation key for this machine")
     LICENSE_FILE.parent.mkdir(parents=True, exist_ok=True)
-    LICENSE_FILE.write_text(
+    # Write to a temp file and rename into place — a crash mid-write can't
+    # leave a half-written, corrupted license.json this way (rename is atomic).
+    tmp_path = LICENSE_FILE.with_suffix(".json.tmp")
+    tmp_path.write_text(
         json.dumps({"hardware_id": hw, "activation_key": activation_key.strip().upper()}, indent=2),
         encoding="utf-8",
     )
+    tmp_path.replace(LICENSE_FILE)
 
 
 def is_licensed() -> bool:
