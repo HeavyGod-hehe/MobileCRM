@@ -38,7 +38,14 @@ jobs:
     runs-on: macos-latest
     steps:
       - uses: actions/checkout@v4
-      - run: softwareupdate --install-rosetta --agree-to-license || true
+      - name: Ensure Rosetta 2 is available
+        run: |
+          if arch -x86_64 /usr/bin/true 2>/dev/null; then
+            echo "Rosetta already available"
+          else
+            softwareupdate --install-rosetta --agree-to-license
+            arch -x86_64 /usr/bin/true
+          fi
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
@@ -58,7 +65,14 @@ jobs:
     runs-on: macos-latest
     steps:
       - uses: actions/checkout@v4
-      - run: softwareupdate --install-rosetta --agree-to-license || true
+      - name: Ensure Rosetta 2 is available
+        run: |
+          if arch -x86_64 /usr/bin/true 2>/dev/null; then
+            echo "Rosetta already available"
+          else
+            softwareupdate --install-rosetta --agree-to-license
+            arch -x86_64 /usr/bin/true
+          fi
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
