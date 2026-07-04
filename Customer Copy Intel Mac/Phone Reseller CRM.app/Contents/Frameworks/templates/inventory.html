@@ -15,7 +15,7 @@
     </div>
     <button id="btn-add" class="btn btn-primary">
       <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2.5" d="M12 4v16m8-8H4"/></svg>
-      Add New Phone
+      Add New Device
     </button>
   </div>
 
@@ -120,7 +120,7 @@
 <div id="phone-modal" class="modal-wrap modal-wrap-scroll">
   <div class="modal-panel modal-panel-form">
     <div class="modal-header">
-      <h3 id="modal-title" class="text-lg font-semibold text-white flex-1 min-w-0 truncate">Add New Phone</h3>
+      <h3 id="modal-title" class="text-lg font-semibold text-white flex-1 min-w-0 truncate">Add New Device</h3>
       <button type="button" id="btn-cancel-x" class="btn btn-ghost btn-icon text-slate-400 shrink-0" aria-label="Close">
         <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/></svg>
       </button>
@@ -624,6 +624,15 @@
     if (qty > 1) {
       bulkSection.classList.remove('hidden');
       singleField.classList.add('hidden');
+      const defaultCondition = document.getElementById('f-condition').value;
+      const defaultBox = document.getElementById('f-box-status').value;
+      const defaultBattery = document.getElementById('f-battery').value;
+      const defaultVariant = document.getElementById('f-variant').value;
+      const conditionOptions = CONDITION_OPTIONS.map(c =>
+        `<option value="${c}" ${c === defaultCondition ? 'selected' : ''}>${c}</option>`).join('');
+      const variantOptionsList = ['Physical + eSIM', 'eSIM + eSIM', 'Dual Physical SIM'];
+      const variantOptions = variantOptionsList.map(v =>
+        `<option value="${v}" ${v === defaultVariant ? 'selected' : ''}>${v}</option>`).join('');
       document.getElementById('imei-fields').innerHTML = Array.from({length: qty}, (_, i) => `
         <div class="imei-field-row p-3 rounded-lg border border-white/8 bg-slate-900/30">
           <p class="text-xs font-medium text-slate-400 mb-2">Device ${i + 1}</p>
@@ -637,6 +646,33 @@
               <label class="block text-xs text-slate-500 mb-1" for="imei2-bulk-${i}">IMEI 2 *</label>
               <input type="text" id="imei2-bulk-${i}" class="input-field imei2-bulk-input" data-index="${i}"
                 placeholder="Second IMEI" inputmode="numeric" autocomplete="off">
+            </div>
+            <div>
+              <label class="block text-xs text-slate-500 mb-1" for="condition-bulk-${i}">Condition</label>
+              <select id="condition-bulk-${i}" class="input-field condition-bulk-input" data-index="${i}">
+                <option value="">Select condition</option>
+                ${conditionOptions}
+              </select>
+            </div>
+            <div>
+              <label class="block text-xs text-slate-500 mb-1" for="box-bulk-${i}">Box Status</label>
+              <select id="box-bulk-${i}" class="input-field box-bulk-input" data-index="${i}">
+                <option value="">Select</option>
+                <option value="With Box" ${defaultBox === 'With Box' ? 'selected' : ''}>With Box</option>
+                <option value="Without Box" ${defaultBox === 'Without Box' ? 'selected' : ''}>Without Box</option>
+              </select>
+            </div>
+            <div>
+              <label class="block text-xs text-slate-500 mb-1" for="battery-bulk-${i}">Battery Health</label>
+              <input type="text" id="battery-bulk-${i}" class="input-field battery-bulk-input" data-index="${i}"
+                placeholder="e.g. 92%" value="${esc(defaultBattery)}">
+            </div>
+            <div>
+              <label class="block text-xs text-slate-500 mb-1" for="variant-bulk-${i}">Variant</label>
+              <select id="variant-bulk-${i}" class="input-field variant-bulk-input" data-index="${i}">
+                <option value="">Select variant</option>
+                ${variantOptions}
+              </select>
             </div>
           </div>
         </div>`).join('');
@@ -1084,7 +1120,7 @@
     updateImeiFields();
     toggleAcquisitionFields();
     updateTotalCostingPreview();
-    showPhoneModal('Add New Phone');
+    showPhoneModal('Add New Device');
   });
   document.getElementById('btn-cancel').addEventListener('click', () => hidePhoneModal());
   document.getElementById('btn-cancel-x').addEventListener('click', () => hidePhoneModal());
@@ -1146,6 +1182,10 @@
       payload.imeis = [...document.querySelectorAll('.imei-bulk-input')].map((el, i) => ({
         imei: el.value,
         imei2: document.getElementById(`imei2-bulk-${i}`)?.value || '',
+        condition: document.getElementById(`condition-bulk-${i}`)?.value || '',
+        box_status: document.getElementById(`box-bulk-${i}`)?.value || '',
+        battery_health: document.getElementById(`battery-bulk-${i}`)?.value || '',
+        variant: document.getElementById(`variant-bulk-${i}`)?.value || '',
       }));
     } else {
       payload.imei = document.getElementById('f-imei').value;

@@ -283,6 +283,8 @@
   });
 
   document.getElementById('btn-save-invoice').addEventListener('click', async () => {
+    const btn = document.getElementById('btn-save-invoice');
+    btn.disabled = true;
     try {
       await apiFetch('/api/billing/invoices', {
         method: 'POST',
@@ -292,6 +294,7 @@
       toast('Invoice saved');
       loadBillingData();
     } catch (err) { toast(err.message, 'error'); }
+    btn.disabled = false;
   });
 
   document.getElementById('btn-whatsapp-invoice').addEventListener('click', async () => {

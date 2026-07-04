@@ -42,6 +42,20 @@
     </form>
   </section>
 
+  <!-- Appearance -->
+  <section class="glass-card rounded-xl p-6 lg:col-span-2">
+    <div class="flex items-center gap-3 mb-5">
+      <div class="w-9 h-9 rounded-lg bg-emerald-500/15 flex items-center justify-center">
+        <svg class="w-5 h-5 text-emerald-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.75" d="M7 21a4 4 0 01-4-4V5a2 2 0 012-2h4a2 2 0 012 2v12a4 4 0 01-4 4zm0 0h12a2 2 0 002-2v-4a2 2 0 00-2-2h-2.343M11 7.343l1.657-1.657a2 2 0 012.828 0l2.829 2.829a2 2 0 010 2.828l-8.486 8.485M7 17h.01"/></svg>
+      </div>
+      <div>
+        <h2 class="text-lg font-semibold text-white">Appearance</h2>
+        <p class="text-xs text-slate-500">Pick a UI design — "Glass Dark" is the original look. Changes apply immediately and everywhere.</p>
+      </div>
+    </div>
+    <div id="settings-theme-options" class="theme-options-grid theme-options-grid-settings"></div>
+  </section>
+
   <!-- Login -->
   <section class="glass-card rounded-xl p-6">
     <div class="flex items-center gap-3 mb-5">
@@ -102,7 +116,10 @@
         <label class="block text-xs font-medium text-slate-400 mb-1.5">Vendor reset message</label>
         <textarea id="settings-vendor-note" class="input-field" rows="2"></textarea>
       </div>
-      <button type="submit" class="btn btn-primary">Save Email Settings</button>
+      <div class="flex gap-2">
+        <button type="submit" class="btn btn-primary">Save Email Settings</button>
+        <button type="button" id="btn-test-email" class="btn btn-ghost">Send Test Email</button>
+      </div>
     </form>
   </section>
 
@@ -164,7 +181,7 @@
       </div>
       <div>
         <h2 class="text-lg font-semibold text-white">Software Update</h2>
-        <p class="text-xs text-slate-500">Installed version: <span id="settings-app-version">…</span></p>
+        <p class="text-xs text-slate-500">Version <span id="settings-app-version">…</span> — updates install in one click</p>
       </div>
     </div>
     <div class="max-w-2xl space-y-4">
@@ -177,11 +194,11 @@
         <p id="update-progress-text" class="text-xs text-slate-500 mt-2">Downloading…</p>
       </div>
       <div class="flex flex-wrap gap-3">
-        <button type="button" id="btn-check-updates" class="btn btn-ghost btn-sm">Check again</button>
-        <button type="button" id="btn-install-update" class="btn btn-primary btn-sm hidden">Install update</button>
-        <a id="btn-update-manual" href="#" target="_blank" rel="noopener" class="btn btn-ghost btn-sm hidden">Download manually</a>
+        <button type="button" id="btn-check-updates" class="btn btn-ghost btn-sm">Check for updates</button>
+        <button type="button" id="btn-install-update" class="btn btn-primary btn-sm hidden">Install update now</button>
+        <a id="btn-update-manual" href="#" target="_blank" rel="noopener" class="btn btn-ghost btn-sm hidden">Download from website</a>
       </div>
-      <p class="text-xs text-slate-600">Your <strong class="text-slate-500">Data</strong> folder is kept when updating. Only the app program is replaced.</p>
+      <p class="text-xs text-slate-600">Safe update — your shop data in the <strong class="text-slate-500">Data</strong> folder is kept. Only the app program is replaced.</p>
     </div>
   </section>
 
