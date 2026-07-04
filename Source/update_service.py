@@ -318,7 +318,7 @@ def _spawn_mac_updater(new_app_bundle: Path, target: dict[str, Any], parent_pid:
 # skip the backup cleanup below.
 sleep 2
 while kill -0 {parent_pid} 2>/dev/null; do sleep 1; done
-if [ ! -f "{new_app_bundle}/{launcher_rel}" ]; then
+if [ ! -x "{new_app_bundle}/{launcher_rel}" ]; then
   # Downloaded update looks incomplete/broken — leave the working install
   # untouched and relaunch it instead of installing something that might
   # not run.
@@ -329,7 +329,7 @@ fi
 rm -rf "{backup}"
 if [ -d "{app_bundle}" ]; then mv "{app_bundle}" "{backup}"; fi
 mv "{new_app_bundle}" "{app_bundle}"
-if [ -f "{app_bundle}/{launcher_rel}" ]; then
+if [ -x "{app_bundle}/{launcher_rel}" ]; then
   open "{app_bundle}" || true
   sleep 2
   rm -rf "{backup}"
@@ -365,6 +365,16 @@ def _apply_downloaded_update(zip_path: Path, target: dict[str, Any]) -> None:
         archive.extractall(staging)
 
     payload = _find_payload_root(staging, target["kind"])
+
+    if target["kind"] == "mac_app":
+        # zip extraction does not reliably preserve the Unix executable bit
+        # (this exact failure mode shipped once already) — restore it
+        # explicitly rather than trust the archive's metadata.
+        for name in ("PhoneResellerCRM", "FolderPicker"):
+            for match in payload.rglob(name):
+                if match.is_file():
+                    match.chmod(0o755)
+
     parent_pid = os.getpid()
 
     _set_state(status="applying", progress=100, message="Preparing to restart…")
