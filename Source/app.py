@@ -481,6 +481,29 @@ def update_email_settings_api():
         })
 
 
+@app.route("/api/settings/email/test", methods=["POST"])
+def test_email_settings_api():
+    """Send a real test email to the configured Gmail address, so the
+    vendor can confirm the App Password works before relying on it during
+    an actual password-reset request."""
+    user_id = _current_user_id()
+    with db.db_session() as conn:
+        settings = db.get_user_settings(conn, user_id)
+        gmail_user = settings.get("gmail_smtp_user", "")
+        gmail_pass = settings.get("gmail_smtp_app_password", "")
+        shop_name = settings.get("shop_name") or "Phone Reseller CRM"
+    if not gmail_user or not gmail_pass:
+        return jsonify({"error": "Save a Gmail address and App Password first"}), 400
+    import email_service
+    try:
+        email_service.send_otp_email(
+            gmail_user, "123456", smtp_user=gmail_user, smtp_password=gmail_pass, shop_name=shop_name,
+        )
+    except ValueError as exc:
+        return jsonify({"error": str(exc)}), 400
+    return jsonify({"ok": True, "message": f"Test email sent to {gmail_user} — check your inbox."})
+
+
 @app.route("/api/update/check")
 def update_check_api():
     """Compare local VERSION with remote manifest (version.json) or legacy VERSION file."""

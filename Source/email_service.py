@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import smtplib
+import socket
 from email.mime.text import MIMEText
 
 
@@ -27,7 +28,19 @@ def send_otp_email(
     msg["Subject"] = f"{shop_name} — Password reset code"
     msg["From"] = smtp_user
     msg["To"] = to_email
-    with smtplib.SMTP("smtp.gmail.com", 587, timeout=30) as server:
-        server.starttls()
-        server.login(smtp_user, smtp_password.strip())
-        server.send_message(msg)
+    try:
+        with smtplib.SMTP("smtp.gmail.com", 587, timeout=30) as server:
+            server.starttls()
+            server.login(smtp_user, smtp_password.strip())
+            server.send_message(msg)
+    except smtplib.SMTPAuthenticationError as exc:
+        raise ValueError(
+            "Gmail rejected the sign-in — the App Password in Settings → Email "
+            "is wrong, expired, or 2-Step Verification isn't enabled on that "
+            "Gmail account. Generate a new App Password and update it in Settings."
+        ) from exc
+    except (smtplib.SMTPException, socket.gaierror, socket.timeout, ConnectionError, OSError) as exc:
+        raise ValueError(
+            f"Couldn't send the reset email (no internet, or Gmail is unreachable "
+            f"right now): {exc}. Try again, or contact your vendor directly."
+        ) from exc

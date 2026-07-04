@@ -293,6 +293,20 @@ async function initSettingsPage() {
     }
   });
 
+  document.getElementById('btn-test-email')?.addEventListener('click', async () => {
+    const btn = document.getElementById('btn-test-email');
+    btn.disabled = true;
+    btn.textContent = 'Sending…';
+    try {
+      const res = await apiFetch('/api/settings/email/test', { method: 'POST' });
+      toast(res.message || 'Test email sent');
+    } catch (err) {
+      toast(err.message, 'error');
+    }
+    btn.disabled = false;
+    btn.textContent = 'Send Test Email';
+  });
+
   storageForm?.addEventListener('submit', async (e) => {
     e.preventDefault();
     try {
