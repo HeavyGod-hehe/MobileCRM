@@ -63,6 +63,7 @@ DEFAULT_SETTINGS = {
     "shop_name": "My Phone Shop",
     "shop_address": "",
     "shop_phones": "[]",
+    "shop_logo": "",
     "local_backup_path": "",
     "google_drive_sync_enabled": "false",
     "last_backup_at": "",
@@ -1319,6 +1320,7 @@ def get_shop_info(conn, user_id):
         "shop_address": settings.get("shop_address", ""),
         "shop_phones": [str(p).strip() for p in phones if str(p).strip()],
         "shop_whatsapp": settings.get("shop_whatsapp", ""),
+        "shop_logo": settings.get("shop_logo", ""),
     }
 
 
@@ -1357,7 +1359,7 @@ def update_storage_settings(conn, user_id, data):
 def update_user_settings(conn, user_id, data):
     allowed = {
         "partner1_name", "partner1_capital", "partner2_name", "partner2_capital",
-        "cash_in_hand", "theme", "shop_name", "shop_address", "shop_phones",
+        "cash_in_hand", "theme", "shop_name", "shop_address", "shop_phones", "shop_logo",
         "local_backup_path", "google_drive_sync_enabled",
         "last_backup_at", "auto_backup_enabled",
         "shop_whatsapp", "vendor_whatsapp", "vendor_support_note",

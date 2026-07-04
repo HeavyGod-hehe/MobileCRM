@@ -1,4 +1,7 @@
+import base64
+import binascii
 import os
+import re
 import sqlite3
 import subprocess
 import sys
@@ -445,6 +448,46 @@ def update_shop_settings_api():
             "shop_phones": data.get("shop_phones", []),
             "shop_whatsapp": data.get("shop_whatsapp", ""),
         })
+        return jsonify(db.get_shop_info(conn, user_id))
+
+
+_LOGO_DATA_URI_RE = re.compile(r"^data:image/(png|jpeg|jpg|gif|webp);base64,(.+)$", re.DOTALL)
+_LOGO_MAX_BYTES = 300 * 1024
+_LOGO_MAGIC_BYTES = (
+    b"\x89PNG\r\n\x1a\n",  # PNG
+    b"\xff\xd8\xff",  # JPEG
+    b"GIF87a",
+    b"GIF89a",
+)
+
+
+def _validate_logo_data_uri(raw: str) -> None:
+    match = _LOGO_DATA_URI_RE.match(raw or "")
+    if not match:
+        raise ValueError("That doesn't look like an image file.")
+    try:
+        decoded = base64.b64decode(match.group(2), validate=True)
+    except (binascii.Error, ValueError):
+        raise ValueError("That image file looks corrupted — try a different one.")
+    if len(decoded) > _LOGO_MAX_BYTES:
+        raise ValueError("Logo is too large — please use an image under 300KB.")
+    is_webp = decoded[:4] == b"RIFF" and decoded[8:12] == b"WEBP"
+    if not is_webp and not any(decoded.startswith(magic) for magic in _LOGO_MAGIC_BYTES):
+        raise ValueError("That doesn't look like a valid image file.")
+
+
+@app.route("/api/settings/logo", methods=["PUT"])
+def update_shop_logo_api():
+    user_id = _current_user_id()
+    data = request.get_json(force=True)
+    logo = data.get("shop_logo", "")
+    if logo:
+        try:
+            _validate_logo_data_uri(logo)
+        except ValueError as exc:
+            return jsonify({"error": str(exc)}), 400
+    with db.db_session() as conn:
+        db.update_user_settings(conn, user_id, {"shop_logo": logo})
         return jsonify(db.get_shop_info(conn, user_id))
 
 
