@@ -111,6 +111,69 @@ def _recover_crashed_table_rebuild(conn, live_table, staging_table):
         conn.execute(f"ALTER TABLE {staging_table} RENAME TO {live_table}")
 
 
+# --- Versioned schema migrations ---
+#
+# Everything above this point (the legacy `_migrate_*` chain called at the
+# bottom of init_db) is the schema as it existed before this versioning
+# system was introduced — it's already tested and stays as-is.
+#
+# From here on, every future schema change should be added as a new entry
+# in SCHEMA_MIGRATIONS instead of another ad-hoc `_migrate_*` call. Each
+# migration is tracked via SQLite's built-in `PRAGMA user_version`, so:
+#   - it runs exactly once per database, ever (not on every launch)
+#   - a timestamped backup of the whole .db file is taken automatically,
+#     right before ANY pending migration touches the schema
+#   - if a migration ever raises, the whole init_db() transaction rolls
+#     back (see db_session()), so a failed migration can't leave the
+#     schema half-changed — the untouched backup is still there either way
+#
+# To add a new migration later: write a function `def _migrate_v2_whatever
+# (conn): ...`, add `(2, _migrate_v2_whatever)` to SCHEMA_MIGRATIONS, and
+# bump CURRENT_SCHEMA_VERSION to 2. Never reuse or renumber an existing
+# version once it's shipped to a customer.
+CURRENT_SCHEMA_VERSION = 1
+SCHEMA_MIGRATIONS = (
+    # (2, _migrate_v2_whatever),
+)
+
+
+def _backup_before_schema_migration(conn, from_version: int, to_version: int) -> Path | None:
+    """Save a timestamped copy of the live database before a schema change
+    is applied, using SQLite's own backup API (not a raw file copy — see
+    backup_service.py for why that matters). Skipped for a brand-new,
+    not-yet-created database since there's nothing to protect yet."""
+    if not DB_PATH.is_file():
+        return None
+    backup_dir = DB_PATH.parent / "pre_migration_backups"
+    backup_dir.mkdir(parents=True, exist_ok=True)
+    stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    dest = backup_dir / f"crm_pre_v{from_version}_to_v{to_version}_{stamp}.db"
+    backup_conn = sqlite3.connect(str(dest))
+    try:
+        conn.backup(backup_conn)
+    finally:
+        backup_conn.close()
+    return dest
+
+
+def _run_schema_migrations(conn) -> None:
+    current = conn.execute("PRAGMA user_version").fetchone()[0]
+    if current == 0:
+        # First time this database is seen under version tracking — it has
+        # already been brought up to CURRENT_SCHEMA_VERSION's baseline by
+        # the legacy migration chain above, so just record that, rather
+        # than treating every future migration as "pending" retroactively.
+        conn.execute(f"PRAGMA user_version = {CURRENT_SCHEMA_VERSION}")
+        return
+    pending = sorted((v, fn) for v, fn in SCHEMA_MIGRATIONS if v > current)
+    if not pending:
+        return
+    _backup_before_schema_migration(conn, current, pending[-1][0])
+    for version, migrate in pending:
+        migrate(conn)
+        conn.execute(f"PRAGMA user_version = {version}")
+
+
 def init_db():
     with db_session() as conn:
         _recover_crashed_table_rebuild(conn, "phones", "phones_migrated")
@@ -234,6 +297,7 @@ def init_db():
         _migrate_multi_user(conn)
         _migrate_purchase_invoices(conn)
         _migrate_indexes(conn)
+        _run_schema_migrations(conn)
         ensure_customer_data_layout(conn)
 
 
