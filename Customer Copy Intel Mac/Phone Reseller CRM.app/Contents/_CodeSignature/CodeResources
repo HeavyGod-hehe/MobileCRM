@@ -6,11 +6,11 @@
 	<dict>
 		<key>Resources/VERSION</key>
 		<data>
-		DGeZ8uhezMcGFEP3bkW3smiJK1g=
+		j1KIj/fjX9XKMQIx+gdr4SBrSb0=
 		</data>
 		<key>Resources/base_library.zip</key>
 		<data>
-		2NSXRwzBNiZYUGDedAGBBZzgMYw=
+		IyKs68Xv6h54Cm+Xh6JWovMDypk=
 		</data>
 		<key>Resources/flask-3.1.3.dist-info/INSTALLER</key>
 		<data>
@@ -122,11 +122,19 @@
 		</data>
 		<key>Resources/static/app.css</key>
 		<data>
-		QiGTWhtrA28KzdmB8u0x9f76Rfk=
+		EqH+s2FANn87A5//5c2hXsPqWDA=
+		</data>
+		<key>Resources/static/html5-qrcode.min.js</key>
+		<data>
+		48AGyg4D4UXFgIJHGrZRQV72RN0=
+		</data>
+		<key>Resources/static/tailwind.min.css</key>
+		<data>
+		by4ZMzeigM48gmNsmp0/iWV5BeA=
 		</data>
 		<key>Resources/static/ui.js</key>
 		<data>
-		N0eIiIdmO8t8QF3yx+1cVOIfKOQ=
+		zAd9KIh7it2iOyXyBFU9SvOc06o=
 		</data>
 		<key>Resources/static/whatsapp.js</key>
 		<data>
@@ -138,15 +146,15 @@
 		</data>
 		<key>Resources/templates/activation.html</key>
 		<data>
-		2Qtoth/omqD33sW03xQzVUxOE7E=
+		q93IUG6rSwERXb7RKhYbDW7nS9I=
 		</data>
 		<key>Resources/templates/base.html</key>
 		<data>
-		L+rCmON33UpiKL5gmgI+HWx0Rac=
+		2YV60WpIImw2rKsSfc21jw8HbEI=
 		</data>
 		<key>Resources/templates/billing.html</key>
 		<data>
-		ghFNmEiW0EpJ4QwSU408/Eab3Dk=
+		JMjZYBJ3MvMB8FU+voLphdPEnmM=
 		</data>
 		<key>Resources/templates/cashbook.html</key>
 		<data>
@@ -158,7 +166,7 @@
 		</data>
 		<key>Resources/templates/inventory.html</key>
 		<data>
-		G88WK38XMKCSnvjT30n4Zn+Mq5E=
+		DZW1rZ2DV+EsrG5Z3UEZaWF6A2A=
 		</data>
 		<key>Resources/templates/journal.html</key>
 		<data>
@@ -166,7 +174,7 @@
 		</data>
 		<key>Resources/templates/login.html</key>
 		<data>
-		yw460wwUX1JcjXiIRkqrWFYHMlA=
+		8GbxmC4YQSVvfV3cbmfSKwnjwew=
 		</data>
 		<key>Resources/templates/month_report.html</key>
 		<data>
@@ -178,7 +186,7 @@
 		</data>
 		<key>Resources/templates/purchase_invoice.html</key>
 		<data>
-		wJyoVcaY6503MPU/vYZM8qC79PQ=
+		osNo6aN38hYlBSmM10EVA3oTaEI=
 		</data>
 		<key>Resources/templates/returns.html</key>
 		<data>
@@ -186,7 +194,7 @@
 		</data>
 		<key>Resources/templates/settings.html</key>
 		<data>
-		1qH3bxVsIsUUgO1/PnoQI2goIGc=
+		mUktnR8OO0e4+9kUcSWXQlU1oU4=
 		</data>
 		<key>Resources/templates/today.html</key>
 		<data>
@@ -775,14 +783,14 @@
 		<dict>
 			<key>hash2</key>
 			<data>
-			B7cWS4CxDuWfVq1kZeO2ws8Se/7Cb8K3FjgCCxnX9cg=
+			Gr/fI30GLQTlkvqUr+dhPb2Ua6xceag/hVp4uY/rQ8U=
 			</data>
 		</dict>
 		<key>Resources/base_library.zip</key>
 		<dict>
 			<key>hash2</key>
 			<data>
-			VuNaOCH/P7vhuOMPohaIxnpHFDAc5m3R1o53+TK4M5I=
+			Ii0Duxamua6eQ4YQicRenUm4ZxhuDTX63WyHJZ19NsQ=
 			</data>
 		</dict>
 		<key>Resources/flask-3.1.3.dist-info/INSTALLER</key>
@@ -988,14 +996,28 @@
 		<dict>
 			<key>hash2</key>
 			<data>
-			xT3QYvtZK9tygWeLZIl66Yp5/3sX7ZQcpkSGD/rJAzk=
+			L+v3BylyDGxJvmS27AUlIrJwI3p/76suxtsr7LWx/kk=
+			</data>
+		</dict>
+		<key>Resources/static/html5-qrcode.min.js</key>
+		<dict>
+			<key>hash2</key>
+			<data>
+			ZgsSQ3sddH4+aLi+BoXAjLcoFAEQrSE/FnsUtm+LHY4=
+			</data>
+		</dict>
+		<key>Resources/static/tailwind.min.css</key>
+		<dict>
+			<key>hash2</key>
+			<data>
+			q+7Jjii1cjTOKvSgMP7lmdaALNNOxUM9KPq+UQyT3Gk=
 			</data>
 		</dict>
 		<key>Resources/static/ui.js</key>
 		<dict>
 			<key>hash2</key>
 			<data>
-			7I2hv8kDdEfp2DlgwYvJ5NeMxoBXk0bbW1BjKvt7HzE=
+			qozHuMIxfCqZ+tW0G65BDV5h2QyGRnBw5aL++ycx34k=
 			</data>
 		</dict>
 		<key>Resources/static/whatsapp.js</key>
@@ -1016,21 +1038,21 @@
 		<dict>
 			<key>hash2</key>
 			<data>
-			kEowJUcGA/89QWJhtXiCRw21iJNazgsw/ueBaYFrkl0=
+			D6GnMrrAq0tMEXHip8MU2XB5M4sB2NJ7IcT9l1rAfbQ=
 			</data>
 		</dict>
 		<key>Resources/templates/base.html</key>
 		<dict>
 			<key>hash2</key>
 			<data>
-			gGrHBJ5z8VRDF8jVrqPctquoTZgGh5iCdhnLCmL3BZY=
+			azfax/gLWoxkhfYnoFut5mdsvts3HHsWSnP+//JVGi4=
 			</data>
 		</dict>
 		<key>Resources/templates/billing.html</key>
 		<dict>
 			<key>hash2</key>
 			<data>
-			vxiXFDgNixIOcQhHXimnY/8mgmQcVGRcjqAgLu2DGeA=
+			MYkuBCyZhu+fv0VtPvbP06yblOkckv6VJtDEfklqFbw=
 			</data>
 		</dict>
 		<key>Resources/templates/cashbook.html</key>
@@ -1051,7 +1073,7 @@
 		<dict>
 			<key>hash2</key>
 			<data>
-			yHPlfGcLWv9u0lmGH8XkpkNxX2yM7AaLN1a5PnlnQ1s=
+			fhxMGCuPcxodVBuUOpmckRbNSDJTpG4t5iYi4AgLYDI=
 			</data>
 		</dict>
 		<key>Resources/templates/journal.html</key>
@@ -1065,7 +1087,7 @@
 		<dict>
 			<key>hash2</key>
 			<data>
-			sLd4XDMFA6NTFZwc9hltrKk9F7sWZISnV4DvpRihi3I=
+			WC4bWQMOb8aaAcl+1KcCrL/my66yjmJrnsabk8lAyZM=
 			</data>
 		</dict>
 		<key>Resources/templates/month_report.html</key>
@@ -1086,7 +1108,7 @@
 		<dict>
 			<key>hash2</key>
 			<data>
-			d8O5ekypPI/WFwSQOKn+wjdztsWTvYH5+aQPLlwWDAw=
+			VrgwXrgElQzvvDSeugU9MII4bVpQMOQbbja8/Hhajk8=
 			</data>
 		</dict>
 		<key>Resources/templates/returns.html</key>
@@ -1100,7 +1122,7 @@
 		<dict>
 			<key>hash2</key>
 			<data>
-			+Izt8oTjpndHoWRi/pPS2vmIATjwXCb4RDd5itH92f0=
+			eS0/KTNSkbabF2DJr41BR8UtPTIeiZQ+oB+gIvVK+AA=
 			</data>
 		</dict>
 		<key>Resources/templates/today.html</key>

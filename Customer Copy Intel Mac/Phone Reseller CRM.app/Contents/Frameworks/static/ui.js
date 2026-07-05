@@ -235,6 +235,48 @@ function addShopPhoneRow(value = '') {
   input.focus();
 }
 
+function resizeImageFileToSquareDataUrl(file, size = 200) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onerror = () => reject(new Error('Could not read that file.'));
+    reader.onload = () => {
+      const img = new Image();
+      img.onerror = () => reject(new Error('That file is not a valid image.'));
+      img.onload = () => {
+        const canvas = document.createElement('canvas');
+        canvas.width = size;
+        canvas.height = size;
+        const ctx = canvas.getContext('2d');
+        const scale = Math.max(size / img.width, size / img.height);
+        const drawW = img.width * scale;
+        const drawH = img.height * scale;
+        ctx.drawImage(img, (size - drawW) / 2, (size - drawH) / 2, drawW, drawH);
+        resolve(canvas.toDataURL('image/png'));
+      };
+      img.src = reader.result;
+    };
+    reader.readAsDataURL(file);
+  });
+}
+
+function setShopLogoPreview(dataUrl) {
+  const img = document.getElementById('shop-logo-preview');
+  const fallback = document.getElementById('shop-logo-preview-default');
+  const removeBtn = document.getElementById('btn-remove-logo');
+  if (!img) return;
+  if (dataUrl) {
+    img.src = dataUrl;
+    img.classList.remove('hidden');
+    fallback?.classList.add('hidden');
+    removeBtn?.classList.remove('hidden');
+  } else {
+    img.classList.add('hidden');
+    img.removeAttribute('src');
+    fallback?.classList.remove('hidden');
+    removeBtn?.classList.add('hidden');
+  }
+}
+
 function updateBackupStatusLabel(storage) {
   const el = document.getElementById('settings-last-backup');
   if (!el) return;
@@ -262,6 +304,7 @@ async function initSettingsPage() {
     const waEl = document.getElementById('shop-info-whatsapp');
     if (waEl) waEl.value = shop.shop_whatsapp || '';
     renderShopPhoneRows(shop.shop_phones || []);
+    setShopLogoPreview(shop.shop_logo || '');
   } catch (_) {
     renderShopPhoneRows([]);
   }
@@ -441,6 +484,44 @@ async function initSettingsPage() {
 
   document.getElementById('btn-add-phone')?.addEventListener('click', () => {
     addShopPhoneRow();
+  });
+
+  document.getElementById('btn-upload-logo')?.addEventListener('click', () => {
+    document.getElementById('shop-logo-file')?.click();
+  });
+
+  document.getElementById('shop-logo-file')?.addEventListener('change', async (e) => {
+    const file = e.target.files?.[0];
+    e.target.value = '';
+    if (!file) return;
+    try {
+      const dataUrl = await resizeImageFileToSquareDataUrl(file);
+      await apiFetch('/api/settings/logo', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ shop_logo: dataUrl }),
+      });
+      setShopLogoPreview(dataUrl);
+      toast('Logo updated');
+      loadAppBranding();
+    } catch (err) {
+      toast(err.message || 'Could not upload that logo', 'error');
+    }
+  });
+
+  document.getElementById('btn-remove-logo')?.addEventListener('click', async () => {
+    try {
+      await apiFetch('/api/settings/logo', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ shop_logo: '' }),
+      });
+      setShopLogoPreview('');
+      toast('Logo removed');
+      loadAppBranding();
+    } catch (err) {
+      toast(err.message || 'Could not remove logo', 'error');
+    }
   });
 
   document.getElementById('btn-browse-restore')?.addEventListener('click', async () => {
@@ -658,6 +739,19 @@ async function loadAppBranding() {
     if (shopEl && auth.shop_name) {
       shopEl.textContent = auth.shop_name;
       try { localStorage.setItem('crm-shop-name', auth.shop_name); } catch (_) {}
+    }
+    const logoImg = document.getElementById('nav-logo-img');
+    const logoDefault = document.getElementById('nav-logo-default');
+    if (logoImg && logoDefault) {
+      if (auth.shop_logo) {
+        logoImg.src = auth.shop_logo;
+        logoImg.classList.remove('hidden');
+        logoDefault.classList.add('hidden');
+      } else {
+        logoImg.classList.add('hidden');
+        logoImg.removeAttribute('src');
+        logoDefault.classList.remove('hidden');
+      }
     }
     const saved = localStorage.getItem(THEME_KEY);
     // Always apply (not just on mismatch) so data-layout/data-mode get
