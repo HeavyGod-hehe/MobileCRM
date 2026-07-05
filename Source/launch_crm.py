@@ -8,7 +8,6 @@ import platform
 import socket
 import subprocess
 import sys
-import threading
 import time
 import traceback
 import urllib.error
@@ -47,13 +46,20 @@ def _log(message: str) -> None:
 
 
 def find_running_crm(host: str = HOST, start: int = DEFAULT_PORT, max_attempts: int = 20) -> int | None:
-    """Return the port if a CRM server is already listening."""
+    """Return the port if a CRM server is already listening.
+
+    Any HTTP response counts as "found" — including error statuses like the
+    403 this endpoint returns before activation — since that still proves
+    our server is bound to the port. Only treat a real connection failure
+    (nothing listening there) as "not found" and keep scanning.
+    """
     for port in range(start, start + max_attempts):
         url = f"http://{host}:{port}/api/auth/status"
         try:
-            with urllib.request.urlopen(url, timeout=0.4) as resp:
-                if resp.status == 200:
-                    return port
+            urllib.request.urlopen(url, timeout=0.4)
+            return port
+        except urllib.error.HTTPError:
+            return port
         except (OSError, urllib.error.URLError, ValueError):
             continue
     return None
@@ -129,10 +135,66 @@ def open_browser_when_ready(host: str, port: int) -> None:
     open_maximized(url)
 
 
+def _spawn_detached_server(port: int) -> None:
+    """Start the actual CRM server as a fully detached background process.
+
+    On macOS, Finder/Launch Services tracks any process launched via the
+    .app bundle as "the app" and, on a second double-click, tries to
+    re-activate that same process instead of starting a new one — but this
+    app has no window to activate, so that reopen silently fails (error
+    -600) and nothing happens. Spawning the real server via a plain
+    subprocess (not through the bundle) keeps it invisible to Launch
+    Services, so every double-click of the .app always gets a fresh,
+    short-lived launcher that either starts the server or, if one's
+    already running, just reopens the browser.
+    """
+    env = {**os.environ, "CRM_SERVER_ROLE": "1", "CRM_PORT": str(port)}
+    if getattr(sys, "frozen", False):
+        cmd = [sys.executable]
+    else:
+        cmd = [sys.executable, str(Path(__file__).resolve())]
+
+    kwargs: dict = {
+        "cwd": str(_project_root()),
+        "env": env,
+        "stdin": subprocess.DEVNULL,
+        "stdout": subprocess.DEVNULL,
+        "stderr": subprocess.DEVNULL,
+        "close_fds": True,
+    }
+    if platform.system() == "Windows":
+        kwargs["creationflags"] = subprocess.DETACHED_PROCESS | subprocess.CREATE_NEW_PROCESS_GROUP
+    else:
+        kwargs["start_new_session"] = True
+
+    subprocess.Popen(cmd, **kwargs)
+
+
+def _run_server(port: int) -> None:
+    os.environ["CRM_PORT"] = str(port)
+
+    import backup_service
+
+    backup_service.run_startup_backups()
+    backup_service.start_auto_backup_thread()
+
+    from app import app
+
+    _log(f"Server ready at http://{HOST}:{port}")
+    app.run(host=HOST, port=port, debug=False, use_reloader=False, threaded=True)
+
+
 def main() -> None:
     root = _project_root()
     os.chdir(root)
-    _log(f"Starting CRM from {root}")
+
+    if os.environ.get("CRM_SERVER_ROLE") == "1":
+        port = int(os.environ.get("CRM_PORT", DEFAULT_PORT))
+        _log(f"Starting CRM server (detached) from {root}")
+        _run_server(port)
+        return
+
+    _log(f"Starting CRM launcher from {root}")
 
     existing_port = find_running_crm()
     if existing_port is not None:
@@ -142,20 +204,9 @@ def main() -> None:
         return
 
     port = find_free_port(DEFAULT_PORT)
-    os.environ["CRM_PORT"] = str(port)
-    url = f"http://{HOST}:{port}"
-
-    threading.Thread(target=open_browser_when_ready, args=(HOST, port), daemon=True).start()
-
-    import backup_service
-
-    backup_service.run_startup_backups()
-    backup_service.start_auto_backup_thread()
-
-    from app import app
-
-    _log(f"Server ready at {url}")
-    app.run(host=HOST, port=port, debug=False, use_reloader=False, threaded=True)
+    _spawn_detached_server(port)
+    open_browser_when_ready(HOST, port)
+    _log(f"Launcher handed off to detached server on port {port}, exiting")
 
 
 if __name__ == "__main__":

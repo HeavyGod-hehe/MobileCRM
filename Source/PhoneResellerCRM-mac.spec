@@ -85,5 +85,6 @@ if platform.system() == "Darwin":
             "CFBundleShortVersionString": VERSION,
             "CFBundleVersion": VERSION,
             "LSMinimumSystemVersion": "10.13",
+            "LSMultipleInstancesProhibited": False,
         },
     )
