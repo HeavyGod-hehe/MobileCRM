@@ -26,6 +26,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent
 REPO = ROOT.parent
+VERSION = (ROOT / "VERSION").read_text(encoding="utf-8").strip()
 
 ARCH_OUTPUT = {
     "arm64": REPO / "Customer Copy Apple Silicon",
@@ -215,11 +216,38 @@ def build_universal_copy(
         (macos / "FolderPicker").chmod(0o755)
 
     write_start_here(out, "universal")
+    write_open_me_first(out)
     (out / "license.json").write_text("{}\n", encoding="utf-8")
     verify_no_source(out)
 
     print(f"\n✓ Universal Customer Copy ready:\n  {out}\n")
     return out
+
+
+def write_open_me_first(out: Path) -> None:
+    """A one-click helper for first-time setup.
+
+    Freshly downloaded apps aren't code-signed with a paid Apple Developer
+    ID, so macOS quarantines them and blocks the first launch with "Apple
+    could not verify... free of malware". This script clears that
+    quarantine flag (the same fix as the manual `xattr -cr` Terminal
+    command) and then opens the app, so customers get one thing to
+    right-click-Open instead of fighting Gatekeeper on the app itself.
+    """
+    script = out / "Open Me First.command"
+    script.write_text(
+        """#!/bin/bash
+# Clears the macOS "downloaded from the internet" flag that triggers the
+# "Apple could not verify this app is free of malware" warning, then opens
+# the CRM. Safe to run every time — it's a no-op once the flag is gone.
+cd "$(dirname "$0")"
+xattr -cr "Phone Reseller CRM.app" 2>/dev/null
+xattr -cr "FolderPicker" 2>/dev/null
+open "Phone Reseller CRM.app"
+""",
+        encoding="utf-8",
+    )
+    script.chmod(0o755)
 
 
 def write_start_here(out: Path, arch: str) -> None:
@@ -235,29 +263,36 @@ def write_start_here(out: Path, arch: str) -> None:
   • Both chip types → use "Customer Copy Universal Mac" folder
   • Windows PC      → use "Customer Windows Copy" folder"""
     (out / "START HERE.txt").write_text(
-        f"""Phone Reseller CRM — Customer Edition v2.3 (Mac — {chip_label})
+        f"""Phone Reseller CRM — Customer Edition v{VERSION} (Mac — {chip_label})
 {'=' * (52 + len(chip_label))}
 
 This build is for: {chip_label}
 NO Python or source code — everything is inside the app.
 
-HOW TO START
-────────────
-  1. Double-click:  Phone Reseller CRM.app
-  2. Browser opens at http://localhost:5050
-  3. If CRM is already running, the browser opens to the existing session
-  4. If it does not open, wait 10 seconds and visit http://localhost:5050
+HOW TO START (first time)
+──────────────────────────
+  1. Double-click:  Open Me First.command
+  2. macOS will warn it's from an unidentified developer — that's expected
+     for a freshly downloaded app. Right-click "Open Me First.command" →
+     Open → Open. (Only needs doing once.)
+  3. The CRM opens in your browser at http://localhost:5050
+
+AFTER THE FIRST TIME
+────────────────────
+  • Just double-click Phone Reseller CRM.app directly — no more warnings
+  • If CRM is already running, double-clicking opens the existing session
+  • If it does not open, wait 10 seconds and visit http://localhost:5050
 
 WRONG CHIP?
 ───────────
 {wrong_chip}
 
-FIRST TIME ON MAC
-─────────────────
-  If macOS blocks the app:
+STILL BLOCKED?
+──────────────
+  If "Open Me First.command" itself won't run:
   1. Open Terminal in this folder
-  2. Run:  xattr -cr "Phone Reseller CRM.app"
-  3. Right-click the app → Open → Open
+  2. Run:  xattr -cr "Phone Reseller CRM.app" "FolderPicker"
+  3. Or: System Settings → Privacy & Security → scroll down → "Open Anyway"
 
 TROUBLESHOOTING
 ───────────────
@@ -272,8 +307,8 @@ FIRST TIME SETUP
   • Settings → Shop Details (name, address, WhatsApp)
   • Data folder is created automatically next to the app
 
-FEATURES (v2.3)
-───────────────
+FEATURES
+────────
   • Inventory, cash book & accounts stay synced
   • Borrow phones from shopkeepers
   • Accounts Credit & Debit — Food/expenses deduct from cash or bank
@@ -358,6 +393,7 @@ def build_mac_copy(
         (out / "FolderPicker").chmod(0o755)
 
     write_start_here(out, arch)
+    write_open_me_first(out)
     (out / "license.json").write_text("{}\n", encoding="utf-8")
     verify_no_source(out)
 

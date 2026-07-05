@@ -157,15 +157,21 @@ jobs:
         run: |
           set -euo pipefail
           VERSION="${{ steps.ver.outputs.version }}"
+          # Zip everything in each artifact folder — not just the .app/exe
+          # folder — so a fresh download also includes FolderPicker (a real
+          # runtime dependency Settings shells out to), the "Open Me
+          # First.command" Gatekeeper helper, and START HERE.txt. The in-app
+          # auto-updater is unaffected: it finds the app/folder by name
+          # inside the zip regardless of what else is alongside it.
           mkdir -p dist
           cd artifacts/mac-intel
-          zip -ry "../../dist/PhoneResellerCRM-IntelMac-${VERSION}.zip" "Phone Reseller CRM.app"
+          zip -ry "../../dist/PhoneResellerCRM-IntelMac-${VERSION}.zip" .
           cd ../mac-arm64
-          zip -ry "../../dist/PhoneResellerCRM-AppleSilicon-${VERSION}.zip" "Phone Reseller CRM.app"
+          zip -ry "../../dist/PhoneResellerCRM-AppleSilicon-${VERSION}.zip" .
           cd ../mac-universal
-          zip -ry "../../dist/PhoneResellerCRM-UniversalMac-${VERSION}.zip" "Phone Reseller CRM.app"
+          zip -ry "../../dist/PhoneResellerCRM-UniversalMac-${VERSION}.zip" .
           cd ../windows
-          zip -ry "../../dist/PhoneResellerCRM-Windows-${VERSION}.zip" "Phone Reseller CRM"
+          zip -ry "../../dist/PhoneResellerCRM-Windows-${VERSION}.zip" .
           ls -la ../../dist/
 
       - name: Create or update GitHub Release (on the public releases repo)

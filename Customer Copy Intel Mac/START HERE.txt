@@ -1,15 +1,22 @@
-Phone Reseller CRM — Customer Edition v2.3 (Mac — Intel Mac)
+Phone Reseller CRM — Customer Edition v2.4.5 (Mac — Intel Mac)
 =============================================================
 
 This build is for: Intel Mac
 NO Python or source code — everything is inside the app.
 
-HOW TO START
-────────────
-  1. Double-click:  Phone Reseller CRM.app
-  2. Browser opens at http://localhost:5050
-  3. If CRM is already running, the browser opens to the existing session
-  4. If it does not open, wait 10 seconds and visit http://localhost:5050
+HOW TO START (first time)
+──────────────────────────
+  1. Double-click:  Open Me First.command
+  2. macOS will warn it's from an unidentified developer — that's expected
+     for a freshly downloaded app. Right-click "Open Me First.command" →
+     Open → Open. (Only needs doing once.)
+  3. The CRM opens in your browser at http://localhost:5050
+
+AFTER THE FIRST TIME
+────────────────────
+  • Just double-click Phone Reseller CRM.app directly — no more warnings
+  • If CRM is already running, double-clicking opens the existing session
+  • If it does not open, wait 10 seconds and visit http://localhost:5050
 
 WRONG CHIP?
 ───────────
@@ -18,12 +25,12 @@ WRONG CHIP?
   • Both chip types → use "Customer Copy Universal Mac" folder
   • Windows PC      → use "Customer Windows Copy" folder
 
-FIRST TIME ON MAC
-─────────────────
-  If macOS blocks the app:
+STILL BLOCKED?
+──────────────
+  If "Open Me First.command" itself won't run:
   1. Open Terminal in this folder
-  2. Run:  xattr -cr "Phone Reseller CRM.app"
-  3. Right-click the app → Open → Open
+  2. Run:  xattr -cr "Phone Reseller CRM.app" "FolderPicker"
+  3. Or: System Settings → Privacy & Security → scroll down → "Open Anyway"
 
 TROUBLESHOOTING
 ───────────────
@@ -38,8 +45,8 @@ FIRST TIME SETUP
   • Settings → Shop Details (name, address, WhatsApp)
   • Data folder is created automatically next to the app
 
-FEATURES (v2.3)
-───────────────
+FEATURES
+────────
   • Inventory, cash book & accounts stay synced
   • Borrow phones from shopkeepers
   • Accounts Credit & Debit — Food/expenses deduct from cash or bank
