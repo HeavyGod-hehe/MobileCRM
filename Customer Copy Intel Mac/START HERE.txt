@@ -1,4 +1,4 @@
-Phone Reseller CRM — Customer Edition v2.4.7 (Mac — Intel Mac)
+Phone Reseller CRM — Customer Edition v2.4.8 (Mac — Intel Mac)
 =============================================================
 
 This build is for: Intel Mac

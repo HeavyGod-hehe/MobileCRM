@@ -151,6 +151,9 @@ jobs:
             if [ -f "$dir/FolderPicker" ]; then
               chmod +x "$dir/FolderPicker"
             fi
+            if [ -f "$dir/Open Me First.command" ]; then
+              chmod +x "$dir/Open Me First.command"
+            fi
           done
 
       - name: Package release zips
