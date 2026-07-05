@@ -228,11 +228,14 @@ def write_open_me_first(out: Path) -> None:
     """A one-click helper for first-time setup.
 
     Freshly downloaded apps aren't code-signed with a paid Apple Developer
-    ID, so macOS quarantines them and blocks the first launch with "Apple
-    could not verify... free of malware". This script clears that
-    quarantine flag (the same fix as the manual `xattr -cr` Terminal
-    command) and then opens the app, so customers get one thing to
-    right-click-Open instead of fighting Gatekeeper on the app itself.
+    ID, so macOS quarantines them and blocks the first launch. On current
+    macOS this shows as "is damaged and can't be opened" rather than the
+    older "unidentified developer" dialog — and neither right-click > Open
+    nor System Settings > Open Anyway reliably clears it for apps with no
+    Developer ID signature at all. This script itself still needs the
+    same one-time `xattr -cr` Terminal fix (see START HERE.txt) before it
+    can run — but once run, it clears the quarantine flag on the app and
+    FolderPicker so they open normally from then on.
     """
     script = out / "Open Me First.command"
     script.write_text(
@@ -271,11 +274,25 @@ NO Python or source code — everything is inside the app.
 
 HOW TO START (first time)
 ──────────────────────────
-  1. Double-click:  Open Me First.command
-  2. macOS will warn it's from an unidentified developer — that's expected
-     for a freshly downloaded app. Right-click "Open Me First.command" →
-     Open → Open. (Only needs doing once.)
-  3. The CRM opens in your browser at http://localhost:5050
+  This app isn't from the App Store, so macOS blocks it the first time —
+  this is normal and only needs fixing once.
+
+  Fix it with Terminal (always works, takes 10 seconds):
+    1. Open Terminal
+    2. Type  cd  followed by a space, then drag THIS FOLDER (the one
+       this file is in) onto the Terminal window, then press Enter
+    3. Run:
+         xattr -cr .
+    4. Double-click  Open Me First.command  — it opens normally now
+
+  Why not just click "Open Anyway" in System Settings? For an app like
+  this one (not from an identified Apple developer), that button often
+  doesn't work and macOS instead says "is damaged and can't be opened" —
+  that message is misleading, the app isn't actually damaged, but that
+  screen has no working fix. The Terminal steps above are the real fix.
+
+  Running "Open Me First.command" once unblocks the app and FolderPicker
+  permanently — after that, just use the app normally.
 
 AFTER THE FIRST TIME
 ────────────────────
@@ -286,13 +303,6 @@ AFTER THE FIRST TIME
 WRONG CHIP?
 ───────────
 {wrong_chip}
-
-STILL BLOCKED?
-──────────────
-  If "Open Me First.command" itself won't run:
-  1. Open Terminal in this folder
-  2. Run:  xattr -cr "Phone Reseller CRM.app" "FolderPicker"
-  3. Or: System Settings → Privacy & Security → scroll down → "Open Anyway"
 
 TROUBLESHOOTING
 ───────────────
