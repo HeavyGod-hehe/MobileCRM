@@ -1,4 +1,4 @@
-Phone Reseller CRM — Customer Edition v2.4.8 (Mac — Intel Mac)
+Phone Reseller CRM — Customer Edition v2.4.9 (Mac — Intel Mac)
 =============================================================
 
 This build is for: Intel Mac
@@ -9,22 +9,25 @@ HOW TO START (first time)
   This app isn't from the App Store, so macOS blocks it the first time —
   this is normal and only needs fixing once.
 
-  Fix it with Terminal (always works, takes 10 seconds):
+  Fix it with Terminal (always works, one copy-paste, takes 10 seconds):
     1. Open Terminal
-    2. Type  cd  followed by a space, then drag THIS FOLDER (the one
-       this file is in) onto the Terminal window, then press Enter
-    3. Run:
-         xattr -cr .
-    4. Double-click  Open Me First.command  — it opens normally now
+    2. Type  cd  then a space, then drag THIS FOLDER (the one this file
+       is in) onto the Terminal window — do not type the folder path
+       yourself, dragging it in avoids typos — then press Enter
+    3. Copy this WHOLE line exactly (all one line) and paste it into
+       Terminal, then press Enter:
+
+         xattr -cr . && chmod +x *.command "Phone Reseller CRM.app/Contents/MacOS/PhoneResellerCRM" FolderPicker && open "Phone Reseller CRM.app"
+
+    That single line fixes everything AND opens the CRM in one go — you
+    should see it open in your browser right after you press Enter.
 
   Why not just click "Open Anyway" in System Settings? For an app like
   this one (not from an identified Apple developer), that button often
   doesn't work and macOS instead says "is damaged and can't be opened" —
   that message is misleading, the app isn't actually damaged, but that
-  screen has no working fix. The Terminal steps above are the real fix.
-
-  Running "Open Me First.command" once unblocks the app and FolderPicker
-  permanently — after that, just use the app normally.
+  screen has no working fix. The Terminal command above is the real fix,
+  and only needs doing this once.
 
 AFTER THE FIRST TIME
 ────────────────────
