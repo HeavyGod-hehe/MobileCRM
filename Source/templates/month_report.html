@@ -8,8 +8,17 @@
     <h1 class="text-2xl font-bold text-white tracking-tight">Month Report</h1>
     <p class="text-slate-400 text-sm mt-1">Sales, profit &amp; udhar summary for tax / partner review</p>
   </div>
-  <div class="flex gap-2 items-center">
+  <div class="flex flex-wrap gap-2 items-center">
+    <select id="report-mode" class="input-field text-sm w-auto">
+      <option value="month">Month</option>
+      <option value="range">Date Range</option>
+    </select>
     <input type="month" id="report-month" class="input-field text-sm w-auto">
+    <span id="report-range-fields" class="hidden flex gap-2 items-center">
+      <input type="date" id="report-from" class="input-field text-sm w-auto">
+      <span class="text-slate-500 text-sm">to</span>
+      <input type="date" id="report-to" class="input-field text-sm w-auto">
+    </span>
     <button type="button" id="btn-load-report" class="btn btn-ghost btn-sm">Load</button>
     <button type="button" id="btn-print-report" class="btn btn-primary btn-sm">Print / PDF</button>
   </div>
@@ -75,9 +84,21 @@
       ${phones ? `<p>Tel: ${esc(phones)}</p>` : ''}`;
   }
 
-  async function loadReport() {
+  function buildReportQuery() {
+    const mode = document.getElementById('report-mode').value;
+    if (mode === 'range') {
+      const from = document.getElementById('report-from').value;
+      const to = document.getElementById('report-to').value;
+      if (!from || !to) throw new Error('Pick both a from and to date');
+      if (from > to) throw new Error('From date must be before to date');
+      return `?from=${from}&to=${to}`;
+    }
     const month = document.getElementById('report-month').value;
-    const q = month ? `?month=${month}` : '';
+    return month ? `?month=${month}` : '';
+  }
+
+  async function loadReport() {
+    const q = buildReportQuery();
     const data = await apiFetch('/api/month-report' + q);
     shopInfo = data.shop || {};
     renderLetterhead(shopInfo);
@@ -112,7 +133,17 @@
     }
   }
 
-  document.getElementById('report-month').value = new Date().toISOString().slice(0, 7);
+  function updateReportModeUi() {
+    const isRange = document.getElementById('report-mode').value === 'range';
+    document.getElementById('report-month').classList.toggle('hidden', isRange);
+    document.getElementById('report-range-fields').classList.toggle('hidden', !isRange);
+  }
+
+  const today = new Date().toISOString().slice(0, 10);
+  document.getElementById('report-month').value = today.slice(0, 7);
+  document.getElementById('report-from').value = today;
+  document.getElementById('report-to').value = today;
+  document.getElementById('report-mode').addEventListener('change', updateReportModeUi);
   document.getElementById('btn-load-report').addEventListener('click', () => loadReport().catch(e => toast(e.message, 'error')));
   document.getElementById('btn-print-report').addEventListener('click', () => window.print());
   loadReport().catch(err => toast(err.message, 'error'));

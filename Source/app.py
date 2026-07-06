@@ -502,8 +502,10 @@ def today_api():
 def month_report_api():
     user_id = _current_user_id()
     year_month = request.args.get("month")
+    start_date = request.args.get("from")
+    end_date = request.args.get("to")
     with db.db_session() as conn:
-        return jsonify(db.compute_month_report(conn, user_id, year_month))
+        return jsonify(db.compute_month_report(conn, user_id, year_month, start_date, end_date))
 
 
 @app.route("/api/settings/email", methods=["GET"])

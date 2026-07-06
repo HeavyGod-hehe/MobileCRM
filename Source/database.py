@@ -4008,30 +4008,43 @@ def compute_today_summary(conn, user_id):
 
 # --- Month report ---
 
-def compute_month_report(conn, user_id, year_month=None):
-    if not year_month:
-        year_month = conn.execute(
-            "SELECT strftime('%Y-%m', 'now', 'localtime') AS ym"
-        ).fetchone()["ym"]
+def compute_month_report(conn, user_id, year_month=None, start_date=None, end_date=None):
+    if start_date and end_date:
+        sold = conn.execute(
+            """
+            SELECT * FROM phones
+            WHERE user_id = ? AND status = 'Sold' AND sold_at IS NOT NULL
+              AND date(sold_at) BETWEEN date(?) AND date(?)
+            ORDER BY sold_at DESC
+            """,
+            (user_id, start_date, end_date),
+        ).fetchall()
+        month_label = (
+            f"{datetime.strptime(start_date, '%Y-%m-%d').strftime('%d %b %Y')} – "
+            f"{datetime.strptime(end_date, '%Y-%m-%d').strftime('%d %b %Y')}"
+        )
+        year_month = None
+    else:
+        if not year_month:
+            year_month = conn.execute(
+                "SELECT strftime('%Y-%m', 'now', 'localtime') AS ym"
+            ).fetchone()["ym"]
 
-    sold = conn.execute(
-        """
-        SELECT * FROM phones
-        WHERE user_id = ? AND status = 'Sold' AND sold_at IS NOT NULL
-          AND strftime('%Y-%m', sold_at) = ?
-        ORDER BY sold_at DESC
-        """,
-        (user_id, year_month),
-    ).fetchall()
+        sold = conn.execute(
+            """
+            SELECT * FROM phones
+            WHERE user_id = ? AND status = 'Sold' AND sold_at IS NOT NULL
+              AND strftime('%Y-%m', sold_at) = ?
+            ORDER BY sold_at DESC
+            """,
+            (user_id, year_month),
+        ).fetchall()
+        month_label = datetime.strptime(year_month, "%Y-%m").strftime("%B %Y")
 
     acct = accounts_summary(conn, user_id)
     dash = compute_dashboard(conn, user_id)
     revenue = sum((r["sale_price"] or 0) for r in sold)
     profit = sum(_sold_profit(conn, r) for r in sold)
-    month_label = conn.execute(
-        "SELECT strftime('%B %Y', ? || '-01') AS label",
-        (year_month,),
-    ).fetchone()["label"]
 
     return {
         "year_month": year_month,

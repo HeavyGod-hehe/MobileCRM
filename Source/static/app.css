@@ -1687,7 +1687,7 @@ input[type=number]::-webkit-outer-spin-button { opacity: 1; }
 .app-sidebar {
   width: 240px;
   flex-shrink: 0;
-  min-height: calc(100vh - 3.5rem);
+  min-height: calc(100vh - 4rem);
   border-right: 1px solid rgba(255,255,255,0.06);
   background: rgba(15, 23, 42, 0.4);
   display: none;
@@ -1695,7 +1695,7 @@ input[type=number]::-webkit-outer-spin-button { opacity: 1; }
 }
 [data-layout="sidebar"] .app-sidebar { display: block; }
 
-.app-sidebar-nav { padding: 1.25rem 0.75rem; position: sticky; top: 3.5rem; }
+.app-sidebar-nav { padding: 1.25rem 0.75rem; position: sticky; top: 4rem; }
 .app-sidebar-group-label {
   font-size: 0.68rem;
   font-weight: 600;
@@ -1729,7 +1729,7 @@ input[type=number]::-webkit-outer-spin-button { opacity: 1; }
 @media (max-width: 900px) {
   [data-layout="sidebar"] .app-sidebar {
     position: fixed;
-    top: 3.5rem;
+    top: 4rem;
     left: 0;
     bottom: 0;
     z-index: 40;
