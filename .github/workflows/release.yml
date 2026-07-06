@@ -31,7 +31,7 @@ jobs:
         with:
           name: mac-arm64
           path: Customer Copy Apple Silicon/
-          retention-days: 5
+          retention-days: 1
 
   build-mac-intel:
     name: Build Intel Mac
@@ -58,7 +58,7 @@ jobs:
         with:
           name: mac-intel
           path: Customer Copy Intel Mac/
-          retention-days: 5
+          retention-days: 1
 
   build-mac-universal:
     name: Build Universal Mac
@@ -88,7 +88,7 @@ jobs:
         with:
           name: mac-universal
           path: Customer Copy Universal Mac/
-          retention-days: 5
+          retention-days: 1
 
   build-windows:
     name: Build Windows
@@ -106,7 +106,7 @@ jobs:
         with:
           name: windows
           path: Customer Windows Copy/
-          retention-days: 5
+          retention-days: 1
 
   publish:
     name: Publish release + version.json
