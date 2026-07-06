@@ -721,6 +721,10 @@ def _delete_cash_book_raw(conn, user_id, entry_id):
             (entry_id,),
         )
         conn.execute(
+            "UPDATE fixed_expenses SET cash_book_entry_id = NULL WHERE cash_book_entry_id = ?",
+            (entry_id,),
+        )
+        conn.execute(
             "UPDATE account_entries SET linked_cash_book_entry_id = NULL WHERE linked_cash_book_entry_id = ?",
             (entry_id,),
         )
@@ -2342,7 +2346,14 @@ def update_phone(conn, user_id, phone_id, data):
             merged = {**dict(refreshed), **data}
             _reverse_phone_sale_ledger(conn, user_id, phone_id)
             _post_sale_ledger(conn, user_id, phone_id, merged)
-    elif existing["status"] in INVENTORY_STATUSES and new_status in INVENTORY_STATUSES:
+
+    # Purchase-side ledger is independent of the sale-status transition above
+    # (a phone keeps its purchase entry whether it's Bought, In Repair, or
+    # already Sold) — reconcile it on its own whenever a purchase field
+    # changes, instead of only when status stays within INVENTORY_STATUSES.
+    # "Returned to Supplier" phones are settled by process_purchase_return,
+    # not this generic edit path, so leave those alone.
+    if "Returned to Supplier" not in (existing["status"], new_status):
         if any(_field_changed(existing[f], data.get(f, existing[f]), f) for f in PURCHASE_LEDGER_FIELDS if f in data):
             refreshed = conn.execute(
                 "SELECT * FROM phones WHERE id = ? AND user_id = ?",
