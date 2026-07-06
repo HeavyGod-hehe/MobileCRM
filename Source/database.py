@@ -732,6 +732,14 @@ def _delete_cash_book_raw(conn, user_id, entry_id):
 
 def _delete_bank_tx_raw(conn, tx_id):
     if tx_id:
+        conn.execute(
+            "UPDATE cash_book_entries SET linked_bank_transaction_id = NULL WHERE linked_bank_transaction_id = ?",
+            (tx_id,),
+        )
+        conn.execute(
+            "UPDATE ledger_links SET bank_transaction_id = NULL WHERE bank_transaction_id = ?",
+            (tx_id,),
+        )
         conn.execute("DELETE FROM bank_transactions WHERE id = ?", (tx_id,))
 
 

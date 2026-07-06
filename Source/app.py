@@ -856,7 +856,13 @@ def delete_phone(phone_id):
         existing = db.get_phone(conn, user_id, phone_id)
         if not existing:
             return jsonify({"error": "Phone not found"}), 404
-        db.delete_phone(conn, user_id, phone_id)
+        try:
+            db.delete_phone(conn, user_id, phone_id)
+        except sqlite3.IntegrityError:
+            return jsonify({
+                "error": "Can't delete this phone — it still has linked cash "
+                         "or account entries. Remove those first, then try again.",
+            }), 409
         return jsonify({"ok": True})
 
 
@@ -1566,11 +1572,20 @@ def handle_database_error(exc):
     message instead of a blank 500, and stop retrying against the broken file.
     A transient sqlite3.OperationalError (e.g. "database is locked" from a
     momentary collision with another writer) is NOT corruption — don't cache
-    it as permanent, just ask the browser to retry."""
+    it as permanent, just ask the browser to retry. Likewise a
+    sqlite3.IntegrityError (e.g. "FOREIGN KEY constraint failed" from a
+    blocked delete) means one write was rejected and rolled back — the file
+    itself is untouched, so it must not poison every later request the way
+    real corruption does."""
     if isinstance(exc, sqlite3.OperationalError):
         if request.path.startswith("/api/"):
             return jsonify({"error": "Database busy, please retry"}), 503
         return "Database busy, please retry…", 503
+    if isinstance(exc, sqlite3.IntegrityError):
+        message = f"Couldn't complete that action: {exc}"
+        if request.path.startswith("/api/"):
+            return jsonify({"error": message}), 409
+        return message, 409
     global _DB_ERROR
     _DB_ERROR = str(exc)
     if request.path.startswith("/api/"):
