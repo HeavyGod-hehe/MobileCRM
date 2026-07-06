@@ -3017,22 +3017,30 @@ def _mirror_bank_tx_to_cash_book(
     conn, user_id, bank_id, bank_tx_id, tx_type, amount, note, *,
     entry_date=None, source_type=None, source_id=None,
 ):
-    """Record a bank movement in the daily cash book without creating a duplicate bank row."""
-    entry_type = "in" if tx_type == "credit" else "out"
+    """Record a manual bank Deposit/Withdrawal as the real cash movement it is:
+    a Deposit moves cash out of the drawer into the bank (cash 'out'), a
+    Withdrawal moves cash from the bank into the drawer (cash 'in'). Tagged
+    payment_source='cash' (not 'bank') so it actually lands in Cash in Hand —
+    previously this was recorded as another bank-side row, so Cash in Hand
+    never moved and a Withdrawal looked like it did nothing."""
+    entry_type = "out" if tx_type == "credit" else "in"
+    bank = get_bank(conn, user_id, bank_id)
+    bank_name = bank["name"] if bank else "bank"
+    label = f"Deposit to {bank_name}" if tx_type == "credit" else f"Withdrawal from {bank_name}"
+    full_note = f"{label}: {note}" if note else label
     cursor = conn.execute(
         """
         INSERT INTO cash_book_entries (
             entry_type, amount, note, entry_date, user_id,
             payment_source, bank_account_id, linked_bank_transaction_id
-        ) VALUES (?, ?, ?, ?, ?, 'bank', ?, ?)
+        ) VALUES (?, ?, ?, ?, ?, 'cash', NULL, ?)
         """,
         (
             entry_type,
             float(amount),
-            note,
+            full_note,
             entry_date or _local_date(conn),
             user_id,
-            bank_id,
             bank_tx_id,
         ),
     )
@@ -3111,7 +3119,8 @@ def update_bank_transaction(conn, tx_id, data, user_id=None):
             if "note" in data:
                 cb_update["note"] = data["note"]
             if "transaction_type" in data:
-                cb_update["entry_type"] = "in" if data["transaction_type"] == "credit" else "out"
+                # Cash moves opposite to the bank side — see _mirror_bank_tx_to_cash_book.
+                cb_update["entry_type"] = "out" if data["transaction_type"] == "credit" else "in"
             update_cash_book_entry(conn, user_id, cb["id"], cb_update, _sync_linked=False)
     return dict(row) if row else None
 

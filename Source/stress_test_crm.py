@@ -471,18 +471,23 @@ def main():
                 "initial_balance": 0,
             })
             assert bank["balance"] == 0
+            # A manual bank Deposit (credit) is real cash leaving the drawer
+            # into the bank, so it must move Cash in Hand down by the same
+            # amount — not just log a bank-side row.
             db.create_bank_transaction(
                 conn, bank["id"],
                 {"transaction_type": "credit", "amount": 5000, "note": "Test deposit"},
                 user_id=user_id,
                 mirror_cash_book=True,
             )
+            balance_after_deposit = db.cash_in_hand_balance(conn, user_id)
+            assert balance_after_deposit == balance_after - 5000
             daily = db.cash_book_daily_summary(conn, user_id)
             assert daily[0]["opening_balance"] is not None
             # Explicit zero balance must display as numeric zero, not null
             db.create_cash_book_entry(conn, user_id, {
                 "entry_type": "out",
-                "amount": balance_after,
+                "amount": balance_after_deposit,
                 "note": "Drain to exact zero",
                 "payment_source": "cash",
             })
