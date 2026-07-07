@@ -60,36 +60,6 @@ jobs:
           path: Customer Copy Intel Mac/
           retention-days: 1
 
-  build-mac-universal:
-    name: Build Universal Mac
-    needs: [build-mac-arm64, build-mac-intel]
-    runs-on: macos-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/download-artifact@v4
-        with:
-          name: mac-arm64
-          path: artifacts/mac-arm64
-      - uses: actions/download-artifact@v4
-        with:
-          name: mac-intel
-          path: artifacts/mac-intel
-      - uses: actions/setup-python@v5
-        with:
-          python-version: '3.12'
-      - name: Merge arm64 + Intel builds into a universal app
-        run: |
-          chmod +x "artifacts/mac-arm64/Phone Reseller CRM.app/Contents/MacOS/PhoneResellerCRM"
-          chmod +x "artifacts/mac-intel/Phone Reseller CRM.app/Contents/MacOS/PhoneResellerCRM"
-          python Source/build_customer_mac.py --arch universal \
-            --arm64-app "artifacts/mac-arm64/Phone Reseller CRM.app" \
-            --x86-64-app "artifacts/mac-intel/Phone Reseller CRM.app"
-      - uses: actions/upload-artifact@v4
-        with:
-          name: mac-universal
-          path: Customer Copy Universal Mac/
-          retention-days: 1
-
   build-windows:
     name: Build Windows
     runs-on: windows-latest
@@ -110,7 +80,7 @@ jobs:
 
   publish:
     name: Publish release + version.json
-    needs: [build-mac-arm64, build-mac-intel, build-mac-universal, build-windows]
+    needs: [build-mac-arm64, build-mac-intel, build-windows]
     runs-on: ubuntu-latest
     env:
       RELEASES_REPO: HeavyGod-hehe/MobileCRM-releases
@@ -143,7 +113,7 @@ jobs:
         # +x. Restore it explicitly, right before these get zipped for
         # customers, so it can't silently regress again upstream.
         run: |
-          for dir in artifacts/mac-intel artifacts/mac-arm64 artifacts/mac-universal; do
+          for dir in artifacts/mac-intel artifacts/mac-arm64; do
             app="$dir/Phone Reseller CRM.app"
             if [ -d "$app" ]; then
               find "$app" -type f \( -name "PhoneResellerCRM" -o -name "FolderPicker" \) -exec chmod +x {} \;
@@ -171,8 +141,6 @@ jobs:
           zip -ry "../../dist/PhoneResellerCRM-IntelMac-${VERSION}.zip" .
           cd ../mac-arm64
           zip -ry "../../dist/PhoneResellerCRM-AppleSilicon-${VERSION}.zip" .
-          cd ../mac-universal
-          zip -ry "../../dist/PhoneResellerCRM-UniversalMac-${VERSION}.zip" .
           cd ../windows
           zip -ry "../../dist/PhoneResellerCRM-Windows-${VERSION}.zip" .
           ls -la ../../dist/

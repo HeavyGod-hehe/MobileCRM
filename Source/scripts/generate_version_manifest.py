@@ -24,7 +24,6 @@ def build_manifest(version: str, repo: str, tag: str, notes: str = "") -> dict:
             "windows": {"url": f"{base}/PhoneResellerCRM-Windows-{version}.zip"},
             "mac_intel": {"url": f"{base}/PhoneResellerCRM-IntelMac-{version}.zip"},
             "mac_arm64": {"url": f"{base}/PhoneResellerCRM-AppleSilicon-{version}.zip"},
-            "mac_universal": {"url": f"{base}/PhoneResellerCRM-UniversalMac-{version}.zip"},
         },
     }
 
