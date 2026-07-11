@@ -2251,7 +2251,14 @@ def create_phones_bulk(conn, user_id, data):
 
 
 def update_phone(conn, user_id, phone_id, data):
-    if not conn.in_transaction and ("imei" in data or "imei2" in data):
+    if not conn.in_transaction:
+        # Grab the write lock before reading the phone's current status, not just
+        # for IMEI changes — two near-simultaneous status-changing edits (e.g. two
+        # "mark Sold" clicks) both read the pre-edit status and decide what to post
+        # in Python before writing, so without an early lock both can pass the
+        # decision and each post a full ledger entry (double revenue / double
+        # refund). Taking the lock first forces the second call to wait and
+        # re-read the already-committed state.
         conn.execute("BEGIN IMMEDIATE")
     existing = conn.execute(
         "SELECT * FROM phones WHERE id = ? AND user_id = ?",
@@ -2643,6 +2650,12 @@ def list_return_logs(conn, user_id, return_type=None):
 
 
 def process_purchase_return(conn, user_id, data):
+    if not conn.in_transaction:
+        # Same read-then-write race as update_phone: this checks the phone's
+        # status before flipping it and posting a refund, so two near-simultaneous
+        # returns of the same phone could otherwise both pass the check and both
+        # refund. Lock first so the second call waits and re-reads the real state.
+        conn.execute("BEGIN IMMEDIATE")
     phone_id = data.get("phone_id")
     imei = (data.get("imei") or "").strip()
     note = (data.get("note") or "").strip()
@@ -2736,6 +2749,13 @@ def process_purchase_return(conn, user_id, data):
 
 
 def process_sale_return(conn, user_id, data):
+    if not conn.in_transaction:
+        # Same read-then-write race as update_phone: this checks phone["status"]
+        # == "Sold" before flipping it back and posting a refund, so two
+        # near-simultaneous returns of the same sale could otherwise both pass
+        # the check and both refund the customer. Lock first so the second call
+        # waits and re-reads the real (already-reversed) state.
+        conn.execute("BEGIN IMMEDIATE")
     phone_id = data.get("phone_id")
     imei = (data.get("imei") or "").strip()
     note = (data.get("note") or "").strip()

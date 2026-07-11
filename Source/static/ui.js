@@ -3,20 +3,24 @@
 const THEME_KEY = 'crm-theme';
 
 const UI_DESIGNS = [
-  { id: 'default-dark', name: 'Glass Dark', desc: 'Frosted glass morphism (original)', colors: ['#030712', '#10b981', '#0f172a'] },
-  { id: 'light', name: 'Clean Minimal', desc: 'Flat light professional', colors: ['#f1f5f9', '#059669', '#ffffff'] },
-  { id: 'cyberpunk', name: 'Cyber Neon', desc: 'Neon grid futuristic', colors: ['#0a0014', '#ff0080', '#00ffff'] },
-  { id: 'emerald', name: 'Finance Classic', desc: 'Emerald banking style', colors: ['#022c22', '#34d399', '#064e3b'] },
-  { id: 'midnight-pro', name: 'Midnight Pro', desc: 'Dense corporate dashboard', colors: ['#0c1222', '#3b82f6', '#1e293b'] },
-  { id: 'sunset-warm', name: 'Sunset Warm', desc: 'Cozy gradient cards', colors: ['#1a0a0a', '#f97316', '#7c2d12'] },
-  { id: 'terminal', name: 'Terminal Hacker', desc: 'Monospace command line', colors: ['#0a0f0a', '#22c55e', '#14532d'] },
-  { id: 'luxury', name: 'Luxury Gold', desc: 'Dark elegant gold accents', colors: ['#0d0d0d', '#d4af37', '#1a1a1a'] },
-  { id: 'neumorph', name: 'Soft Neumorph', desc: 'Soft shadows & pills', colors: ['#e0e5ec', '#6366f1', '#f0f3f8'] },
-  { id: 'brutalist', name: 'Brutalist Bold', desc: 'Hard edges bold type', colors: ['#fafafa', '#000000', '#ffff00'] },
-  { id: 'academy-light', name: 'Academy Light', desc: 'Sidebar + pastel KPI cards', colors: ['#f8fafc', '#059669', '#ecfdf5'], layout: 'sidebar' },
-  { id: 'saas-dark-pro', name: 'SaaS Dark Pro', desc: 'Sidebar + dense stats, neon accents', colors: ['#080b14', '#22d3ee', '#0ea5e9'], layout: 'sidebar' },
-  { id: 'minimal-admin', name: 'Minimal Admin', desc: 'Sidebar + icon-circle cards, light/dark toggle', colors: ['#fafafa', '#18181b', '#ffffff'], layout: 'sidebar', hasModeToggle: true },
+  { id: 'default-dark', name: 'Glass Dark', desc: 'Frosted glass morphism (original)', colors: ['#030712', '#10b981', '#0f172a'], category: 'colorscheme' },
+  { id: 'light', name: 'Clean Minimal', desc: 'Flat light professional', colors: ['#f1f5f9', '#059669', '#ffffff'], category: 'colorscheme' },
+  { id: 'cyberpunk', name: 'Cyber Neon', desc: 'Neon grid futuristic', colors: ['#0a0014', '#ff0080', '#00ffff'], category: 'colorscheme' },
+  { id: 'emerald', name: 'Finance Classic', desc: 'Emerald banking style', colors: ['#022c22', '#34d399', '#064e3b'], category: 'colorscheme' },
+  { id: 'midnight-pro', name: 'Midnight Pro', desc: 'Dense corporate dashboard', colors: ['#0c1222', '#3b82f6', '#1e293b'], category: 'colorscheme' },
+  { id: 'sunset-warm', name: 'Sunset Warm', desc: 'Cozy gradient cards', colors: ['#1a0a0a', '#f97316', '#7c2d12'], category: 'colorscheme' },
+  { id: 'terminal', name: 'Terminal Hacker', desc: 'Monospace command line', colors: ['#0a0f0a', '#22c55e', '#14532d'], category: 'colorscheme' },
+  { id: 'luxury', name: 'Luxury Gold', desc: 'Dark elegant gold accents', colors: ['#0d0d0d', '#d4af37', '#1a1a1a'], category: 'colorscheme' },
+  { id: 'neumorph', name: 'Soft Neumorph', desc: 'Soft shadows & pills', colors: ['#e0e5ec', '#6366f1', '#f0f3f8'], category: 'colorscheme' },
+  { id: 'brutalist', name: 'Brutalist Bold', desc: 'Hard edges bold type', colors: ['#fafafa', '#000000', '#ffff00'], category: 'colorscheme' },
+  { id: 'academy-light', name: 'Academy Light', desc: 'Sidebar + pastel KPI cards', colors: ['#f8fafc', '#059669', '#ecfdf5'], layout: 'sidebar', category: 'colorscheme' },
+  { id: 'minimal-admin', name: 'Minimal Admin', desc: 'Sidebar + icon-circle cards, light/dark toggle', colors: ['#fafafa', '#18181b', '#ffffff'], layout: 'sidebar', hasModeToggle: true, category: 'colorscheme' },
+  { id: 'saas-dark-pro', name: 'SaaS Dark Pro', desc: 'Sidebar + dense stats, neon accents', colors: ['#080b14', '#22d3ee', '#0ea5e9'], layout: 'sidebar', category: 'layout' },
+  { id: 'saas-sidebar-pro', name: 'SaaS Sidebar Pro', desc: 'Dark sidebar, bright data-table workspace', colors: ['#040D14', '#00A3FF', '#FFFFFF'], layout: 'sidebar', category: 'layout' },
 ];
+
+const THEME_CATEGORY_LABELS = { colorscheme: 'Colorschemes', layout: 'Layout' };
+const THEME_CATEGORY_ORDER = ['colorscheme', 'layout'];
 
 /** All modals: [overlayId, wrapId] — used for Escape-to-close. */
 const MODAL_REGISTRY = [
@@ -148,7 +152,12 @@ function toggleThemeMode() {
 function renderThemeGrid(container, onPicked) {
   if (!container) return;
   const current = localStorage.getItem(THEME_KEY) || 'default-dark';
-  container.innerHTML = UI_DESIGNS.map(t => `
+  const groups = {};
+  UI_DESIGNS.forEach(t => {
+    const cat = t.category || 'colorscheme';
+    (groups[cat] = groups[cat] || []).push(t);
+  });
+  const themeButton = (t) => `
     <button type="button" class="theme-option${t.id === current ? ' active' : ''}" data-theme="${t.id}">
       <div class="theme-preview">
         <span style="background:${t.colors[0]}"></span>
@@ -159,7 +168,13 @@ function renderThemeGrid(container, onPicked) {
         <p class="theme-option-name">${t.name}</p>
         <p class="theme-option-desc">${t.desc}</p>
       </div>
-    </button>`).join('');
+    </button>`;
+  container.innerHTML = THEME_CATEGORY_ORDER
+    .filter(cat => groups[cat] && groups[cat].length)
+    .map(cat => `
+      <p class="theme-group-label">${THEME_CATEGORY_LABELS[cat] || cat}</p>
+      <div class="theme-group">${groups[cat].map(themeButton).join('')}</div>`)
+    .join('');
   container.querySelectorAll('.theme-option').forEach(btn => {
     btn.addEventListener('click', () => {
       applyTheme(btn.dataset.theme);

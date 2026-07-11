@@ -6,7 +6,11 @@ Run: CRM_DB_PATH=/tmp/crm_stress.db python3 stress_test_crm.py
 from __future__ import annotations
 
 import os
+import random
+import sqlite3
 import sys
+import tempfile
+import threading
 import time
 import traceback
 from dataclasses import dataclass, field
@@ -513,6 +517,788 @@ def main():
     run_test("Bulk sold udhar requires buyer account", test_bulk_sold_udhar_requires_buyer)
     run_test("Fixed expense posts to cash book", test_fixed_expense_cash_out)
     run_test("Zero cash balance + new account", test_zero_cash_balance_and_new_account)
+
+    # --- Gap coverage: mixed-activity ledger reconciliation ---
+    #
+    # All prior sync tests check one transaction type in isolation. Historically
+    # every serious ledger bug (return-cash corruption, bank deposit/withdrawal
+    # not moving Cash in Hand, stale ledger on phone edits) only showed up once
+    # multiple transaction types interleaved over time. This test generates 220+
+    # randomized mixed transactions (cash/bank sales, purchases, both return
+    # types, journal vouchers, fixed expenses, account credits/debits) against a
+    # dedicated user, and cross-checks Cash in Hand, total bank balance, and each
+    # account's balance against an independent Python-side running total that
+    # this test computes itself from the economic meaning of each transaction it
+    # issues (not by re-reading the app's own ledger rows) — so a bug that
+    # silently drops, duplicates, or mis-signs a ledger entry shows up as a
+    # numeric mismatch instead of being invisible to a same-formula recheck.
+    def test_mixed_ledger_reconciliation_stress():
+        with db.db_session() as conn:
+            ru = db.register_user(conn, "reconcile_stress", "recon12345", "", "Reconcile Stress Shop")
+            r_uid = ru["user_id"]
+            r_bank = db.create_bank(conn, r_uid, {"name": "Recon Bank", "initial_balance": 0})
+            r_bank_id = r_bank["id"]
+            r_supplier = db.create_account(conn, r_uid, {"name": "Recon Supplier"})
+            r_buyer = db.create_account(conn, r_uid, {"name": "Recon Buyer"})
+            r_util = db.create_account(conn, r_uid, {"name": "Recon Utilities", "contact": "expense category"})
+            r_supplier_id, r_buyer_id, r_util_id = r_supplier["id"], r_buyer["id"], r_util["id"]
+            cash_open = db.cash_in_hand_balance(conn, r_uid)
+            bank_open = db.total_bank_balance(conn, r_uid)
+
+        expected_cash = 0.0
+        expected_bank = 0.0
+        expected_acct = {r_supplier_id: 0.0, r_buyer_id: 0.0, r_util_id: 0.0}
+        open_cash_phones, open_bank_phones = [], []
+        open_cash_sales, open_bank_sales = [], []
+
+        rng = random.Random(20260707)
+        N = 220
+        counters = {"imei": 0}
+
+        def next_imei():
+            counters["imei"] += 1
+            return f"77770000{counters['imei']:07d}"
+
+        with db.db_session() as conn:
+            for i in range(N):
+                choices = [
+                    "cash_sale", "bank_sale", "cash_purchase", "bank_purchase",
+                    "fixed_expense_cash", "fixed_expense_bank",
+                    "expense_credit_cash", "expense_credit_bank", "expense_debit_cash",
+                    "person_credit_cash", "person_debit_cash", "journal_voucher",
+                ]
+                if open_cash_phones:
+                    choices.append("purchase_return_cash")
+                if open_bank_phones:
+                    choices.append("purchase_return_bank")
+                if open_cash_sales:
+                    choices.append("sale_return_cash")
+                if open_bank_sales:
+                    choices.append("sale_return_bank")
+                op = rng.choice(choices)
+
+                if op == "cash_sale":
+                    p_amt = rng.randint(50, 150) * 1000
+                    s_amt = p_amt + rng.randint(5, 30) * 1000
+                    p = db.create_phone(conn, r_uid, {
+                        "model": f"Recon CS {i}", "type": "PTA", "purchase_price": p_amt,
+                        "status": "Sold", "sale_price": s_amt,
+                        "purchase_payment_method": "cash", "sale_payment_method": "cash",
+                        "imei": next_imei(),
+                    })
+                    expected_cash += (s_amt - p_amt)
+                    open_cash_sales.append((p["id"], s_amt, p_amt))
+                elif op == "bank_sale":
+                    p_amt = rng.randint(50, 150) * 1000
+                    s_amt = p_amt + rng.randint(5, 30) * 1000
+                    p = db.create_phone(conn, r_uid, {
+                        "model": f"Recon BS {i}", "type": "PTA", "purchase_price": p_amt,
+                        "status": "Sold", "sale_price": s_amt,
+                        "purchase_payment_method": "bank", "purchase_bank_id": r_bank_id,
+                        "sale_payment_method": "bank", "sale_bank_id": r_bank_id,
+                        "imei": next_imei(),
+                    })
+                    expected_bank += (s_amt - p_amt)
+                    open_bank_sales.append((p["id"], s_amt, p_amt))
+                elif op == "cash_purchase":
+                    p_amt = rng.randint(40, 120) * 1000
+                    p = db.create_phone(conn, r_uid, {
+                        "model": f"Recon CP {i}", "type": "PTA", "purchase_price": p_amt,
+                        "status": "Bought", "purchase_payment_method": "cash",
+                        "imei": next_imei(),
+                    })
+                    expected_cash -= p_amt
+                    open_cash_phones.append((p["id"], p_amt))
+                elif op == "bank_purchase":
+                    p_amt = rng.randint(40, 120) * 1000
+                    p = db.create_phone(conn, r_uid, {
+                        "model": f"Recon BP {i}", "type": "PTA", "purchase_price": p_amt,
+                        "status": "Bought", "purchase_payment_method": "bank",
+                        "purchase_bank_id": r_bank_id, "imei": next_imei(),
+                    })
+                    expected_bank -= p_amt
+                    open_bank_phones.append((p["id"], p_amt))
+                elif op == "purchase_return_cash":
+                    pid, p_amt = open_cash_phones.pop(rng.randrange(len(open_cash_phones)))
+                    db.process_purchase_return(conn, r_uid, {
+                        "phone_id": pid, "refund_amount": p_amt, "payment_source": "cash",
+                    })
+                    expected_cash += p_amt
+                elif op == "purchase_return_bank":
+                    pid, p_amt = open_bank_phones.pop(rng.randrange(len(open_bank_phones)))
+                    db.process_purchase_return(conn, r_uid, {
+                        "phone_id": pid, "refund_amount": p_amt, "payment_source": "bank",
+                        "bank_account_id": r_bank_id,
+                    })
+                    expected_bank += p_amt
+                elif op == "sale_return_cash":
+                    pid, s_amt, p_amt = open_cash_sales.pop(rng.randrange(len(open_cash_sales)))
+                    db.process_sale_return(conn, r_uid, {
+                        "phone_id": pid, "refund_amount": s_amt, "payment_source": "cash",
+                    })
+                    expected_cash -= s_amt
+                    open_cash_phones.append((pid, p_amt))  # back in stock -> returnable to supplier too
+                elif op == "sale_return_bank":
+                    pid, s_amt, p_amt = open_bank_sales.pop(rng.randrange(len(open_bank_sales)))
+                    db.process_sale_return(conn, r_uid, {
+                        "phone_id": pid, "refund_amount": s_amt, "payment_source": "bank",
+                        "bank_account_id": r_bank_id,
+                    })
+                    expected_bank -= s_amt
+                    open_bank_phones.append((pid, p_amt))
+                elif op == "fixed_expense_cash":
+                    amt = rng.randint(1, 20) * 1000
+                    db.create_fixed_expense(conn, r_uid, {
+                        "purpose": f"Recon fixed {i}", "amount": amt, "payment_source": "cash",
+                    })
+                    expected_cash -= amt
+                elif op == "fixed_expense_bank":
+                    amt = rng.randint(1, 20) * 1000
+                    db.create_fixed_expense(conn, r_uid, {
+                        "purpose": f"Recon fixed {i}", "amount": amt,
+                        "payment_source": "bank", "bank_account_id": r_bank_id,
+                    })
+                    expected_bank -= amt
+                elif op == "expense_credit_cash":
+                    amt = rng.randint(1, 10) * 500
+                    db.create_entry(conn, r_util_id, {
+                        "entry_type": "credit", "amount": amt, "note": "Recon util",
+                        "payment_source": "cash",
+                    }, user_id=r_uid)
+                    expected_cash -= amt
+                    expected_acct[r_util_id] += amt
+                elif op == "expense_credit_bank":
+                    amt = rng.randint(1, 10) * 500
+                    db.create_entry(conn, r_util_id, {
+                        "entry_type": "credit", "amount": amt, "note": "Recon util",
+                        "payment_source": "bank", "bank_account_id": r_bank_id,
+                    }, user_id=r_uid)
+                    expected_bank -= amt
+                    expected_acct[r_util_id] += amt
+                elif op == "expense_debit_cash":
+                    amt = rng.randint(1, 10) * 500
+                    db.create_entry(conn, r_util_id, {
+                        "entry_type": "debit", "amount": amt, "note": "Recon util refund",
+                        "payment_source": "cash",
+                    }, user_id=r_uid)
+                    expected_cash += amt
+                    expected_acct[r_util_id] -= amt
+                elif op == "person_credit_cash":
+                    acct_id = rng.choice([r_supplier_id, r_buyer_id])
+                    amt = rng.randint(1, 20) * 1000
+                    db.create_entry(conn, acct_id, {
+                        "entry_type": "credit", "amount": amt, "note": "Recon person credit",
+                        "payment_source": "cash",
+                    }, user_id=r_uid)
+                    expected_cash -= amt
+                    expected_acct[acct_id] += amt
+                elif op == "person_debit_cash":
+                    acct_id = rng.choice([r_supplier_id, r_buyer_id])
+                    amt = rng.randint(1, 20) * 1000
+                    db.create_entry(conn, acct_id, {
+                        "entry_type": "debit", "amount": amt, "note": "Recon person debit",
+                        "payment_source": "cash",
+                    }, user_id=r_uid)
+                    expected_cash += amt
+                    expected_acct[acct_id] -= amt
+                elif op == "journal_voucher":
+                    amt = rng.randint(1, 20) * 1000
+                    debit_id, credit_id = rng.sample([r_supplier_id, r_buyer_id], 2)
+                    db.create_journal_voucher(conn, r_uid, {
+                        "debit_account_id": debit_id, "credit_account_id": credit_id,
+                        "amount": amt, "narration": f"Recon JV {i}",
+                    })
+                    expected_acct[debit_id] -= amt
+                    expected_acct[credit_id] += amt
+
+            actual_cash = round(db.cash_in_hand_balance(conn, r_uid) - cash_open, 2)
+            actual_bank = round(db.total_bank_balance(conn, r_uid) - bank_open, 2)
+            assert abs(actual_cash - round(expected_cash, 2)) < 0.01, (
+                f"Cash in Hand drift after {N} mixed transactions: "
+                f"expected delta {expected_cash:.2f}, actual delta {actual_cash:.2f}"
+            )
+            assert abs(actual_bank - round(expected_bank, 2)) < 0.01, (
+                f"Bank balance drift after {N} mixed transactions: "
+                f"expected delta {expected_bank:.2f}, actual delta {actual_bank:.2f}"
+            )
+            for acct_id, exp in expected_acct.items():
+                actual = db.get_account(conn, r_uid, acct_id)["balance"]
+                assert abs(actual - round(exp, 2)) < 0.01, (
+                    f"Account #{acct_id} balance drift: expected {exp:.2f}, actual {actual:.2f}"
+                )
+            assert orphan_ledger_links(conn, r_uid) == 0
+            assert orphan_account_links(conn, r_uid) == 0
+
+    run_test("Mixed-activity ledger reconciliation (220 randomized transactions)",
+              test_mixed_ledger_reconciliation_stress)
+
+    # --- Gap coverage: concurrency / race conditions ---
+    with db.db_session() as conn:
+        cu = db.register_user(conn, "concur_stress", "concur12345", "", "Concurrency Shop")
+        c_uid = cu["user_id"]
+
+    # update_phone() only takes SQLite's write lock early (BEGIN IMMEDIATE) when
+    # an IMEI is being changed (see the duplicate-IMEI race comment in
+    # create_phone/update_phone). A plain status change to "Sold" reads the
+    # phone's current status, decides in Python whether to post a sale ledger,
+    # and only then writes -- so two near-simultaneous sell requests can both
+    # read "Bought" before either commits. A deterministic delay is injected
+    # into the ledger-posting step (already-uncommitted at that point) so both
+    # threads reliably interleave instead of relying on a lucky race window.
+    def test_concurrent_double_sell():
+        with db.db_session() as conn:
+            p = db.create_phone(conn, c_uid, {
+                "model": "Race Sell Phone", "type": "PTA", "purchase_price": 50000,
+                "status": "Bought", "purchase_payment_method": "cash",
+                "imei": "888800000001111",
+            })
+            phone_id = p["id"]
+
+        barrier = threading.Barrier(2)
+        original = db._post_sale_ledger
+
+        def slow_post_sale_ledger(*args, **kwargs):
+            result = original(*args, **kwargs)
+            time.sleep(0.4)
+            return result
+
+        db._post_sale_ledger = slow_post_sale_ledger
+        errors = []
+
+        def worker(sale_price):
+            try:
+                barrier.wait(timeout=5)
+                with db.db_session() as conn2:
+                    db.update_phone(conn2, c_uid, phone_id, {
+                        "status": "Sold", "sale_price": sale_price, "sale_payment_method": "cash",
+                    })
+            except Exception as e:  # noqa: BLE001
+                errors.append(str(e))
+
+        t1 = threading.Thread(target=worker, args=(80000,))
+        t2 = threading.Thread(target=worker, args=(90000,))
+        t1.start(); t2.start()
+        t1.join(timeout=10); t2.join(timeout=10)
+        db._post_sale_ledger = original
+
+        with db.db_session() as conn:
+            links = conn.execute(
+                "SELECT COUNT(*) c FROM ledger_links WHERE user_id=? AND source_type='phone_sale' AND source_id=?",
+                (c_uid, phone_id),
+            ).fetchone()["c"]
+        assert links == 1, (
+            f"Expected exactly 1 sale-ledger link after two concurrent sell requests for the "
+            f"same phone (one should reject/no-op), found {links} — double-processing created "
+            f"duplicate cash-book/account entries. Thread errors seen: {errors or 'none'}"
+        )
+
+    run_test("Concurrent double-sell on the same phone is rejected, not double-posted",
+              test_concurrent_double_sell)
+
+    # process_sale_return() has the same read-then-write shape as update_phone:
+    # it checks phone["status"] == "Sold" before flipping it back to "Bought" and
+    # posting a refund, with no write-lock taken before that check.
+    def test_concurrent_double_sale_return():
+        with db.db_session() as conn:
+            p = db.create_phone(conn, c_uid, {
+                "model": "Race Return Phone", "type": "PTA", "purchase_price": 40000,
+                "status": "Sold", "sale_price": 55000,
+                "purchase_payment_method": "cash", "sale_payment_method": "cash",
+                "imei": "888800000002222",
+            })
+            phone_id2 = p["id"]
+
+        barrier = threading.Barrier(2)
+        original = db._create_cash_book_synced
+
+        def slow_ccbs(*args, **kwargs):
+            result = original(*args, **kwargs)
+            time.sleep(0.4)
+            return result
+
+        db._create_cash_book_synced = slow_ccbs
+        errors = []
+
+        def worker():
+            try:
+                barrier.wait(timeout=5)
+                with db.db_session() as conn2:
+                    db.process_sale_return(conn2, c_uid, {
+                        "phone_id": phone_id2, "refund_amount": 55000, "payment_source": "cash",
+                    })
+            except Exception as e:  # noqa: BLE001
+                errors.append(str(e))
+
+        t1 = threading.Thread(target=worker)
+        t2 = threading.Thread(target=worker)
+        t1.start(); t2.start()
+        t1.join(timeout=10); t2.join(timeout=10)
+        db._create_cash_book_synced = original
+
+        with db.db_session() as conn:
+            logs = conn.execute(
+                "SELECT COUNT(*) c FROM return_logs WHERE user_id=? AND phone_id=? AND return_type='sale'",
+                (c_uid, phone_id2),
+            ).fetchone()["c"]
+        assert logs == 1, (
+            f"Expected exactly 1 sale-return log for two concurrent returns of the same sale "
+            f"(one should reject), found {logs} — customer would be refunded twice. "
+            f"Thread errors seen: {errors or 'none'}"
+        )
+
+    run_test("Concurrent double-return on the same sale is rejected, not double-refunded",
+              test_concurrent_double_sale_return)
+
+    # process_purchase_return() has the identical read-then-write shape: it
+    # checks phone["status"] is Bought/In Repair before flipping it to
+    # "Returned to Supplier" and posting a refund. A lock guard was added
+    # preemptively in a prior session (same one-line pattern as the two fixes
+    # above) but was never actually proven with a failing-before-fix test —
+    # this test exists specifically to prove it, not assume it by pattern match.
+    def test_concurrent_double_purchase_return():
+        with db.db_session() as conn:
+            p = db.create_phone(conn, c_uid, {
+                "model": "Race Purchase Return Phone", "type": "PTA", "purchase_price": 35000,
+                "status": "Bought", "purchase_payment_method": "cash",
+                "imei": "888800000004444",
+            })
+            phone_id4 = p["id"]
+
+        barrier = threading.Barrier(2)
+        original = db._create_cash_book_synced
+
+        def slow_ccbs(*args, **kwargs):
+            result = original(*args, **kwargs)
+            time.sleep(0.4)
+            return result
+
+        db._create_cash_book_synced = slow_ccbs
+        errors = []
+
+        def worker():
+            try:
+                barrier.wait(timeout=5)
+                with db.db_session() as conn2:
+                    db.process_purchase_return(conn2, c_uid, {
+                        "phone_id": phone_id4, "refund_amount": 35000, "payment_source": "cash",
+                    })
+            except Exception as e:  # noqa: BLE001
+                errors.append(str(e))
+
+        t1 = threading.Thread(target=worker)
+        t2 = threading.Thread(target=worker)
+        t1.start(); t2.start()
+        t1.join(timeout=10); t2.join(timeout=10)
+        db._create_cash_book_synced = original
+
+        with db.db_session() as conn:
+            logs = conn.execute(
+                "SELECT COUNT(*) c FROM return_logs WHERE user_id=? AND phone_id=? AND return_type='purchase'",
+                (c_uid, phone_id4),
+            ).fetchone()["c"]
+        assert logs == 1, (
+            f"Expected exactly 1 purchase-return log for two concurrent returns of the same "
+            f"purchase (one should reject), found {logs} — supplier refund posted twice. "
+            f"Thread errors seen: {errors or 'none'}"
+        )
+
+    run_test("Concurrent double-return on the same purchase is rejected, not double-refunded",
+              test_concurrent_double_purchase_return)
+
+    # --- Full-audit confirmation tests (functions read as safe, verified empirically) ---
+    #
+    # update_phone_expense() reads the existing expense row before writing, but
+    # only to fill in default field values -- not to decide WHETHER to touch the
+    # ledger (it unconditionally reverses-then-reposts every call via a live
+    # ledger_links lookup, not a stale snapshot). Two concurrent edits of the
+    # same expense are expected to both apply in some serialized order
+    # (last-write-wins), not reject one -- this confirms that ends up
+    # consistent (exactly one live ledger entry, matching one of the two
+    # edits) rather than leaving duplicate or orphaned cash-book rows.
+    def test_concurrent_double_edit_phone_expense():
+        with db.db_session() as conn:
+            p = db.create_phone(conn, c_uid, {
+                "model": "Race Expense Phone", "type": "PTA", "purchase_price": 30000,
+                "status": "Bought", "purchase_payment_method": "cash",
+                "imei": "888800000005555",
+            })
+            phone_id5 = p["id"]
+            exp = db.add_phone_expense(conn, c_uid, phone_id5, {
+                "amount": 1000, "description": "Initial", "payment_source": "cash",
+            })
+            expense_id = exp["id"]
+
+        barrier = threading.Barrier(2)
+        errors = []
+
+        def worker(amount):
+            try:
+                barrier.wait(timeout=5)
+                with db.db_session() as conn2:
+                    db.update_phone_expense(conn2, c_uid, phone_id5, expense_id, {
+                        "amount": amount, "description": f"Edit {amount}", "payment_source": "cash",
+                    })
+            except Exception as e:  # noqa: BLE001
+                errors.append(str(e))
+
+        t1 = threading.Thread(target=worker, args=(2000,))
+        t2 = threading.Thread(target=worker, args=(3000,))
+        t1.start(); t2.start()
+        t1.join(timeout=10); t2.join(timeout=10)
+
+        assert not errors, f"Unexpected errors from concurrent expense edits: {errors}"
+        with db.db_session() as conn:
+            links = conn.execute(
+                "SELECT COUNT(*) c FROM ledger_links WHERE user_id=? AND source_type='phone_expense' AND source_id=?",
+                (c_uid, expense_id),
+            ).fetchone()["c"]
+            cb_amount = conn.execute(
+                """
+                SELECT cb.amount FROM ledger_links ll
+                JOIN cash_book_entries cb ON cb.id = ll.cash_book_entry_id
+                WHERE ll.user_id=? AND ll.source_type='phone_expense' AND ll.source_id=?
+                """,
+                (c_uid, expense_id),
+            ).fetchone()
+        assert links == 1, (
+            f"Expected exactly 1 live ledger link after two concurrent expense edits, found {links} "
+            f"— duplicate or orphaned cash-book rows from a non-serialized edit."
+        )
+        assert cb_amount and cb_amount["amount"] in (2000.0, 3000.0), (
+            f"Cash-book entry amount {cb_amount} doesn't match either concurrent edit — data corrupted, "
+            f"not just last-write-wins."
+        )
+
+    run_test("Concurrent double-edit of the same phone expense stays consistent (last-write-wins, no duplicates)",
+              test_concurrent_double_edit_phone_expense)
+
+    # delete_phone() reverses the phone's ledger via a live ledger_links lookup
+    # (idempotent by construction: a second reversal finds nothing left to
+    # reverse) and then does a plain "DELETE ... WHERE id=?" (idempotent: 0 rows
+    # affected the second time, no error). Confirms two concurrent deletes of
+    # the same phone don't crash or double-reverse the ledger.
+    def test_concurrent_double_delete_phone():
+        with db.db_session() as conn:
+            cash_before_purchase = db.cash_in_hand_balance(conn, c_uid)
+            p = db.create_phone(conn, c_uid, {
+                "model": "Race Delete Phone", "type": "PTA", "purchase_price": 42000,
+                "status": "Bought", "purchase_payment_method": "cash",
+                "imei": "888800000006666",
+            })
+            phone_id6 = p["id"]
+
+        barrier = threading.Barrier(2)
+        errors = []
+
+        def worker():
+            try:
+                barrier.wait(timeout=5)
+                with db.db_session() as conn2:
+                    db.delete_phone(conn2, c_uid, phone_id6)
+            except Exception as e:  # noqa: BLE001
+                errors.append(str(e))
+
+        t1 = threading.Thread(target=worker)
+        t2 = threading.Thread(target=worker)
+        t1.start(); t2.start()
+        t1.join(timeout=10); t2.join(timeout=10)
+
+        assert not errors, f"Unexpected errors from concurrent phone deletes: {errors}"
+        with db.db_session() as conn:
+            gone = conn.execute("SELECT id FROM phones WHERE id=?", (phone_id6,)).fetchone()
+            cash_after = db.cash_in_hand_balance(conn, c_uid)
+            links = conn.execute(
+                "SELECT COUNT(*) c FROM ledger_links WHERE user_id=? AND source_type LIKE 'phone_%' AND source_id=?",
+                (c_uid, phone_id6),
+            ).fetchone()["c"]
+        assert gone is None, "Phone still exists after two concurrent deletes"
+        assert cash_after == cash_before_purchase, (
+            f"Cash in Hand should net back to its pre-purchase value ({cash_before_purchase}) after "
+            f"buying and then deleting the same phone once, but got {cash_after} — the purchase "
+            f"reversal ran more than once (double-refund from a double delete)."
+        )
+
+    run_test("Concurrent double-delete of the same phone is idempotent (no crash, no double-reversal)",
+              test_concurrent_double_delete_phone)
+
+    # No "edit invoice" endpoint exists in this codebase (invoices are printable,
+    # create-only records) -- the closest real concurrency risk is two
+    # near-simultaneous invoice creations racing on the shared auto-numbering
+    # counter. create_invoice() already takes BEGIN IMMEDIATE before computing
+    # the next number specifically to close this race (see its docstring), so
+    # this confirms that protection actually holds under real concurrent
+    # threads rather than only in single-threaded logic.
+    def test_concurrent_invoice_numbering():
+        with db.db_session() as conn:
+            p = db.create_phone(conn, c_uid, {
+                "model": "Race Invoice Phone", "type": "PTA", "purchase_price": 45000,
+                "status": "Sold", "sale_price": 60000,
+                "purchase_payment_method": "cash", "sale_payment_method": "cash",
+                "imei": "888800000003333",
+            })
+            phone_id3 = p["id"]
+
+        barrier = threading.Barrier(2)
+        errors = []
+        invoice_numbers = []
+        lock = threading.Lock()
+
+        def worker():
+            try:
+                barrier.wait(timeout=5)
+                with db.db_session() as conn2:
+                    inv = db.create_invoice(conn2, c_uid, {
+                        "customer_name": "Racer", "phone_id": phone_id3,
+                        "model": "Race Invoice Phone", "amount": 60000,
+                    })
+                with lock:
+                    invoice_numbers.append(inv["invoice_number"])
+            except Exception as e:  # noqa: BLE001
+                errors.append(str(e))
+
+        t1 = threading.Thread(target=worker)
+        t2 = threading.Thread(target=worker)
+        t1.start(); t2.start()
+        t1.join(timeout=10); t2.join(timeout=10)
+
+        assert not errors, f"Unexpected errors from concurrent invoice creation: {errors}"
+        assert len(invoice_numbers) == 2 and invoice_numbers[0] != invoice_numbers[1], (
+            f"Concurrent invoice creation produced colliding/missing invoice numbers: {invoice_numbers}"
+        )
+
+    run_test("Concurrent invoice creation gets distinct numbers (confirms existing lock holds)",
+              test_concurrent_invoice_numbering)
+
+    # --- Gap coverage: licensing lifecycle ---
+    #
+    # There is no license server and no deactivate/reissue endpoint in this
+    # product (see license_guard.py's own docstring: it's a purely client-side,
+    # hardware-ID-signed check). "Deactivate" is simulated here the only way a
+    # real user could trigger it -- deleting the local license.json -- since
+    # that's the entire mechanism that exists to revoke a local activation.
+    def test_license_lifecycle():
+        scratch_dir = Path(tempfile.mkdtemp(prefix="crm_license_test_"))
+        os.environ["CRM_LICENSE_PATH"] = str(scratch_dir / "license.json")
+        import license_guard as lic
+
+        hw_a = "AAAA1111BBBB2222"
+        hw_b = "CCCC3333DDDD4444"
+        key_a = lic._sign_hardware_id(hw_a)
+
+        assert lic.verify_activation_key(hw_a, key_a) is True
+        assert lic.verify_activation_key(hw_b, key_a) is False, (
+            "A key issued/activated for one hardware ID verified successfully against a "
+            "different hardware ID — activation would work on any machine."
+        )
+
+        original_get_hw = lic.get_hardware_id
+        try:
+            lic.get_hardware_id = lambda: hw_a
+            lic.save_license(key_a)
+            assert lic.is_licensed() is True
+
+            # Same license.json "copied" to a second machine (different hardware ID)
+            lic.get_hardware_id = lambda: hw_b
+            assert lic.is_licensed() is False, (
+                "A license file activated on Machine A reported as licensed on Machine B."
+            )
+
+            # Deactivate (remove local license) on Machine A
+            lic.get_hardware_id = lambda: hw_a
+            lic.LICENSE_FILE.unlink()
+            assert lic.is_licensed() is False
+
+            # Reissue a fresh key for the same hardware ID and reactivate
+            key_a2 = lic._sign_hardware_id(hw_a)
+            lic.save_license(key_a2)
+            assert lic.is_licensed() is True
+        finally:
+            lic.get_hardware_id = original_get_hw
+
+    run_test("License activation is hardware-bound; reuse on another machine fails", test_license_lifecycle)
+
+    # Forgot-password OTP flow, exercised end to end through the real app logic
+    # (OTP generation/storage/expiry, email content, login with the new
+    # password). The SMTP transport itself is faked (smtplib.SMTP swapped for
+    # an in-memory stub) rather than hitting real Gmail — sending live email
+    # and holding real Gmail App Password credentials in an automated test
+    # suite isn't appropriate. This still exercises send_otp_email's own
+    # control flow (including its auth-failure -> clear-ValueError conversion).
+    def test_forgot_password_otp_flow():
+        import email_service
+        import smtplib
+
+        class _FakeSMTP:
+            sent = []
+
+            def __init__(self, host, port, timeout=None):
+                pass
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *exc):
+                return False
+
+            def starttls(self):
+                pass
+
+            def login(self, user, pwd):
+                if pwd != "validapppassword":
+                    raise smtplib.SMTPAuthenticationError(535, b"bad creds")
+
+            def send_message(self, msg):
+                _FakeSMTP.sent.append(msg)
+
+        original_smtp = email_service.smtplib.SMTP
+        email_service.smtplib.SMTP = _FakeSMTP
+        try:
+            with db.db_session() as conn:
+                ou = db.register_user(conn, "otp_stress", "otppass123", "otp_stress@example.com", "OTP Shop")
+                o_uid = ou["user_id"]
+                # request_password_reset() reads Gmail SMTP settings from the
+                # first-ever registered user in the DB (single-admin config for
+                # the whole shop), not from the user requesting the reset --
+                # so the sender credentials must be set on that admin user.
+                admin_id = conn.execute("SELECT id FROM users ORDER BY id ASC LIMIT 1").fetchone()["id"]
+                db.update_user_settings(conn, admin_id, {
+                    "gmail_smtp_user": "vendor@example.com",
+                    "gmail_smtp_app_password": "validapppassword",
+                })
+
+            with db.db_session() as conn:
+                result = db.request_password_reset(conn, "otp_stress@example.com")
+                assert result["ok"] is True and result["email_sent"] is True
+                token_row = conn.execute(
+                    "SELECT otp, expires_at FROM password_reset_tokens WHERE user_id=? ORDER BY id DESC LIMIT 1",
+                    (o_uid,),
+                ).fetchone()
+                otp = token_row["otp"]
+
+            # Wrong OTP is rejected
+            with db.db_session() as conn:
+                try:
+                    db.verify_otp_and_reset_password(conn, "otp_stress@example.com", "000000", "irrelevant1")
+                    raise AssertionError("Expected wrong OTP to be rejected")
+                except ValueError as e:
+                    assert "Invalid" in str(e)
+
+            # Correct OTP resets the password end to end
+            with db.db_session() as conn:
+                out = db.verify_otp_and_reset_password(conn, "otp_stress@example.com", otp, "newpassword1")
+                assert out["ok"] is True
+                assert db.verify_login(conn, "otp_stress", "newpassword1") is not None
+                assert db.verify_login(conn, "otp_stress", "otppass123") is None
+
+            # Re-using the same (now-consumed) OTP fails
+            with db.db_session() as conn:
+                try:
+                    db.verify_otp_and_reset_password(conn, "otp_stress@example.com", otp, "anotherpass1")
+                    raise AssertionError("Expected already-used OTP to be rejected")
+                except ValueError:
+                    pass
+
+            # Bad Gmail App Password surfaces as a clear ValueError, not a raw crash
+            with db.db_session() as conn:
+                db.update_user_settings(conn, admin_id, {"gmail_smtp_app_password": "wrongpassword"})
+            with db.db_session() as conn:
+                try:
+                    db.request_password_reset(conn, "otp_stress@example.com")
+                    raise AssertionError("Expected bad Gmail App Password to raise a clear error")
+                except ValueError as e:
+                    assert "App Password" in str(e)
+        finally:
+            email_service.smtplib.SMTP = original_smtp
+
+    run_test("Forgot-password OTP flow end to end (SMTP transport mocked, real app logic)",
+              test_forgot_password_otp_flow)
+
+    # --- Gap coverage: backup/restore across a schema migration ---
+    #
+    # CURRENT_SCHEMA_VERSION is still 1 in this codebase (no real migration has
+    # shipped yet through the versioned system added for this purpose), so
+    # there's nothing real to restore "across." This test registers a
+    # synthetic v2 migration for the duration of the test to validate the
+    # *mechanism* the moment a real one ships: a backup taken before an update,
+    # then restored after the app has already migrated the live DB forward,
+    # must either cleanly re-migrate or be clearly rejected -- not silently
+    # corrupt data.
+    def test_backup_restore_across_migration():
+        with db.db_session() as conn:
+            conn.execute(
+                "INSERT OR IGNORE INTO settings (key, value) VALUES ('migration_probe', 'v1_value')"
+            )
+            version_before = conn.execute("PRAGMA user_version").fetchone()[0]
+        assert version_before == db.CURRENT_SCHEMA_VERSION
+
+        scratch = Path(tempfile.mkdtemp(prefix="crm_migration_backup_"))
+        old_backup_path = scratch / "v1_backup.db"
+        with db.db_session() as conn:
+            backup_conn = sqlite3.connect(str(old_backup_path))
+            try:
+                conn.backup(backup_conn)
+            finally:
+                backup_conn.close()
+
+        def _fake_migration_v2(conn):
+            conn.execute(
+                "CREATE TABLE IF NOT EXISTS _test_migration_v2_marker (id INTEGER PRIMARY KEY, note TEXT)"
+            )
+            conn.execute("INSERT INTO _test_migration_v2_marker (note) VALUES ('migrated')")
+
+        original_version = db.CURRENT_SCHEMA_VERSION
+        original_migrations = db.SCHEMA_MIGRATIONS
+        db.CURRENT_SCHEMA_VERSION = 2
+        db.SCHEMA_MIGRATIONS = ((2, _fake_migration_v2),)
+        try:
+            pre_migration_dir = db.DB_PATH.parent / "pre_migration_backups"
+            before_backups = set(pre_migration_dir.glob("*.db")) if pre_migration_dir.exists() else set()
+
+            db.init_db()  # simulate relaunching the app after an update shipping v2
+
+            with db.db_session() as conn:
+                v = conn.execute("PRAGMA user_version").fetchone()[0]
+                assert v == 2, f"Expected schema version 2 after migration, got {v}"
+                marker = conn.execute(
+                    "SELECT COUNT(*) c FROM _test_migration_v2_marker"
+                ).fetchone()["c"]
+                assert marker == 1
+
+            after_backups = set(pre_migration_dir.glob("*.db")) if pre_migration_dir.exists() else set()
+            assert after_backups - before_backups, (
+                "Expected a timestamped pre-migration backup file to be created automatically"
+            )
+
+            # Customer restores a backup taken BEFORE they updated the app (still schema v1)
+            db.restore_database_from_backup(str(old_backup_path))
+            with db.db_session() as conn:
+                v_restored = conn.execute("PRAGMA user_version").fetchone()[0]
+            assert v_restored == 1, (
+                f"Restored pre-migration backup should carry version 1, got {v_restored}"
+            )
+
+            # Relaunch again -- init_db() must detect the restored DB is behind and
+            # cleanly re-run the pending migration, not silently skip it or crash.
+            db.init_db()
+            with db.db_session() as conn:
+                v_final = conn.execute("PRAGMA user_version").fetchone()[0]
+                assert v_final == 2, f"Migration did not re-apply after restoring an older backup: {v_final}"
+                marker2 = conn.execute(
+                    "SELECT COUNT(*) c FROM _test_migration_v2_marker"
+                ).fetchone()["c"]
+                assert marker2 == 1
+                probe = conn.execute(
+                    "SELECT value FROM settings WHERE key='migration_probe'"
+                ).fetchone()
+                assert probe and probe["value"] == "v1_value", (
+                    "Data present before the restore did not survive migrate-on-restore"
+                )
+        finally:
+            db.CURRENT_SCHEMA_VERSION = original_version
+            db.SCHEMA_MIGRATIONS = original_migrations
+
+    run_test("Backup taken pre-migration restores and cleanly re-migrates after a schema bump",
+              test_backup_restore_across_migration)
 
     # --- Stress load ---
     STRESS_PHONES = 200

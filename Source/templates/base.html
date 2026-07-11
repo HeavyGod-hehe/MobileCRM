@@ -15,7 +15,7 @@
     try {
       var theme = localStorage.getItem('crm-theme') || 'default-dark';
       document.documentElement.setAttribute('data-theme', theme);
-      var SIDEBAR_THEMES = ['academy-light', 'saas-dark-pro', 'minimal-admin'];
+      var SIDEBAR_THEMES = ['academy-light', 'saas-dark-pro', 'saas-sidebar-pro', 'minimal-admin'];
       document.documentElement.setAttribute('data-layout', SIDEBAR_THEMES.indexOf(theme) !== -1 ? 'sidebar' : 'original');
       if (theme === 'minimal-admin') {
         document.documentElement.setAttribute('data-mode', localStorage.getItem('crm-theme-mode') || 'light');
