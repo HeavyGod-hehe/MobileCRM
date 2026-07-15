@@ -1011,7 +1011,12 @@ def _delete_account_entry_cascade(conn, user_id, entry_id, *, skip_cash_book_id=
     if not entry_id:
         return
     row = conn.execute(
-        "SELECT * FROM account_entries WHERE id = ?", (entry_id,)
+        """
+        SELECT ae.* FROM account_entries ae
+        JOIN accounts a ON a.id = ae.account_id
+        WHERE ae.id = ? AND a.user_id = ?
+        """,
+        (entry_id, user_id),
     ).fetchone()
     if not row:
         return
@@ -1728,6 +1733,11 @@ def delete_partner(conn, user_id, partner_id):
 
 def reinvest_profit(conn, user_id, data):
     """Move available profit into a partner's invested capital."""
+    if not conn.in_transaction:
+        # Same read-then-write race as create_phone/update_phone: without this
+        # lock, two near-simultaneous reinvest calls could both read the same
+        # stale "available profit" and both pass the check, over-reinvesting.
+        conn.execute("BEGIN IMMEDIATE")
     amount = float(data.get("amount") or 0)
     if amount <= 0:
         raise ValueError("Amount must be greater than zero")
@@ -1769,6 +1779,8 @@ def add_side_investment(conn, user_id, data):
     time, separate from any specific phone purchase. Unlike reinvest_profit
     (an internal transfer of already-earned profit), this is real money
     entering the business, so it also posts a bank/cash credit."""
+    if not conn.in_transaction:
+        conn.execute("BEGIN IMMEDIATE")
     amount = float(data.get("amount") or 0)
     if amount <= 0:
         raise ValueError("Amount must be greater than zero")
@@ -2305,6 +2317,12 @@ def update_phone(conn, user_id, phone_id, data):
             "This phone was returned to the supplier — its purchase record was already "
             "settled, so it can't be marked Sold/Bought/In Repair again. Add it as a new "
             "phone if you got it back into stock."
+        )
+    if new_status == "Returned to Supplier" and existing["status"] != "Returned to Supplier":
+        raise ValueError(
+            "Use the Returns page to return a phone to its supplier — that properly "
+            "reverses the purchase payable/cash entry and logs the refund. Setting this "
+            "status directly would leave the supplier payable orphaned."
         )
     merged_input = {**dict(existing), **data}
     _validate_phone_payments(conn, user_id, merged_input, new_status)
@@ -3443,7 +3461,7 @@ def compute_dashboard(conn, user_id):
         (user_id,),
     ).fetchall()
     payables = conn.execute(
-        "SELECT payable_amount FROM phones WHERE payable_amount > 0 AND user_id = ?",
+        "SELECT payable_amount, supplier_account_id FROM phones WHERE payable_amount > 0 AND user_id = ?",
         (user_id,),
     ).fetchall()
 
@@ -3457,7 +3475,12 @@ def compute_dashboard(conn, user_id):
     total_udhar = round(acct_summary["total_receivable"] + phone_only_receivables, 2)
     phone_receivables = round(phone_only_receivables, 2)
     accounts_payable = acct_summary["total_payable"]
-    phone_payables = sum(r["payable_amount"] or 0 for r in payables)
+    # Phone payables synced to a supplier account are already in account balances
+    # (posted as a debit entry by _post_purchase_ledger) — only count the ones
+    # with no linked account here, mirroring phone_only_receivables above.
+    phone_payables = sum(
+        r["payable_amount"] or 0 for r in payables if not r["supplier_account_id"]
+    )
     total_payables_combined = round(accounts_payable + phone_payables, 2)
     active_stock_worth = sum(r["purchase_price"] or 0 for r in inventory)
 
@@ -3469,6 +3492,7 @@ def compute_dashboard(conn, user_id):
 
     formula_expected = (
         total_investment + total_net_profit - total_udhar - active_stock_worth
+        + total_payables_combined
     )
     expected_bank_balance = round(formula_expected - total_in_cash, 2)
 
@@ -3598,9 +3622,18 @@ def get_account(conn, user_id, account_id):
 
 
 def create_account(conn, user_id, data):
+    name = (data.get("name") or "").strip()
+    if not name:
+        raise ValueError("Account name is required")
+    existing = conn.execute(
+        "SELECT id FROM accounts WHERE user_id = ? AND LOWER(TRIM(name)) = LOWER(?)",
+        (user_id, name),
+    ).fetchone()
+    if existing:
+        raise ValueError(f'An account named "{name}" already exists — use that one instead of creating a duplicate.')
     cursor = conn.execute(
         "INSERT INTO accounts (name, contact, user_id) VALUES (?, ?, ?)",
-        (data["name"], data.get("contact", ""), user_id),
+        (name, data.get("contact", ""), user_id),
     )
     return get_account(conn, user_id, cursor.lastrowid)
 

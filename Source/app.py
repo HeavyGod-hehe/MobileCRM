@@ -925,7 +925,6 @@ def overview_api():
         return jsonify({
             "summary": db.compute_dashboard(conn, user_id),
             "monthly": db.compute_monthly_metrics(conn, user_id),
-            "fixed_expenses": db.list_fixed_expenses(conn, user_id),
         })
 
 
@@ -1468,8 +1467,11 @@ def create_account_api():
     data = request.get_json(force=True)
     if not data.get("name"):
         return jsonify({"error": "Name is required"}), 400
-    with db.db_session() as conn:
-        return jsonify(db.create_account(conn, user_id, data)), 201
+    try:
+        with db.db_session() as conn:
+            return jsonify(db.create_account(conn, user_id, data)), 201
+    except ValueError as exc:
+        return jsonify({"error": str(exc)}), 400
 
 
 @app.route("/api/accounts/<int:account_id>", methods=["PUT"])
