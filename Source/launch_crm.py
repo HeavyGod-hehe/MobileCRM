@@ -110,13 +110,14 @@ def _find_chromium_browser() -> str | None:
 
 
 def open_maximized(url: str) -> None:
-    """Open the CRM in a maximized browser window if possible, otherwise
-    fall back to a normal browser window (whatever the OS default is)."""
+    """Open the CRM in a maximized, borderless "app" window (no tabs or
+    address bar) if Chrome/Edge is available, otherwise fall back to a
+    normal browser window (whatever the OS default is)."""
     if os.environ.get("CRM_OPEN_MAXIMIZED", "1") != "0":
         browser_path = _find_chromium_browser()
         if browser_path:
             try:
-                subprocess.Popen([browser_path, "--new-window", "--start-maximized", url])
+                subprocess.Popen([browser_path, f"--app={url}", "--start-maximized"])
                 return
             except OSError:
                 pass

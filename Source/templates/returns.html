@@ -33,10 +33,7 @@
           <label class="block text-xs font-medium text-slate-400 mb-1.5">Refund Amount</label>
           <input type="number" id="pr-refund" min="0" step="1" class="input-field" placeholder="Auto from total cost">
         </div>
-        <div>
-          <label class="block text-xs font-medium text-slate-400 mb-1.5">Return Date &amp; Time</label>
-          <input type="datetime-local" id="pr-date" class="input-field">
-        </div>
+        <input type="hidden" id="pr-date">
         <div class="sm:col-span-2">
           <label class="block text-xs font-medium text-slate-400 mb-1.5">Supplier Account (optional)</label>
           <div id="pr-account-wrap"></div>
@@ -70,10 +67,7 @@
           <label class="block text-xs font-medium text-slate-400 mb-1.5">Refund Amount</label>
           <input type="number" id="sr-refund" min="0" step="1" class="input-field" placeholder="Auto from sale price">
         </div>
-        <div>
-          <label class="block text-xs font-medium text-slate-400 mb-1.5">Return Date &amp; Time</label>
-          <input type="datetime-local" id="sr-date" class="input-field">
-        </div>
+        <input type="hidden" id="sr-date">
         <div>
           <label class="block text-xs font-medium text-slate-400 mb-1.5">Customer Name</label>
           <input type="text" id="sr-party" class="input-field" placeholder="Customer name">

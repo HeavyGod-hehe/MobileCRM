@@ -75,7 +75,7 @@
             <a href="/purchase-invoice" class="nav-link px-2.5 sm:px-3.5 py-1.5 rounded-lg text-sm font-medium whitespace-nowrap {% if active == 'purchase_invoice' %}active{% else %}text-slate-400 hover:text-white{% endif %}">Purchase Invoice</a>
             <a href="/accounts" class="nav-link px-2.5 sm:px-3.5 py-1.5 rounded-lg text-sm font-medium whitespace-nowrap {% if active == 'accounts' %}active{% else %}text-slate-400 hover:text-white{% endif %}">Accounts</a>
             <a href="/cashbook" class="nav-link px-2.5 sm:px-3.5 py-1.5 rounded-lg text-sm font-medium whitespace-nowrap {% if active == 'cashbook' %}active{% else %}text-slate-400 hover:text-white{% endif %}">Cash Book</a>
-            <a href="/journal" class="nav-link px-2.5 sm:px-3.5 py-1.5 rounded-lg text-sm font-medium whitespace-nowrap {% if active == 'journal' %}active{% else %}text-slate-400 hover:text-white{% endif %}">Journal</a>
+            <a href="/journal" class="nav-link px-2.5 sm:px-3.5 py-1.5 rounded-lg text-sm font-medium whitespace-nowrap {% if active == 'journal' %}active{% else %}text-slate-400 hover:text-white{% endif %}">Baroobaar/Hawala</a>
             <a href="/overview" class="nav-link px-2.5 sm:px-3.5 py-1.5 rounded-lg text-sm font-medium whitespace-nowrap {% if active == 'overview' %}active{% else %}text-slate-400 hover:text-white{% endif %}">Overview</a>
             <a href="/help" class="nav-link px-2.5 sm:px-3.5 py-1.5 rounded-lg text-sm font-medium whitespace-nowrap {% if active == 'help' %}active{% else %}text-slate-400 hover:text-white{% endif %}">Help</a>
             <a href="/settings" class="nav-link px-2.5 sm:px-3.5 py-1.5 rounded-lg text-sm font-medium whitespace-nowrap {% if active == 'settings' %}active{% else %}text-slate-400 hover:text-white{% endif %}">Settings</a>
@@ -121,13 +121,29 @@
         </a>
         <a href="/journal" class="app-sidebar-link {% if active == 'journal' %}active{% endif %}">
           <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.75" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"/></svg>
-          <span>Journal</span>
+          <span>Baroobaar / Hawala</span>
         </a>
 
         <p class="app-sidebar-group-label">Insights</p>
         <a href="/overview" class="app-sidebar-link {% if active == 'overview' %}active{% endif %}">
           <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.75" d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2H5a2 2 0 01-2-2"/></svg>
           <span>Overview</span>
+        </a>
+        <a href="/customer-recovery" class="app-sidebar-link {% if active == 'customer_recovery' %}active{% endif %}">
+          <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.75" d="M16 7a4 4 0 11-8 0 4 4 0 018 0zM12 14a7 7 0 00-7 7h14a7 7 0 00-7-7z"/></svg>
+          <span>Customer Recovery</span>
+        </a>
+        <a href="/expense-summary" class="app-sidebar-link {% if active == 'expense_summary' %}active{% endif %}">
+          <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.75" d="M9 7h6m-6 4h6m-6 4h4M5 3h14a2 2 0 012 2v14a2 2 0 01-2 2H5a2 2 0 01-2-2V5a2 2 0 012-2z"/></svg>
+          <span>Expense Summary</span>
+        </a>
+        <a href="/day-book" class="app-sidebar-link {% if active == 'day_book' %}active{% endif %}">
+          <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.75" d="M8 7V3m8 4V3m-9 8h10M5 21h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z"/></svg>
+          <span>Day Book</span>
+        </a>
+        <a href="/find-imei" class="app-sidebar-link {% if active == 'find_imei' %}active{% endif %}">
+          <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.75" d="M21 21l-4.35-4.35M11 19a8 8 0 100-16 8 8 0 000 16z"/></svg>
+          <span>Find IMEI</span>
         </a>
 
         <p class="app-sidebar-group-label">Support</p>

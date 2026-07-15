@@ -1764,6 +1764,38 @@ def reinvest_profit(conn, user_id, data):
     }
 
 
+def add_side_investment(conn, user_id, data):
+    """Record a partner injecting fresh capital into the business at any
+    time, separate from any specific phone purchase. Unlike reinvest_profit
+    (an internal transfer of already-earned profit), this is real money
+    entering the business, so it also posts a bank/cash credit."""
+    amount = float(data.get("amount") or 0)
+    if amount <= 0:
+        raise ValueError("Amount must be greater than zero")
+
+    partner_id = int(data["partner_id"])
+    partner = get_partner(conn, user_id, partner_id)
+    if not partner:
+        raise ValueError("Partner not found")
+
+    payment_method = data.get("payment_method") or "cash"
+    bank_id = data.get("bank_id")
+    entry_date = _normalize_datetime(data.get("investment_date"), conn, date_only=True)
+    note = data.get("note") or f"Side investment from {partner['name']}"
+
+    _post_payment_transaction(
+        conn, user_id, payment_method, bank_id, "in", amount, note, entry_date,
+        source_type="side_investment", source_id=partner_id,
+    )
+
+    new_capital = round(partner["capital"] + amount, 2)
+    update_partner(conn, user_id, partner_id, {"capital": new_capital})
+    return {
+        "partner": get_partner(conn, user_id, partner_id),
+        "amount": round(amount, 2),
+    }
+
+
 # --- Phones ---
 
 def _phone_expense_total(conn, phone_id):
@@ -2866,6 +2898,52 @@ def list_fixed_expenses(conn, user_id):
     return [dict(r) for r in rows]
 
 
+def expense_summary(conn, user_id, start_date=None, end_date=None):
+    """Combined view of per-phone expenses and fixed (overhead) expenses."""
+    phone_rows = conn.execute(
+        """
+        SELECT pe.id, pe.amount, pe.description,
+               COALESCE(NULLIF(pe.expense_date, ''), pe.created_at) AS expense_date,
+               p.model AS phone_model, p.id AS phone_id
+        FROM phone_expenses pe
+        JOIN phones p ON p.id = pe.phone_id
+        WHERE p.user_id = ?
+        ORDER BY expense_date DESC
+        """,
+        (user_id,),
+    ).fetchall()
+    fixed_rows = conn.execute(
+        """
+        SELECT id, amount, purpose AS description, created_at AS expense_date
+        FROM fixed_expenses
+        WHERE user_id = ?
+        ORDER BY created_at DESC
+        """,
+        (user_id,),
+    ).fetchall()
+
+    def _in_range(date_str):
+        if not (start_date and end_date):
+            return True
+        return start_date <= (date_str or "")[:10] <= end_date
+
+    phone_expenses = [
+        {**dict(r), "category": "Phone Expense"} for r in phone_rows if _in_range(r["expense_date"])
+    ]
+    fixed_expenses = [
+        {**dict(r), "category": "Fixed Expense"} for r in fixed_rows if _in_range(r["expense_date"])
+    ]
+    combined = sorted(phone_expenses + fixed_expenses, key=lambda x: x["expense_date"] or "", reverse=True)
+    total_phone = round(sum(r["amount"] for r in phone_expenses), 2)
+    total_fixed = round(sum(r["amount"] for r in fixed_expenses), 2)
+    return {
+        "entries": combined,
+        "total_phone_expenses": total_phone,
+        "total_fixed_expenses": total_fixed,
+        "total_expenses": round(total_phone + total_fixed, 2),
+    }
+
+
 def create_fixed_expense(conn, user_id, data):
     amount = float(data["amount"])
     purpose = data["purpose"]
@@ -3290,7 +3368,7 @@ def delete_cash_book_entry(conn, user_id, entry_id):
     _delete_cash_book_entry_cascade(conn, user_id, entry_id)
 
 
-def cash_book_daily_summary(conn, user_id):
+def cash_book_daily_summary(conn, user_id, start_date=None, end_date=None):
     settings_opening = _cash_base_opening(conn, user_id)
     rows = conn.execute(
         """
@@ -3327,6 +3405,12 @@ def cash_book_daily_summary(conn, user_id):
         d["bank_out"] = round(d.get("bank_out") or 0, 2)
         summaries.append(d)
         prev_closing = closing
+
+    if start_date and end_date:
+        summaries = [
+            d for d in summaries
+            if start_date <= (d["entry_date"] or "")[:10] <= end_date
+        ]
     return list(reversed(summaries))
 
 
@@ -3786,6 +3870,50 @@ def accounts_summary(conn, user_id):
         "total_receivable": round(total_receivable, 2),
         "total_payable": round(total_payable, 2),
     }
+
+
+def customer_recovery_analysis(conn, user_id):
+    """Per-customer: total billed to them, total collected, total still
+    outstanding, and how long the oldest outstanding amount has been owed.
+
+    Billed/collected are computed directly from account_entries (credit =
+    billed, debit = collected) rather than joining phones.sale_price — a
+    receivable can come from a phone sale, a journal/hawala settlement, or a
+    manual entry, and not all of those carry a phones.buyer_account_id link.
+    Deriving "collected" as total_sold - outstanding previously produced
+    impossible negative-implied values whenever a customer's balance grew
+    from something other than a phone linked to their account.
+    """
+    accounts = [a for a in list_accounts(conn, user_id) if not a["is_expense_category"]]
+    results = []
+    for acct in accounts:
+        agg = conn.execute(
+            """
+            SELECT
+                COALESCE(SUM(CASE WHEN entry_type = 'credit' THEN amount ELSE 0 END), 0) AS billed,
+                COALESCE(SUM(CASE WHEN entry_type = 'debit' THEN amount ELSE 0 END), 0) AS collected,
+                MIN(CASE WHEN entry_type = 'credit' THEN created_at END) AS oldest_credit
+            FROM account_entries
+            WHERE account_id = ?
+            """,
+            (acct["id"],),
+        ).fetchone()
+        billed = round(agg["billed"] or 0, 2)
+        collected = round(agg["collected"] or 0, 2)
+        outstanding = round(acct["balance"], 2) if acct["balance"] > 0 else 0.0
+        if billed <= 0 and outstanding <= 0:
+            continue
+        results.append({
+            "account_id": acct["id"],
+            "name": acct["name"],
+            "contact": acct.get("contact"),
+            "total_sold": billed,
+            "total_collected": collected,
+            "total_outstanding": outstanding,
+            "oldest_outstanding_date": (agg["oldest_credit"] if outstanding > 0 else None),
+        })
+    results.sort(key=lambda r: r["total_outstanding"], reverse=True)
+    return results
 
 
 EXPENSE_CATEGORY_NAMES = ()

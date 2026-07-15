@@ -1,0 +1,83 @@
+{% extends "base.html" %}
+{% set active = 'day_book' %}
+{% block title %}Day Book — Welcome, {{ current_username }}{% endblock %}
+
+{% block content %}
+<div class="mb-8">
+  <h1 class="text-2xl font-bold text-white tracking-tight">Day Book — Daily Receipts &amp; Payments</h1>
+  <p class="text-slate-400 text-sm mt-1">Opening/closing balance and cash &amp; bank movement, day by day</p>
+</div>
+
+<section class="glass-card rounded-xl p-5 mb-6">
+  <div class="flex flex-wrap items-end gap-3">
+    <div>
+      <label class="block text-xs font-medium text-slate-400 mb-1.5">From</label>
+      <input type="date" id="db-from" class="input-field">
+    </div>
+    <div>
+      <label class="block text-xs font-medium text-slate-400 mb-1.5">To</label>
+      <input type="date" id="db-to" class="input-field">
+    </div>
+    <button id="btn-db-filter" class="btn btn-primary btn-sm">Filter</button>
+    <button id="btn-db-clear" class="btn btn-ghost btn-sm">Show All Days</button>
+  </div>
+</section>
+
+<section class="glass-card rounded-xl p-5">
+  <div class="overflow-x-auto">
+    <table class="w-full text-sm">
+      <thead>
+        <tr class="text-slate-500 text-left text-xs uppercase tracking-wider">
+          <th class="px-3 py-2 font-medium">Date</th>
+          <th class="px-3 py-2 font-medium text-right">Opening</th>
+          <th class="px-3 py-2 font-medium text-right">Cash In</th>
+          <th class="px-3 py-2 font-medium text-right">Cash Out</th>
+          <th class="px-3 py-2 font-medium text-right">Bank In</th>
+          <th class="px-3 py-2 font-medium text-right">Bank Out</th>
+          <th class="px-3 py-2 font-medium text-right">Closing</th>
+        </tr>
+      </thead>
+      <tbody id="db-list" class="divide-y divide-white/5"></tbody>
+    </table>
+  </div>
+  <div id="db-empty" class="hidden empty-state">No entries in this range</div>
+</section>
+{% endblock %}
+
+{% block scripts %}
+<script>
+  async function loadDayBook() {
+    const from = document.getElementById('db-from').value;
+    const to = document.getElementById('db-to').value;
+    const qs = (from && to) ? `?from=${from}&to=${to}` : '';
+    const rows = await apiFetch(`/api/reports/day-book${qs}`);
+    const tbody = document.getElementById('db-list');
+    const empty = document.getElementById('db-empty');
+    if (!rows.length) {
+      tbody.innerHTML = '';
+      empty.classList.remove('hidden');
+      return;
+    }
+    empty.classList.add('hidden');
+    tbody.innerHTML = rows.map(d => `
+      <tr class="table-row">
+        <td class="px-3 py-2.5 text-slate-400">${esc(d.entry_date)}</td>
+        <td class="px-3 py-2.5 text-right text-slate-300">${fmt(d.opening_balance)}</td>
+        <td class="px-3 py-2.5 text-right text-emerald-300">${fmt(d.cash_in)}</td>
+        <td class="px-3 py-2.5 text-right text-red-300">${fmt(d.cash_out)}</td>
+        <td class="px-3 py-2.5 text-right text-emerald-300">${fmt(d.bank_in)}</td>
+        <td class="px-3 py-2.5 text-right text-red-300">${fmt(d.bank_out)}</td>
+        <td class="px-3 py-2.5 text-right font-semibold text-white">${fmt(d.closing_balance)}</td>
+      </tr>`).join('');
+  }
+
+  document.getElementById('btn-db-filter').addEventListener('click', loadDayBook);
+  document.getElementById('btn-db-clear').addEventListener('click', () => {
+    document.getElementById('db-from').value = '';
+    document.getElementById('db-to').value = '';
+    loadDayBook();
+  });
+
+  loadDayBook();
+</script>
+{% endblock %}

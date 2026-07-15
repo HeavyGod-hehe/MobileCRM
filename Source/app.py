@@ -1181,6 +1181,24 @@ def reinvest_profit_api():
         return jsonify({"error": str(exc)}), 400
 
 
+@app.route("/api/partners/side-investment", methods=["POST"])
+def side_investment_api():
+    user_id = _current_user_id()
+    data = request.get_json(force=True)
+    if not data.get("partner_id"):
+        return jsonify({"error": "Partner is required"}), 400
+    amount, err = _require_amount(data)
+    if err:
+        return jsonify({"error": err}), 400
+    data["amount"] = amount
+    try:
+        with db.db_session() as conn:
+            result = db.add_side_investment(conn, user_id, data)
+            return jsonify(result)
+    except ValueError as exc:
+        return jsonify({"error": str(exc)}), 400
+
+
 # --- Fixed Expenses ---
 
 @app.route("/api/fixed-expenses", methods=["GET"])
@@ -1557,6 +1575,64 @@ def delete_entry_api(account_id, entry_id):
         except ValueError as exc:
             return jsonify({"error": str(exc)}), 400
         return jsonify({"ok": True})
+
+
+# --- Reports ---
+
+@app.route("/find-imei")
+def find_imei_page():
+    return render_template("find_imei.html")
+
+
+@app.route("/api/find-imei")
+def find_imei_api():
+    user_id = _current_user_id()
+    imei = request.args.get("imei", "")
+    with db.db_session() as conn:
+        phone = db.find_phone_by_imei(conn, user_id, imei)
+    if not phone:
+        return jsonify({"error": "No phone found with that IMEI"}), 404
+    return jsonify(phone)
+
+
+@app.route("/customer-recovery")
+def customer_recovery_page():
+    return render_template("customer_recovery.html")
+
+
+@app.route("/api/reports/customer-recovery")
+def customer_recovery_api():
+    user_id = _current_user_id()
+    with db.db_session() as conn:
+        return jsonify(db.customer_recovery_analysis(conn, user_id))
+
+
+@app.route("/expense-summary")
+def expense_summary_page():
+    return render_template("expense_summary.html")
+
+
+@app.route("/api/reports/expense-summary")
+def expense_summary_api():
+    user_id = _current_user_id()
+    start_date = request.args.get("from")
+    end_date = request.args.get("to")
+    with db.db_session() as conn:
+        return jsonify(db.expense_summary(conn, user_id, start_date, end_date))
+
+
+@app.route("/day-book")
+def day_book_page():
+    return render_template("day_book.html")
+
+
+@app.route("/api/reports/day-book")
+def day_book_api():
+    user_id = _current_user_id()
+    start_date = request.args.get("from")
+    end_date = request.args.get("to")
+    with db.db_session() as conn:
+        return jsonify(db.cash_book_daily_summary(conn, user_id, start_date, end_date))
 
 
 # --- Backup ---

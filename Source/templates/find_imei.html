@@ -1,0 +1,63 @@
+{% extends "base.html" %}
+{% set active = 'find_imei' %}
+{% block title %}Find IMEI — Welcome, {{ current_username }}{% endblock %}
+
+{% block content %}
+<div class="mb-8">
+  <h1 class="text-2xl font-bold text-white tracking-tight">Find IMEI</h1>
+  <p class="text-slate-400 text-sm mt-1">Look up any phone by its IMEI number — purchase, sale, and profit at a glance</p>
+</div>
+
+<section class="glass-card rounded-xl p-5 mb-8">
+  <form id="imei-search-form" class="flex gap-3">
+    <input type="text" id="imei-search-input" class="input-field flex-1" placeholder="Enter 15-digit IMEI" inputmode="numeric" autocomplete="off">
+    <button type="submit" class="btn btn-primary shrink-0">Search</button>
+  </form>
+</section>
+
+<section id="imei-result-section" class="hidden glass-card rounded-xl p-5">
+  <div id="imei-result"></div>
+</section>
+
+<section id="imei-empty-section" class="hidden glass-card rounded-xl p-5 text-center text-slate-500 text-sm">
+  No phone found with that IMEI
+</section>
+{% endblock %}
+
+{% block scripts %}
+<script>
+  document.getElementById('imei-search-form').addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const imei = document.getElementById('imei-search-input').value.trim();
+    if (!imei) return;
+    document.getElementById('imei-result-section').classList.add('hidden');
+    document.getElementById('imei-empty-section').classList.add('hidden');
+    try {
+      const phone = await apiFetch(`/api/find-imei?imei=${encodeURIComponent(imei)}`);
+      renderImeiResult(phone);
+    } catch (err) {
+      document.getElementById('imei-empty-section').classList.remove('hidden');
+    }
+  });
+
+  function renderImeiResult(p) {
+    const el = document.getElementById('imei-result');
+    el.innerHTML = `
+      <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
+        <div><p class="text-xs text-slate-500">Model</p><p class="text-white font-semibold">${esc(p.model)}${p.variant ? ' (' + esc(p.variant) + ')' : ''}</p></div>
+        <div><p class="text-xs text-slate-500">Status</p><p class="text-white font-semibold">${esc(p.status)}</p></div>
+        <div><p class="text-xs text-slate-500">IMEI 1 / IMEI 2</p><p class="text-white">${esc(p.imei) || '—'} / ${esc(p.imei2) || '—'}</p></div>
+        <div><p class="text-xs text-slate-500">Purchase Price</p><p class="text-white">${fmt(p.purchase_price)}</p></div>
+        <div><p class="text-xs text-slate-500">Supplier</p><p class="text-white">${esc(p.supplier_name) || '—'}</p></div>
+        <div><p class="text-xs text-slate-500">Sale Price</p><p class="text-white">${p.sale_price ? fmt(p.sale_price) : '—'}</p></div>
+        <div><p class="text-xs text-slate-500">Buyer</p><p class="text-white">${esc(p.buyer_name) || '—'}</p></div>
+        <div><p class="text-xs text-slate-500">Net Profit</p><p class="text-white">${p.net_profit != null ? fmt(p.net_profit) : '—'}</p></div>
+      </div>
+      <div class="mt-4">
+        <a href="/inventory" class="btn btn-ghost btn-sm">Open Inventory</a>
+      </div>
+    `;
+    document.getElementById('imei-result-section').classList.remove('hidden');
+  }
+</script>
+{% endblock %}

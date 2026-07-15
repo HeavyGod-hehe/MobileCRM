@@ -1,0 +1,96 @@
+{% extends "base.html" %}
+{% set active = 'expense_summary' %}
+{% block title %}Expense Summary — Welcome, {{ current_username }}{% endblock %}
+
+{% block content %}
+<div class="mb-8">
+  <h1 class="text-2xl font-bold text-white tracking-tight">Expense Summary</h1>
+  <p class="text-slate-400 text-sm mt-1">Per-phone expenses and fixed (overhead) expenses, combined</p>
+</div>
+
+<section class="glass-card rounded-xl p-5 mb-6">
+  <div class="flex flex-wrap items-end gap-3">
+    <div>
+      <label class="block text-xs font-medium text-slate-400 mb-1.5">From</label>
+      <input type="date" id="es-from" class="input-field">
+    </div>
+    <div>
+      <label class="block text-xs font-medium text-slate-400 mb-1.5">To</label>
+      <input type="date" id="es-to" class="input-field">
+    </div>
+    <button id="btn-es-filter" class="btn btn-primary btn-sm">Filter</button>
+    <button id="btn-es-clear" class="btn btn-ghost btn-sm">Clear</button>
+  </div>
+</section>
+
+<section class="grid grid-cols-1 sm:grid-cols-3 gap-4 mb-6">
+  <div class="glass-card rounded-xl p-5">
+    <p class="text-xs font-semibold uppercase tracking-wider text-slate-500 mb-1">Phone Expenses</p>
+    <p id="es-total-phone" class="text-xl font-bold text-white">—</p>
+  </div>
+  <div class="glass-card rounded-xl p-5">
+    <p class="text-xs font-semibold uppercase tracking-wider text-slate-500 mb-1">Fixed Expenses</p>
+    <p id="es-total-fixed" class="text-xl font-bold text-white">—</p>
+  </div>
+  <div class="glass-card rounded-xl p-5">
+    <p class="text-xs font-semibold uppercase tracking-wider text-slate-500 mb-1">Total</p>
+    <p id="es-total-all" class="text-xl font-bold text-orange-300">—</p>
+  </div>
+</section>
+
+<section class="glass-card rounded-xl p-5">
+  <div class="overflow-x-auto">
+    <table class="w-full text-sm">
+      <thead>
+        <tr class="text-slate-500 text-left text-xs uppercase tracking-wider">
+          <th class="px-3 py-2 font-medium">Date</th>
+          <th class="px-3 py-2 font-medium">Category</th>
+          <th class="px-3 py-2 font-medium">Description</th>
+          <th class="px-3 py-2 font-medium text-right">Amount</th>
+        </tr>
+      </thead>
+      <tbody id="es-list" class="divide-y divide-white/5"></tbody>
+    </table>
+  </div>
+  <div id="es-empty" class="hidden empty-state">No expenses in this range</div>
+</section>
+{% endblock %}
+
+{% block scripts %}
+<script>
+  async function loadExpenseSummary() {
+    const from = document.getElementById('es-from').value;
+    const to = document.getElementById('es-to').value;
+    const qs = (from && to) ? `?from=${from}&to=${to}` : '';
+    const data = await apiFetch(`/api/reports/expense-summary${qs}`);
+    document.getElementById('es-total-phone').textContent = fmt(data.total_phone_expenses);
+    document.getElementById('es-total-fixed').textContent = fmt(data.total_fixed_expenses);
+    document.getElementById('es-total-all').textContent = fmt(data.total_expenses);
+
+    const tbody = document.getElementById('es-list');
+    const empty = document.getElementById('es-empty');
+    if (!data.entries.length) {
+      tbody.innerHTML = '';
+      empty.classList.remove('hidden');
+      return;
+    }
+    empty.classList.add('hidden');
+    tbody.innerHTML = data.entries.map(e => `
+      <tr class="table-row">
+        <td class="px-3 py-2.5 text-slate-400">${e.expense_date ? esc(e.expense_date.slice(0, 10)) : '—'}</td>
+        <td class="px-3 py-2.5 text-slate-300">${esc(e.category)}${e.phone_model ? ' — ' + esc(e.phone_model) : ''}</td>
+        <td class="px-3 py-2.5 text-slate-400">${esc(e.description) || '—'}</td>
+        <td class="px-3 py-2.5 text-right font-semibold text-red-300">${fmt(e.amount)}</td>
+      </tr>`).join('');
+  }
+
+  document.getElementById('btn-es-filter').addEventListener('click', loadExpenseSummary);
+  document.getElementById('btn-es-clear').addEventListener('click', () => {
+    document.getElementById('es-from').value = '';
+    document.getElementById('es-to').value = '';
+    loadExpenseSummary();
+  });
+
+  loadExpenseSummary();
+</script>
+{% endblock %}

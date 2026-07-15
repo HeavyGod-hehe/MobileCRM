@@ -21,7 +21,10 @@
   <div class="glass-card rounded-xl p-5 mb-4">
     <div class="flex items-center justify-between mb-4">
       <p class="text-xs font-semibold uppercase tracking-wider text-slate-500">Business Partners</p>
-      <button id="btn-add-partner" class="btn btn-primary btn-sm">+ Add Partner</button>
+      <div class="flex gap-2">
+        <button id="btn-side-investment" class="btn btn-ghost btn-sm">+ Side Investment</button>
+        <button id="btn-add-partner" class="btn btn-primary btn-sm">+ Add Partner</button>
+      </div>
     </div>
     <div id="partners-list" class="space-y-2"></div>
   </div>
@@ -79,27 +82,6 @@
       <p id="total-payable" class="text-xl font-bold mt-2 text-red-400 num-animate" data-value="0">—</p>
       <p class="text-xs text-slate-600 mt-1">Synced with Accounts → Payable</p>
     </div>
-  </div>
-</section>
-
-<!-- Fixed Expenses -->
-<section class="mb-8 stagger">
-  <h2 class="text-xs font-semibold uppercase tracking-wider text-slate-500 mb-4">Fixed Expenses</h2>
-  <div class="glass-card rounded-xl p-5">
-    <form id="fixed-expense-form" class="grid grid-cols-1 sm:grid-cols-3 gap-3 mb-4">
-      <div class="sm:col-span-2">
-        <label class="block text-xs font-medium text-slate-400 mb-1.5">Purpose</label>
-        <input type="text" id="fe-purpose" required placeholder="e.g. Shop rent, utilities" class="input-field">
-      </div>
-      <div>
-        <label class="block text-xs font-medium text-slate-400 mb-1.5">Amount</label>
-        <input type="number" id="fe-amount" required min="1" step="1" class="input-field" placeholder="0">
-      </div>
-      <div class="sm:col-span-3">
-        <button type="submit" class="btn btn-primary btn-sm">Add Fixed Expense</button>
-      </div>
-    </form>
-    <div id="fixed-expenses-list" class="space-y-2"></div>
   </div>
 </section>
 
@@ -198,6 +180,48 @@
   </div>
 </div>
 
+<!-- Side Investment Modal -->
+<div id="side-inv-overlay" class="modal-overlay"></div>
+<div id="side-inv-modal" class="modal-wrap">
+  <div class="modal-panel">
+    <div class="p-6 border-b border-white/8 flex items-center justify-between">
+      <h3 class="text-lg font-semibold text-white">Add Side Investment</h3>
+      <button type="button" id="side-inv-cancel-x" class="btn btn-ghost btn-icon text-slate-400">
+        <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/></svg>
+      </button>
+    </div>
+    <form id="side-inv-form" class="p-6 space-y-4">
+      <p class="text-sm text-slate-400">Record a partner putting fresh capital into the business right now — separate from any specific phone purchase. This increases their invested capital and records the money actually coming in.</p>
+      <div>
+        <label class="block text-xs font-medium text-slate-400 mb-1.5">Partner *</label>
+        <select id="side-inv-partner" required class="input-field"></select>
+      </div>
+      <div>
+        <label class="block text-xs font-medium text-slate-400 mb-1.5">Amount *</label>
+        <input type="number" id="side-inv-amount" required min="1" step="1" class="input-field">
+      </div>
+      <div>
+        <label class="block text-xs font-medium text-slate-400 mb-1.5">Received Into *</label>
+        <select id="side-inv-payment" class="input-field" required>
+          <option value="cash">Cash</option>
+          <option value="bank">Bank Account</option>
+        </select>
+      </div>
+      <div id="side-inv-bank-wrap" class="hidden">
+        <label class="block text-xs font-medium text-slate-400 mb-1.5">Bank Account *</label>
+        <select id="side-inv-bank" class="input-field">
+          <option value="">— Select bank —</option>
+        </select>
+      </div>
+      <div>
+        <label class="block text-xs font-medium text-slate-400 mb-1.5">Note</label>
+        <input type="text" id="side-inv-note" class="input-field" placeholder="e.g. Extra capital top-up">
+      </div>
+      <button type="submit" class="btn btn-primary w-full">Save Investment</button>
+    </form>
+  </div>
+</div>
+
 <!-- Active Stock Modal -->
 <div id="stock-overlay" class="modal-overlay"></div>
 <div id="stock-modal" class="modal-wrap">
@@ -251,7 +275,6 @@
     document.getElementById('top-model').textContent = m.top_model;
 
     if (s.theme) applyTheme(s.theme);
-    renderFixedExpenses(data.fixed_expenses || []);
   }
 
   function renderPartners() {
@@ -298,25 +321,6 @@
     loadOverview();
   }
 
-  function renderFixedExpenses(expenses) {
-    const el = document.getElementById('fixed-expenses-list');
-    if (!expenses.length) {
-      el.innerHTML = '<p class="text-slate-500 text-sm">No fixed expenses logged yet</p>';
-      return;
-    }
-    el.innerHTML = expenses.map(e => `
-      <div class="list-item-row">
-        <div>
-          <p class="font-medium text-white">${esc(e.purpose)}</p>
-          <p class="text-xs text-slate-500">${e.created_at ? e.created_at.slice(0, 10) : ''}</p>
-        </div>
-        <div class="flex items-center gap-2">
-          <span class="font-bold text-red-400">${fmt(e.amount)}</span>
-          <button onclick="deleteFixedExpense(${e.id})" class="action-pill delete">Delete</button>
-        </div>
-      </div>`).join('');
-  }
-
   window.showActiveStockModal = () => {
     if (!overviewData) return;
     const s = overviewData.summary;
@@ -333,13 +337,6 @@
         <span class="text-amber-400">${fmt(r.receivable_amount)}</span>
       </div>`).join('') : '<p class="text-slate-500 text-sm">No outstanding receivables</p>';
     openModal('stock-overlay', 'stock-modal');
-  };
-
-  window.deleteFixedExpense = async (id) => {
-    if (!confirm('Delete this fixed expense?')) return;
-    await apiFetch(`/api/fixed-expenses/${id}`, { method: 'DELETE' });
-    toast('Fixed expense deleted');
-    loadOverview();
   };
 
   window.editPartner = (id) => {
@@ -403,21 +400,6 @@
     loadOverview();
   };
 
-  document.getElementById('fixed-expense-form').addEventListener('submit', async (e) => {
-    e.preventDefault();
-    await apiFetch('/api/fixed-expenses', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        purpose: document.getElementById('fe-purpose').value,
-        amount: document.getElementById('fe-amount').value,
-      }),
-    });
-    document.getElementById('fixed-expense-form').reset();
-    toast('Fixed expense added');
-    loadOverview();
-  });
-
   function openReinvestModal() {
     if (!overviewData) return;
     const s = overviewData.summary;
@@ -457,6 +439,65 @@
     }
   });
 
+  let sideInvBanks = [];
+  async function loadSideInvBanks() {
+    const data = await apiFetch('/api/banks');
+    sideInvBanks = data.banks || [];
+    const sel = document.getElementById('side-inv-bank');
+    sel.innerHTML = '<option value="">— Select bank —</option>' +
+      sideInvBanks.map(b => `<option value="${b.id}">${esc(b.name)} (${fmt(b.balance)})</option>`).join('');
+  }
+
+  function toggleSideInvBank() {
+    const isBank = document.getElementById('side-inv-payment').value === 'bank';
+    document.getElementById('side-inv-bank-wrap').classList.toggle('hidden', !isBank);
+    document.getElementById('side-inv-bank').required = isBank;
+  }
+
+  function openSideInvestmentModal() {
+    const sel = document.getElementById('side-inv-partner');
+    sel.innerHTML = partners.map(p =>
+      `<option value="${p.id}">${esc(p.name)} (${fmt(p.capital)})</option>`
+    ).join('') || '<option value="">No partners</option>';
+    document.getElementById('side-inv-amount').value = '';
+    document.getElementById('side-inv-note').value = '';
+    document.getElementById('side-inv-payment').value = 'cash';
+    toggleSideInvBank();
+    openModal('side-inv-overlay', 'side-inv-modal');
+  }
+
+  document.getElementById('btn-side-investment').addEventListener('click', openSideInvestmentModal);
+  document.getElementById('side-inv-cancel-x').addEventListener('click', () => closeModal('side-inv-overlay', 'side-inv-modal'));
+  document.getElementById('side-inv-overlay').addEventListener('click', () => closeModal('side-inv-overlay', 'side-inv-modal'));
+  document.getElementById('side-inv-payment').addEventListener('change', toggleSideInvBank);
+  document.getElementById('side-inv-form').addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const payload = {
+      partner_id: document.getElementById('side-inv-partner').value,
+      amount: document.getElementById('side-inv-amount').value,
+      payment_method: document.getElementById('side-inv-payment').value,
+      note: document.getElementById('side-inv-note').value.trim(),
+    };
+    if (payload.payment_method === 'bank') {
+      const bankId = document.getElementById('side-inv-bank').value;
+      if (!bankId) { toast('Select a bank account', 'error'); return; }
+      payload.bank_id = bankId;
+    }
+    try {
+      await apiFetch('/api/partners/side-investment', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+      });
+      closeModal('side-inv-overlay', 'side-inv-modal');
+      toast('Side investment recorded');
+      loadOverview();
+    } catch (err) {
+      toast(err.message, 'error');
+    }
+  });
+
+  loadSideInvBanks();
   loadOverview();
 </script>
 {% endblock %}

@@ -191,18 +191,15 @@
           <label class="block text-xs font-medium text-slate-400 mb-1.5">How Acquired *</label>
           <select id="f-acquisition-type" class="input-field">
             <option value="purchase">Purchase</option>
-            <option value="borrow">Borrow from Shopkeeper</option>
+            <option value="borrow">Borrowed from another shopkeeper</option>
           </select>
         </div>
         <div id="f-payable-wrap">
           <label class="block text-xs font-medium text-slate-400 mb-1.5">Purchase Udhar (payable)</label>
           <input type="number" id="f-payable-amount" min="0" step="1" value="0" class="input-field" placeholder="Amount still owed">
-          <p id="borrow-hint" class="hidden text-xs text-amber-400/90 mt-1">Borrowed phones post full value to the shopkeeper account (no cash out).</p>
+          <p id="borrow-hint" class="hidden text-xs text-amber-400/90 mt-1">This phone belongs to another shopkeeper until sold — the full price is recorded as what you owe them below (no cash paid out now). Settle it any time, same day or a few days later.</p>
         </div>
-        <div>
-          <label class="block text-xs font-medium text-slate-400 mb-1.5">Purchase Date &amp; Time</label>
-          <input type="datetime-local" id="f-purchase-date" class="input-field">
-        </div>
+        <input type="hidden" id="f-purchase-date">
         <div id="purchase-payment-section" class="col-span-2">
           <label class="block text-xs font-medium text-slate-400 mb-1.5">Purchase Payment Method *</label>
           <select id="f-purchase-payment" required class="input-field">
@@ -251,8 +248,11 @@
             <input type="text" id="f-supplier-contact" class="input-field">
           </div>
           <div class="sm:col-span-2">
-            <label class="block text-xs font-medium text-slate-400 mb-1.5">Supplier / Shopkeeper Account</label>
-            <div id="f-supplier-account-wrap"></div>
+            <label class="block text-xs font-medium text-slate-400 mb-1.5" id="f-supplier-account-label">Supplier / Shopkeeper Account</label>
+            <div class="flex gap-2 items-start">
+              <div id="f-supplier-account-wrap" class="flex-1"></div>
+              <button type="button" id="btn-new-supplier-account" class="btn btn-ghost btn-sm shrink-0">+ New</button>
+            </div>
             <p class="text-xs text-slate-600 mt-1">Required when borrowing — links payable to accounts &amp; cash book</p>
           </div>
         </div>
@@ -311,13 +311,13 @@
           </div>
           <div class="sm:col-span-2">
             <label class="block text-xs font-medium text-slate-400 mb-1.5">Buyer Account (for sale credit)</label>
-            <div id="f-buyer-account-wrap"></div>
+            <div class="flex gap-2 items-start">
+              <div id="f-buyer-account-wrap" class="flex-1"></div>
+              <button type="button" id="btn-new-buyer-account" class="btn btn-ghost btn-sm shrink-0">+ New</button>
+            </div>
             <p class="text-xs text-slate-600 mt-1">Required when receivable &gt; 0 — syncs to accounts &amp; cash book</p>
           </div>
-          <div>
-            <label class="block text-xs font-medium text-slate-400 mb-1.5">Sale Date &amp; Time</label>
-            <input type="datetime-local" id="f-sale-date" class="input-field">
-          </div>
+          <input type="hidden" id="f-sale-date">
           <div class="col-span-2">
             <label class="block text-xs font-medium text-slate-400 mb-1.5">Sale Payment Method *</label>
             <select id="f-sale-payment" class="input-field">
@@ -382,16 +382,40 @@
         <label class="block text-xs font-medium text-slate-400 mb-1.5">Description</label>
         <input type="text" id="expense-desc" class="input-field" placeholder="e.g. Repair cost">
       </div>
-      <div>
-        <label class="block text-xs font-medium text-slate-400 mb-1.5">Expense Date</label>
-        <input type="datetime-local" id="expense-date" class="input-field">
-      </div>
+      <input type="hidden" id="expense-date">
       <div>
         <label class="block text-xs font-medium text-slate-400 mb-1.5">Account (optional)</label>
         <div id="expense-account-wrap"></div>
         <p class="text-xs text-slate-600 mt-1">Default: No Account</p>
       </div>
       <button type="submit" class="btn btn-primary w-full">Save Expense</button>
+    </form>
+  </div>
+</div>
+
+<!-- Inline New Account Modal (supplier/shopkeeper or buyer) -->
+<div id="inv-acct-overlay" class="modal-overlay"></div>
+<div id="inv-acct-modal" class="modal-wrap">
+  <div class="modal-panel">
+    <div class="p-6 border-b border-white/8 flex items-center justify-between">
+      <h3 class="text-lg font-semibold text-white">New Account</h3>
+      <button type="button" id="inv-acct-cancel-x" class="btn btn-ghost btn-icon text-slate-400">
+        <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/></svg>
+      </button>
+    </div>
+    <form id="inv-acct-form" class="p-6 space-y-4">
+      <div>
+        <label class="block text-xs font-medium text-slate-400 mb-1.5">Name *</label>
+        <input type="text" id="inv-acct-name" required class="input-field">
+      </div>
+      <div>
+        <label class="block text-xs font-medium text-slate-400 mb-1.5">Contact</label>
+        <input type="text" id="inv-acct-contact" class="input-field">
+      </div>
+      <div class="flex gap-3 pt-1">
+        <button type="submit" class="btn btn-primary flex-1">Save</button>
+        <button type="button" id="inv-acct-cancel" class="btn btn-ghost">Cancel</button>
+      </div>
     </form>
   </div>
 </div>
@@ -711,6 +735,42 @@
     buyerAccountPicker.setAccounts(inventoryAccounts);
   }
 
+  let invAcctTarget = null;
+  function openInvAcctModal(target) {
+    invAcctTarget = target;
+    document.getElementById('inv-acct-name').value = '';
+    document.getElementById('inv-acct-contact').value = '';
+    openModal('inv-acct-overlay', 'inv-acct-modal');
+  }
+  function hideInvAcctModal() { closeModal('inv-acct-overlay', 'inv-acct-modal'); }
+  document.getElementById('btn-new-supplier-account')?.addEventListener('click', () => openInvAcctModal('supplier'));
+  document.getElementById('btn-new-buyer-account')?.addEventListener('click', () => openInvAcctModal('buyer'));
+  document.getElementById('inv-acct-cancel')?.addEventListener('click', hideInvAcctModal);
+  document.getElementById('inv-acct-cancel-x')?.addEventListener('click', hideInvAcctModal);
+  document.getElementById('inv-acct-overlay')?.addEventListener('click', hideInvAcctModal);
+  document.getElementById('inv-acct-form')?.addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const name = document.getElementById('inv-acct-name').value.trim();
+    if (!name) { toast('Enter an account name', 'error'); return; }
+    const payload = { name, contact: document.getElementById('inv-acct-contact').value };
+    try {
+      const account = await apiFetch('/api/accounts', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+      });
+      inventoryAccounts.push(account);
+      supplierAccountPicker.setAccounts(inventoryAccounts);
+      buyerAccountPicker.setAccounts(inventoryAccounts);
+      if (invAcctTarget === 'supplier') supplierAccountPicker.setValue(account.id);
+      if (invAcctTarget === 'buyer') buyerAccountPicker.setValue(account.id);
+      hideInvAcctModal();
+      toast('Account created');
+    } catch (err) {
+      toast(err.message, 'error');
+    }
+  });
+
   function toggleAcquisitionFields() {
     const isBorrow = document.getElementById('f-acquisition-type').value === 'borrow';
     const isSold = document.getElementById('f-status').value === 'Sold';
@@ -719,10 +779,15 @@
     const paySel = document.getElementById('f-purchase-payment');
     const payableWrap = document.getElementById('f-payable-wrap');
     const borrowHint = document.getElementById('borrow-hint');
+    const supplierLabel = document.getElementById('f-supplier-account-label');
     paySection.classList.toggle('hidden', isBorrow);
     bankWrap.classList.toggle('hidden', isBorrow || !paySel.value.startsWith('bank:'));
     paySel.required = !isBorrow && !isSold;
     borrowHint.classList.toggle('hidden', !isBorrow);
+    if (supplierLabel) {
+      supplierLabel.textContent = isBorrow ? "Which shopkeeper's phone is this? *" : 'Supplier / Shopkeeper Account';
+      supplierLabel.classList.toggle('text-amber-300', isBorrow);
+    }
     if (isBorrow) {
       const price = parseFloat(document.getElementById('f-purchase-price').value) || 0;
       document.getElementById('f-payable-amount').value = price;
