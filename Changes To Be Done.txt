@@ -111,3 +111,43 @@ Fix Part 1 first (it's a real, confirmed bug with a clear fix). For Part 2,
 pick which Tier 1 item(s) to tackle next - each one (especially staff
 roles/permissions) is its own project and should be planned individually
 rather than all at once.
+
+
+PART 3 - TODO: Automated "test it like a human" bug hunt
+----------------------------------------------------------------------------
+Idea: build a proper QA pass that exercises the whole app the way a real
+person would - signing up, adding phones, making mistakes on purpose,
+deleting things that are linked to other things, weird input - and writes
+up every bug found. Not done yet, just started and stopped early, noted
+here to pick back up later.
+
+What was tried:
+  Real browser automation (clicking through the actual pages like a human)
+  needs a live Chrome connection to this computer, which isn't available
+  in this kind of background session. As a stand-in, started testing the
+  app's API directly (same effect, just without the visual browser part)
+  against a throwaway copy of the CRM - NOT the real shop data.
+
+What that quick pass already found before being stopped:
+  - Text fields (tried this on an Account name) accept raw HTML/script
+    tags with no rejection or cleanup on the way in. This is not
+    necessarily a real bug by itself - it depends on whether the pages
+    that later DISPLAY that name properly escape it before showing it in
+    the browser (which would make it harmless) or not (which would be a
+    real XSS security bug, since a customer/supplier name could then run
+    arbitrary code in the shop owner's browser). This needs to be checked
+    properly - wasn't confirmed either way before the testing was stopped.
+  - Everything else tried (signup validation, duplicate username, wrong
+    password, duplicate IMEI, negative prices, missing required fields,
+    deleting a record that doesn't exist) was handled correctly - no bugs
+    found there.
+
+Next time this is picked up:
+  - Either get a real browser-automation session going (needs an
+    interactive session with a live Chrome connection, not a background
+    one), or keep going with the direct API-testing approach and work
+    through every page/feature systematically (Inventory, Accounts, Cash
+    Book, Journal/Hawala, Returns, Billing, Purchase Invoices, Partners,
+    Bank Accounts, all 6 reports, Settings).
+  - First thing to check: finish confirming the HTML-in-text-field
+    question above.
