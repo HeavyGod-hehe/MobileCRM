@@ -185,7 +185,35 @@ def _run_server(port: int) -> None:
     app.run(host=HOST, port=port, debug=False, use_reloader=False, threaded=True)
 
 
+def _ensure_std_streams() -> None:
+    """The customer build is windowed (no console), so sys.stdout/stderr
+    are None in the frozen exe — there's no console for them to point at.
+    That's normally harmless, EXCEPT Werkzeug's dev server (used by
+    app.run() below) writes a log line to stderr for every single request
+    it handles, even with debug=False. Writing to a None stream raises
+    AttributeError, which was crashing the whole server the moment the
+    first request came in. Give it a real file to write to instead, so
+    the app survives and any of this output is still inspectable."""
+    if sys.stdout is not None and sys.stderr is not None:
+        return
+    target = None
+    try:
+        data_dir = customer_data_dir()
+        if data_dir:
+            data_dir.mkdir(parents=True, exist_ok=True)
+            target = open(data_dir / "crm-console.log", "a", encoding="utf-8", buffering=1)
+    except OSError:
+        target = None
+    if target is None:
+        target = open(os.devnull, "w")
+    if sys.stdout is None:
+        sys.stdout = target
+    if sys.stderr is None:
+        sys.stderr = target
+
+
 def main() -> None:
+    _ensure_std_streams()
     root = _project_root()
     os.chdir(root)
 

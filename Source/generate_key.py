@@ -27,14 +27,21 @@ LOG_FILE = Path(__file__).parent / "issued_keys.log"
 
 
 def _normalize(raw: str) -> str:
+    """Strip whitespace/dashes and uppercase, so it doesn't matter how the
+    client copy-pasted their Hardware ID (with dashes, lowercase, extra spaces)."""
     return raw.strip().upper().replace(" ", "").replace("-", "")
 
 
 def _valid(hw: str) -> bool:
+    """A real Hardware ID is always exactly 16 hex characters (see
+    get_hardware_id() in license_guard.py) — anything else means it was
+    mistyped or copied wrong."""
     return len(hw) == 16 and all(c in "0123456789ABCDEF" for c in hw)
 
 
 def _log_issued_key(hw: str, key: str, client: str) -> None:
+    """Append one line to issued_keys.log so the vendor has a paper trail of
+    every key they've ever issued and to whom."""
     stamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     label = client.strip() or "(no client name given)"
     with LOG_FILE.open("a", encoding="utf-8") as f:
@@ -42,6 +49,9 @@ def _log_issued_key(hw: str, key: str, client: str) -> None:
 
 
 def main() -> None:
+    """CLI entry point — see the module docstring at the top of this file
+    for usage examples. Handles both one-shot (args on the command line)
+    and interactive (prompts) modes."""
     parser = argparse.ArgumentParser(
         description="Generate a CRM activation key for a buyer's Hardware ID.",
     )

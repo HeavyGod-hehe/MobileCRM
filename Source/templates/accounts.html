@@ -223,6 +223,17 @@
         <label class="block text-xs font-medium text-slate-400 mb-1.5">Contact</label>
         <input type="text" id="acct-contact" class="input-field">
       </div>
+      <div id="acct-opening-wrap">
+        <label class="block text-xs font-medium text-slate-400 mb-1.5">Opening Balance</label>
+        <div class="flex gap-2">
+          <input type="number" id="acct-opening-amount" min="0" step="1" value="0" class="input-field flex-1" placeholder="0">
+          <select id="acct-opening-type" class="input-field w-auto">
+            <option value="credit">They owe me</option>
+            <option value="debit">I owe them</option>
+          </select>
+        </div>
+        <p class="text-xs text-slate-600 mt-1">If this person already owed (or was owed) money before you started using the CRM, enter it here — leave as 0 for a brand-new balance.</p>
+      </div>
       <div class="flex gap-3 pt-1">
         <button type="submit" class="btn btn-primary flex-1">Save</button>
         <button type="button" id="acct-cancel" class="btn btn-ghost">Cancel</button>
@@ -741,6 +752,12 @@
     document.getElementById('acct-id').value = account ? account.id : '';
     document.getElementById('acct-name').value = account ? account.name : '';
     document.getElementById('acct-contact').value = account ? account.contact : '';
+    // Opening balance only makes sense once, when the account is first
+    // created — editing an existing account (which may already have real
+    // transaction history) shouldn't silently inject another balance entry.
+    document.getElementById('acct-opening-wrap').classList.toggle('hidden', Boolean(account));
+    document.getElementById('acct-opening-amount').value = '0';
+    document.getElementById('acct-opening-type').value = 'credit';
     openModal('acct-overlay', 'acct-modal');
   }
   function hideAcctModal() { closeModal('acct-overlay', 'acct-modal'); }
@@ -771,6 +788,13 @@
     const name = document.getElementById('acct-name').value.trim();
     if (!name) { toast('Enter an account name', 'error'); return; }
     const payload = { name, contact: document.getElementById('acct-contact').value };
+    if (!id) {
+      const openingAmount = Number(document.getElementById('acct-opening-amount').value) || 0;
+      if (openingAmount > 0) {
+        payload.opening_balance = openingAmount;
+        payload.opening_balance_type = document.getElementById('acct-opening-type').value;
+      }
+    }
     try {
       const account = await apiFetch(id ? `/api/accounts/${id}` : '/api/accounts', {
         method: id ? 'PUT' : 'POST',

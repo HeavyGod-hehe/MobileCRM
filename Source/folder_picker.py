@@ -23,6 +23,9 @@ def pick_file_macos() -> str | None:
 
 
 def _run_osascript_choose(script: str) -> str | None:
+    """Shared runner behind pick_folder_macos()/pick_file_macos(): runs the
+    given AppleScript, and treats the user hitting Cancel as a normal
+    "nothing picked" result rather than an error."""
     import subprocess
 
     result = subprocess.run(
@@ -43,6 +46,8 @@ def _run_osascript_choose(script: str) -> str | None:
 
 
 def pick_folder_tkinter() -> str | None:
+    """Cross-platform fallback folder dialog (used on Windows/Linux, and as
+    a backstop if the macOS-native picker above fails)."""
     import tkinter as tk
     from tkinter import filedialog
 
@@ -56,6 +61,9 @@ def pick_folder_tkinter() -> str | None:
 
 
 def pick_folder_windows() -> str | None:
+    """Native Windows folder dialog via the shell32 SHBrowseForFolder API
+    (looks like a normal Windows Explorer picker, unlike the plainer tkinter
+    fallback below)."""
     import ctypes
     from ctypes import wintypes
 
@@ -97,6 +105,7 @@ def pick_folder_windows() -> str | None:
 
 
 def pick_file_tkinter() -> str | None:
+    """Cross-platform fallback file dialog for choosing a .db backup to restore."""
     import tkinter as tk
     from tkinter import filedialog
 
@@ -114,6 +123,8 @@ def pick_file_tkinter() -> str | None:
 
 
 def pick_backup_file() -> str | None:
+    """Pick a .db file to restore: try the native macOS dialog first, falling
+    back to tkinter everywhere else (or if the native one errors out)."""
     if sys.platform == "darwin":
         try:
             return pick_file_macos()
@@ -129,6 +140,11 @@ def pick_backup_file() -> str | None:
 
 
 def main() -> None:
+    """Entry point when this file is spawned as its own subprocess (see
+    app.py's browse_folder_api()) — GUI file/folder pickers can't run inside
+    Flask's request thread, so app.py launches this script and reads the
+    chosen path back from stdout. Picks the right native dialog for the
+    current OS, with a tkinter fallback everywhere."""
     pick_file = "--file" in sys.argv
     path = None
     if pick_file:

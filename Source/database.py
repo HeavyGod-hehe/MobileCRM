@@ -1,3 +1,48 @@
+"""Phone Reseller CRM - database layer (all business logic lives here).
+
+BEGINNER'S MAP OF THIS FILE
+----------------------------
+This file owns the SQLite database and every rule about what's allowed to
+happen to the data. app.py (the web layer) never talks to SQL directly - it
+calls plain Python functions in here, e.g. create_phone(), delete_account(),
+compute_dashboard(). That split means: the web/HTTP stuff lives in app.py,
+and "what a sale actually does to the books" lives here.
+
+THE LEDGER SYNC ENGINE (the trickiest part of this file)
+----------------------------------------------------------
+A phone reseller's books have three linked records for one real-world event.
+Example: you sell a phone on credit (udhar) to a customer.
+  1. The **phone** row changes status to "sold".
+  2. A **cash book** entry may be created if any cash was received.
+  3. An **account** (khata) entry is created for the customer, showing they
+     now owe money.
+These three must always agree - if you delete the phone sale, the cash book
+and account entries must reverse too, otherwise the books would be wrong
+forever. The "ledger_links" table is how this file remembers which records
+belong together, so a delete/edit can find and fix all of them:
+  - _record_ledger_link()          records that link
+  - _create_cash_book_synced() /
+    _create_account_entry_synced() create a cash-book/account entry AND
+                                    link it in one step
+  - _reverse_ledger_for_source()   undoes everything linked to one event
+    (called when a phone/entry is deleted or edited)
+  - _delete_*_cascade()            deletes one record and follows its links
+                                    to reverse the others
+
+SCHEMA MIGRATIONS
+-------------------
+init_db() runs on every app start and brings whatever database file exists
+up to the current schema, one small versioned step at a time (the
+_migrate_* functions). This means updating the app to a newer version never
+requires the shop owner to do anything manually - their existing data file
+is upgraded in place, with an automatic backup taken first (see
+_backup_before_schema_migration).
+
+The rest of the file is grouped by feature with "# --- Section ---" headers
+(Auth, Partners, Phones, Bank Accounts, Cash Book, Accounts, Reports, ...) -
+search for "# ---" to jump between them.
+"""
+
 from __future__ import annotations
 
 import json
@@ -83,10 +128,32 @@ USER_SCOPED_TABLES = (
 
 
 def get_connection():
+    """Open one connection to the CRM's database file.
+
+    Two settings here matter a lot for a threaded Flask app like this one,
+    where a single page load fires several API calls in parallel (each on
+    its own connection) and a background thread does hourly auto-backups:
+
+    - timeout=30: by default SQLite gives up and raises "database is
+      locked" after just 5 seconds if another connection is mid-write.
+      30 seconds means a connection *waits* for the other one to finish
+      instead of failing outright — this is what was causing the
+      intermittent "Database busy, please retry" errors during things
+      like signup (which writes the new user, then immediately triggers a
+      backup on another connection).
+    - journal_mode=WAL: SQLite's default journal mode locks the *entire*
+      file during a write, blocking every other connection (even ones that
+      only want to read). WAL mode lets reads keep happening concurrently
+      with a write, which is the common case here (several GETs firing
+      alongside one POST) and removes most lock contention outright rather
+      than just waiting it out.
+    """
     DB_PATH.parent.mkdir(parents=True, exist_ok=True)
-    conn = sqlite3.connect(DB_PATH)
+    conn = sqlite3.connect(DB_PATH, timeout=30)
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA foreign_keys = ON")
+    conn.execute("PRAGMA journal_mode = WAL")
+    conn.execute("PRAGMA busy_timeout = 30000")
     return conn
 
 
@@ -653,6 +720,12 @@ def _record_ledger_link(
     conn, user_id, source_type, source_id, *,
     cash_book_entry_id=None, account_entry_id=None, bank_transaction_id=None,
 ):
+    """Remember that a cash-book/account/bank row belongs to one real-world
+    event (source_type + source_id, e.g. ("phone_sale", 42)), so it can be
+    found and reversed later if that event is edited or deleted. This is the
+    core building block of the ledger sync engine described at the top of
+    this file.
+    """
     conn.execute(
         """
         INSERT INTO ledger_links (
@@ -678,6 +751,12 @@ def _insert_account_entry(conn, account_id, entry_type, amount, note, *, linked_
 
 
 def _delete_account_entry_raw(conn, entry_id):
+    """Delete one account (khata) entry and clear every other table's
+    pointer to it first, so nothing is left referencing a row that no
+    longer exists. "Raw" means this does NOT reverse cash book/bank
+    entries linked to the same event - callers that need the full
+    reversal use _reverse_ledger_for_source() instead.
+    """
     if entry_id:
         conn.execute(
             "UPDATE phones SET purchase_account_entry_id = NULL WHERE purchase_account_entry_id = ?",
@@ -707,6 +786,9 @@ def _delete_account_entry_raw(conn, entry_id):
 
 
 def _delete_cash_book_raw(conn, user_id, entry_id):
+    """Same idea as _delete_account_entry_raw() but for a cash book entry:
+    clear every pointer to it, then delete the row itself.
+    """
     if entry_id:
         conn.execute(
             "UPDATE phones SET purchase_cash_book_entry_id = NULL WHERE purchase_cash_book_entry_id = ?",
@@ -748,7 +830,15 @@ def _delete_bank_tx_raw(conn, tx_id):
 
 
 def _reverse_ledger_for_source(conn, user_id, source_type, source_id):
-    """Remove all cash book, account, and bank rows linked to a source record."""
+    """Undo everything that was created for one event.
+
+    Looks up every ledger_links row recorded for (source_type, source_id)
+    by _record_ledger_link(), and deletes the cash book / account / bank
+    entries they point to. This is what makes "delete a phone sale" (or
+    edit one in a way that changes its money side) safe: the linked
+    entries elsewhere in the books get cleaned up automatically instead of
+    being left behind as orphans that would make totals wrong.
+    """
     links = conn.execute(
         """
         SELECT * FROM ledger_links
@@ -795,7 +885,14 @@ def _create_cash_book_synced(
     conn, user_id, data, source_type=None, source_id=None, *,
     account_entry_type=None, link_account=True,
 ):
-    """Create cash book entry with linked account/bank rows and ledger tracking."""
+    """Create one cash book (physical cash) entry, and - depending on
+    payment_source/account_id - also create the matching bank transaction
+    and/or account (khata) entry that goes with it, linking all of them
+    together via _record_ledger_link() so they can be found and reversed
+    as a group later. This is the function almost every "money moved"
+    action in the app funnels through, rather than each caller inserting
+    raw cash_book_entries rows by hand.
+    """
     entry_type = data["entry_type"]
     if entry_type not in CASH_BOOK_TYPES:
         raise ValueError("Invalid entry type")
@@ -883,7 +980,11 @@ def _create_account_entry_synced(
     source_type=None, source_id=None, payment_source="", bank_account_id=None,
     mirror_cash_book=False, cash_book_entry_type="in",
 ):
-    """Create account entry; optionally mirror to cash book with full linking."""
+    """Create one account (khata) entry - and, if mirror_cash_book=True,
+    also create the matching cash book entry (e.g. a "wasool" collection
+    both reduces what a customer owes AND adds cash to the till), linking
+    the two so a later delete/edit reverses both sides together.
+    """
     account_entry_id = _insert_account_entry(conn, account_id, entry_type, amount, note)
     cash_book_entry_id = None
     bank_tx_id = None
@@ -1444,6 +1545,12 @@ def get_auth_config(conn, user_id=None):
 
 
 def verify_login(conn, username, password):
+    """Check a username/password against the stored hash. Returns the user
+    row on success, None on failure. Passwords are never stored as plain
+    text - check_password_hash compares against a one-way hash created by
+    register_user()'s generate_password_hash() call, so even someone with
+    direct access to the database file can't read anyone's actual password.
+    """
     row = conn.execute(
         "SELECT * FROM users WHERE username = ? COLLATE NOCASE", (username.strip(),)
     ).fetchone()
@@ -2200,6 +2307,17 @@ def _validate_phone_payments(conn, user_id, data, status):
 
 
 def create_phone(conn, user_id, data):
+    """Add a new phone to inventory, and post whatever ledger entries its
+    starting status implies:
+      - status "Bought"/"In Repair" -> posts a purchase entry (money owed
+        to/paid to the supplier).
+      - status "Sold" -> posts BOTH a purchase entry (how the shop got the
+        phone) and a sale entry (money owed by/received from the buyer) in
+        the same call, since a phone entered as already-sold still needs a
+        purchase record for accurate profit/stock accounting.
+    See _post_purchase_ledger / _post_sale_ledger for what "posts a ledger
+    entry" actually creates.
+    """
     if not conn.in_transaction:
         # Grab SQLite's write lock before the duplicate-IMEI check runs, so two
         # near-simultaneous saves (two staff, two tabs) can't both pass the
@@ -2295,6 +2413,13 @@ def create_phones_bulk(conn, user_id, data):
 
 
 def update_phone(conn, user_id, phone_id, data):
+    """Edit a phone's details and, if its status or money fields changed in
+    a way that affects the books, reverse the old ledger entries and post
+    new ones (see the diffing further down that compares old vs new
+    purchase/sale amounts). Guards against two illegal status transitions
+    (see the two ValueError checks below) and against two people editing
+    the same phone at once (see the locking comment right below).
+    """
     if not conn.in_transaction:
         # Grab the write lock before reading the phone's current status, not just
         # for IMEI changes — two near-simultaneous status-changing edits (e.g. two
@@ -2700,6 +2825,11 @@ def list_return_logs(conn, user_id, return_type=None):
 
 
 def process_purchase_return(conn, user_id, data):
+    """Send a phone the shop bought back to its supplier: marks it
+    "Returned to Supplier" and posts a refund entry (what the shop gets
+    back), defaulting the refund to whatever was already paid unless a
+    different amount is given.
+    """
     if not conn.in_transaction:
         # Same read-then-write race as update_phone: this checks the phone's
         # status before flipping it and posting a refund, so two near-simultaneous
@@ -2799,6 +2929,10 @@ def process_purchase_return(conn, user_id, data):
 
 
 def process_sale_return(conn, user_id, data):
+    """A customer returns a phone they bought: puts the phone back into
+    saleable inventory and posts a refund entry (what the shop pays back),
+    the mirror image of process_purchase_return() above.
+    """
     if not conn.in_transaction:
         # Same read-then-write race as update_phone: this checks phone["status"]
         # == "Sold" before flipping it back and posting a refund, so two
@@ -3442,6 +3576,12 @@ def cash_in_hand_balance(conn, user_id):
 # --- Dashboard ---
 
 def compute_dashboard(conn, user_id):
+    """Build the headline numbers shown on the Overview page (stock worth,
+    profit, cash in hand, total owed to/by the shop, etc). Everything here
+    is computed fresh from the phones/accounts/cash-book tables each call -
+    there is no separate "totals" table to keep in sync, so these numbers
+    can never drift out of agreement with the underlying ledger.
+    """
     settings = get_user_settings(conn, user_id)
     partners = list_partners(conn, user_id)
     total_investment = sum(p["capital"] for p in partners)
@@ -3622,6 +3762,11 @@ def get_account(conn, user_id, account_id):
 
 
 def create_account(conn, user_id, data):
+    """Create a new customer/supplier (khata) account. If `opening_balance`
+    is given (and > 0), post it as a starting account_entries row dated
+    now, so a person who already owed money (or was owed money) before the
+    shop started using this CRM has that reflected immediately instead of
+    starting every account at zero."""
     name = (data.get("name") or "").strip()
     if not name:
         raise ValueError("Account name is required")
@@ -3635,7 +3780,21 @@ def create_account(conn, user_id, data):
         "INSERT INTO accounts (name, contact, user_id) VALUES (?, ?, ?)",
         (name, data.get("contact", ""), user_id),
     )
-    return get_account(conn, user_id, cursor.lastrowid)
+    account_id = cursor.lastrowid
+
+    opening_balance = data.get("opening_balance")
+    if opening_balance:
+        try:
+            amount = round(float(opening_balance), 2)
+        except (TypeError, ValueError):
+            amount = 0
+        if amount > 0:
+            entry_type = data.get("opening_balance_type") or "credit"
+            if entry_type not in ("credit", "debit"):
+                entry_type = "credit"
+            _insert_account_entry(conn, account_id, entry_type, amount, "Opening balance")
+
+    return get_account(conn, user_id, account_id)
 
 
 def update_account(conn, user_id, account_id, data):

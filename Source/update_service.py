@@ -49,10 +49,14 @@ _state: dict[str, Any] = {
 
 
 def get_current_version() -> str:
+    """The version number of the app that is actually running right now."""
     return _read_local_version()
 
 
 def _read_local_version() -> str:
+    """Read the VERSION file bundled at build time. In a frozen (PyInstaller)
+    build it lives inside the app's bundled resources (sys._MEIPASS); when
+    running from source it's just the VERSION file next to this script."""
     if getattr(sys, "frozen", False):
         ver_path = Path(sys._MEIPASS) / "VERSION"
         if ver_path.is_file():
@@ -63,6 +67,8 @@ def _read_local_version() -> str:
 
 
 def version_tuple(version: str) -> tuple[int, ...]:
+    """Turn "2.4.11" into (2, 4, 11) so versions can be compared numerically
+    instead of as strings (string comparison would wrongly say "2.9" > "2.10")."""
     parts: list[int] = []
     for piece in (version or "").strip().split("."):
         digits = "".join(ch for ch in piece if ch.isdigit())
@@ -72,6 +78,9 @@ def version_tuple(version: str) -> tuple[int, ...]:
 
 
 def is_newer_version(remote: str, current: str) -> bool:
+    """True if the manifest's version is ahead of what's installed. Falls
+    back to a plain string inequality if either version string doesn't
+    parse as numeric, so a weird version string never crashes the check."""
     if not remote:
         return False
     try:
@@ -81,10 +90,14 @@ def is_newer_version(remote: str, current: str) -> bool:
 
 
 def is_frozen_build() -> bool:
+    """True only for a compiled customer copy (PyInstaller), never when
+    running from source — auto-updates only make sense for customer builds."""
     return bool(getattr(sys, "frozen", False))
 
 
 def platform_key() -> str | None:
+    """Which key this machine should look up in the manifest's "downloads"
+    map (windows / mac_intel / mac_arm64), or None on an unsupported OS."""
     if sys.platform == "win32":
         return "windows"
     if sys.platform == "darwin":
@@ -96,27 +109,38 @@ def platform_key() -> str | None:
 
 
 def _http_get_text(url: str, timeout: int = 12) -> str:
+    """Plain GET request with a short timeout — update checks must never
+    hang the app if the customer has no internet or GitHub is unreachable."""
     req = urllib.request.Request(url, headers={"User-Agent": _USER_AGENT})
     with urllib.request.urlopen(req, timeout=timeout) as resp:
         return resp.read().decode("utf-8").strip()
 
 
 def _http_get_json(url: str, timeout: int = 12) -> dict[str, Any]:
+    """Same as _http_get_text() but parses the response as JSON (the manifest format)."""
     text = _http_get_text(url, timeout=timeout)
     return json.loads(text)
 
 
 def _set_state(**kwargs) -> None:
+    """Update the shared install-progress state (status/progress/message)
+    behind a lock, since it's written from the background download thread
+    and read from the web request thread that polls it for the progress bar."""
     with _state_lock:
         _state.update(kwargs)
 
 
 def get_update_state() -> dict[str, Any]:
+    """Snapshot of the current update-install progress, polled by the
+    Settings page's progress bar while an update is downloading/installing."""
     with _state_lock:
         return dict(_state)
 
 
 def _pick_download(manifest: dict[str, Any]) -> dict[str, Any] | None:
+    """Find the right download entry for this machine's OS/architecture in
+    the manifest, falling back to a universal Mac build if this Mac's exact
+    architecture isn't listed separately."""
     downloads = manifest.get("downloads") or {}
     key = platform_key()
     if not key:
@@ -129,6 +153,9 @@ def _pick_download(manifest: dict[str, Any]) -> dict[str, Any] | None:
 
 
 def fetch_manifest(url: str | None = None) -> dict[str, Any] | None:
+    """Download and parse version.json from the public releases repo.
+    Returns None on any network/parse failure rather than raising, since a
+    failed update check should be invisible to the shop owner, not a crash."""
     manifest_url = (url or DEFAULT_MANIFEST_URL).strip()
     if not manifest_url:
         return None
@@ -142,6 +169,11 @@ def fetch_manifest(url: str | None = None) -> dict[str, Any] | None:
 
 
 def check_for_updates() -> dict[str, Any]:
+    """The main entry point the Settings page calls to check for updates.
+    Tries the modern JSON manifest first; if that's unreachable, falls back
+    to the old plain-text VERSION file (LEGACY_VERSION_URL) so very old
+    customer builds that predate the manifest format still get a "new
+    version available" notice, even without a working auto-install."""
     current = _read_local_version()
     manifest = fetch_manifest()
     remote_version = None
@@ -186,6 +218,9 @@ def check_for_updates() -> dict[str, Any]:
 
 
 def _updates_dir() -> Path:
+    """Scratch folder for downloaded update zips/staging files — inside the
+    customer's Data folder when frozen, or the OS temp dir when running
+    from source (where customer_data_dir() returns None)."""
     data = customer_data_dir()
     if data:
         path = data / "Updates"
@@ -196,6 +231,10 @@ def _updates_dir() -> Path:
 
 
 def _resolve_target() -> dict[str, Any]:
+    """Figure out where the currently-installed app lives on disk and what
+    its launcher executable is called, so the updater knows exactly what to
+    replace. Raises on any OS other than Windows/macOS (Linux auto-update
+    isn't supported)."""
     install = customer_install_dir()
     if sys.platform == "win32":
         app_dir = install / "Phone Reseller CRM"
@@ -219,6 +258,9 @@ def _resolve_target() -> dict[str, Any]:
 
 
 def _download_file(url: str, dest: Path) -> None:
+    """Stream the update zip to disk in chunks (not all at once — these
+    files can be tens of MB), updating the shared progress state as it goes
+    so the Settings page's progress bar can show real percentage."""
     req = urllib.request.Request(url, headers={"User-Agent": _USER_AGENT})
     with urllib.request.urlopen(req, timeout=120) as resp:
         total = int(resp.headers.get("Content-Length") or 0)
@@ -236,6 +278,10 @@ def _download_file(url: str, dest: Path) -> None:
 
 
 def _find_payload_root(staging: Path, kind: str) -> Path:
+    """Find the actual app folder/bundle inside the extracted update zip -
+    release zips are expected to contain it at the top level, but this also
+    searches subfolders in case a release was zipped with an extra wrapper
+    directory."""
     if kind == "windows_onedir":
         name = "Phone Reseller CRM"
         direct = staging / name
@@ -253,6 +299,14 @@ def _find_payload_root(staging: Path, kind: str) -> Path:
 
 
 def _spawn_windows_updater(new_app_dir: Path, target: dict[str, Any], parent_pid: int) -> Path:
+    """Write and launch a helper .bat script that swaps the old app folder
+    for the new one and relaunches the app. This can't happen from inside
+    this process: Windows won't let you delete/replace a running .exe's own
+    folder, so the swap has to happen from a separate process after this one
+    exits (the script polls `tasklist` for parent_pid to know when that's
+    safe). The script also keeps a backup and rolls back automatically if
+    the new folder turns out to be missing its launcher, so a bad download
+    can't leave the customer with no working app at all."""
     install = target["install_dir"]
     app_dir = target["app_dir"]
     launcher = target["launcher"]
@@ -306,6 +360,10 @@ del /f /q "%~f0"
 
 
 def _spawn_mac_updater(new_app_bundle: Path, target: dict[str, Any], parent_pid: int) -> Path:
+    """macOS equivalent of _spawn_windows_updater() above: a helper shell
+    script (using `kill -0` to poll whether the old process has exited)
+    swaps the .app bundle and relaunches it, with the same backup-and-
+    rollback safety net if the downloaded bundle looks broken."""
     install = target["install_dir"]
     app_bundle = target["app_bundle"]
     launcher_rel = "Contents/MacOS/PhoneResellerCRM"
@@ -355,6 +413,11 @@ rm -f "$0"
 
 
 def _apply_downloaded_update(zip_path: Path, target: dict[str, Any]) -> None:
+    """Unzip the downloaded update, fix up file permissions the zip format
+    doesn't preserve, hand off to the platform-specific helper script to do
+    the actual swap-and-relaunch, then exit this process immediately
+    (os._exit, not a normal return) so the helper script's wait-for-parent-
+    to-exit check succeeds."""
     staging = _updates_dir() / "staging"
     if staging.exists():
         shutil.rmtree(staging, ignore_errors=True)
@@ -389,6 +452,12 @@ def _apply_downloaded_update(zip_path: Path, target: dict[str, Any]) -> None:
 
 
 def _install_worker(download_url: str) -> None:
+    """Runs in a background thread (started by start_install() below): does
+    the actual download + apply, updating _state as it progresses so the
+    web UI's polling can show a live progress bar. Any exception here is
+    caught and stored in _state["error"] instead of crashing the thread
+    silently, since an uncaught background-thread exception would otherwise
+    just vanish with no feedback to the shop owner."""
     try:
         target = _resolve_target()
         zip_path = _updates_dir() / "update-download.zip"
@@ -403,6 +472,10 @@ def _install_worker(download_url: str) -> None:
 
 
 def start_install(download_url: str | None = None) -> dict[str, Any]:
+    """Kick off an update install in the background and return immediately
+    (the web request that triggers this can't block for the whole download).
+    Refuses to start a second install if one is already in progress, and
+    refuses entirely outside a frozen customer build."""
     if not is_frozen_build():
         raise RuntimeError("In-app updates only work in the compiled customer app.")
 

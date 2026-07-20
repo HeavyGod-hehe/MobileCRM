@@ -15,6 +15,12 @@ def send_otp_email(
     smtp_password: str,
     shop_name: str = "Phone Reseller CRM",
 ) -> None:
+    """Send a one-time password-reset code to the shop owner's email via
+    Gmail SMTP, using the App Password they saved in Settings → Email
+    (a regular Gmail password won't work here — Google requires a separate
+    16-character "App Password" for SMTP sign-in). Raises ValueError with a
+    plain-English explanation on any failure, since this is shown directly
+    to the shop owner, not just logged."""
     if not smtp_user or not smtp_password:
         raise ValueError("Gmail SMTP is not configured in Settings → Email")
     msg = MIMEText(

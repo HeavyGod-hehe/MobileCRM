@@ -199,7 +199,10 @@
           <input type="number" id="f-payable-amount" min="0" step="1" value="0" class="input-field" placeholder="Amount still owed">
           <p id="borrow-hint" class="hidden text-xs text-amber-400/90 mt-1">This phone belongs to another shopkeeper until sold — the full price is recorded as what you owe them below (no cash paid out now). Settle it any time, same day or a few days later.</p>
         </div>
-        <input type="hidden" id="f-purchase-date">
+        <div>
+          <label class="block text-xs font-medium text-slate-400 mb-1.5">Purchase Date</label>
+          <input type="datetime-local" id="f-purchase-date" class="input-field">
+        </div>
         <div id="purchase-payment-section" class="col-span-2">
           <label class="block text-xs font-medium text-slate-400 mb-1.5">Purchase Payment Method *</label>
           <select id="f-purchase-payment" required class="input-field">
@@ -317,7 +320,10 @@
             </div>
             <p class="text-xs text-slate-600 mt-1">Required when receivable &gt; 0 — syncs to accounts &amp; cash book</p>
           </div>
-          <input type="hidden" id="f-sale-date">
+          <div>
+            <label class="block text-xs font-medium text-slate-400 mb-1.5">Sale Date</label>
+            <input type="datetime-local" id="f-sale-date" class="input-field">
+          </div>
           <div class="col-span-2">
             <label class="block text-xs font-medium text-slate-400 mb-1.5">Sale Payment Method *</label>
             <select id="f-sale-payment" class="input-field">

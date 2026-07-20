@@ -33,6 +33,8 @@ SOURCE_NAMES = {
 
 
 def ensure_pyinstaller() -> None:
+    """Install PyInstaller into this Python environment if it's missing, so
+    the build never fails just because a fresh machine hasn't set it up yet."""
     try:
         import PyInstaller  # noqa: F401
     except ImportError:
@@ -43,6 +45,8 @@ def ensure_pyinstaller() -> None:
 
 
 def run_build(spec: str) -> None:
+    """Run PyInstaller against one .spec file (there are two: the main app
+    and the separate FolderPicker helper .exe — see folder_picker.py)."""
     subprocess.run(
         [sys.executable, "-m", "PyInstaller", "--noconfirm", "--clean", spec],
         cwd=str(ROOT),
@@ -52,6 +56,10 @@ def run_build(spec: str) -> None:
 
 
 def write_start_here(out: Path) -> None:
+    """Drop a plain-English README into the customer's copy — this is often
+    the very first thing a non-technical shop owner opens, so it explains
+    how to launch the app and where to look if something goes wrong, without
+    assuming any Python/dev knowledge."""
     (out / "START HERE.txt").write_text(
         """Phone Reseller CRM — Customer Edition v2.3 (Windows)
 =====================================================
@@ -104,12 +112,20 @@ Support: contact your CRM vendor.
 
 
 def verify_no_source(out: Path) -> None:
+    """Safety check run at the end of every build: fail loudly if any raw
+    .py source file ended up in the customer folder. This matters most for
+    generate_key.py (the vendor-only key generator) — it must never reach a
+    customer's machine, since that would let them mint their own activation
+    keys."""
     for path in out.iterdir():
         if path.suffix == ".py" and path.name in SOURCE_NAMES:
             raise RuntimeError(f"Source file must not be shipped: {path}")
 
 
 def main() -> None:
+    """Full Windows customer-build pipeline: compile the app + FolderPicker
+    helper with PyInstaller, assemble them into OUT alongside a README and a
+    blank license.json, then verify no source code leaked into the output."""
     if sys.platform != "win32":
         raise SystemExit(
             "Windows customer builds must run on Windows.\n"

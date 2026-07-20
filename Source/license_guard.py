@@ -15,11 +15,13 @@ to paying customers.
 from __future__ import annotations
 
 import base64
+import functools
 import hashlib
 import hmac
 import json
 import os
 import shutil
+import subprocess
 import sys
 import uuid
 from pathlib import Path
@@ -86,10 +88,58 @@ LICENSE_FILE = Path(
 )
 
 
+def _raw_machine_id() -> str:
+    """Return the most STABLE identifier this OS can give us for the physical
+    machine. This intentionally avoids the network MAC address
+    (uuid.getnode()) as the primary source: Windows randomizes Wi-Fi MAC
+    addresses for privacy by default and rotates them every few days, and
+    plugging in a VPN/Docker/virtual adapter can also change which MAC
+    Python picks. If the hardware ID were based on that, an already-activated
+    customer would silently get locked out every time their MAC changed —
+    which is exactly the "asks for activation every 2-3 days" bug this
+    function fixes. Falls back to uuid.getnode() only if the OS-level ID is
+    unavailable, so the app still works (just less reliably) everywhere.
+    """
+    if sys.platform == "win32":
+        try:
+            import winreg
+
+            key = winreg.OpenKey(
+                winreg.HKEY_LOCAL_MACHINE, r"SOFTWARE\Microsoft\Cryptography"
+            )
+            with key:
+                value, _ = winreg.QueryValueEx(key, "MachineGuid")
+                if value:
+                    return str(value)
+        except OSError:
+            pass
+    elif sys.platform == "darwin":
+        try:
+            output = subprocess.run(
+                ["ioreg", "-rd1", "-c", "IOPlatformExpertDevice"],
+                capture_output=True,
+                text=True,
+                timeout=5,
+                check=True,
+            ).stdout
+            for line in output.splitlines():
+                if "IOPlatformUUID" in line:
+                    return line.split('"')[-2]
+        except (OSError, subprocess.SubprocessError, IndexError):
+            pass
+    # Last resort: the network MAC address (not stable long-term, see above).
+    return str(uuid.getnode())
+
+
+@functools.lru_cache(maxsize=1)
 def get_hardware_id() -> str:
-    """Return a stable, human-readable hardware fingerprint for this machine."""
-    node = uuid.getnode()
-    digest = hashlib.sha256(f"crm-hw:{node}".encode()).hexdigest()
+    """Return a stable, human-readable hardware fingerprint for this machine.
+
+    Cached with lru_cache because this only needs to be computed once per
+    run (the license check calls it on every web request) and because the
+    OS lookups above (registry read / ioreg subprocess) are not free.
+    """
+    digest = hashlib.sha256(f"crm-hw:{_raw_machine_id()}".encode()).hexdigest()
     return digest[:16].upper()
 
 

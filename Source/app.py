@@ -1,3 +1,48 @@
+"""Phone Reseller CRM - main web application.
+
+BEGINNER'S MAP OF THIS FILE
+----------------------------
+This is a Flask app: a Python web server that serves HTML pages (the CRM's
+screens, in templates/*.html) and a JSON "API" that those pages call with
+JavaScript (static/ui.js) to load and save data - phones, ledger entries,
+cash book, etc.
+
+Every browser request that comes in passes through, in order:
+  1. ensure_db()       - makes sure the SQLite database file is open and
+                          migrated to the latest schema before anything else
+                          runs (see database.py for the actual schema).
+  2. require_license()  - blocks all pages/API calls until the shop owner has
+                          entered a valid activation key (see license_guard.py).
+  3. require_auth()     - blocks all pages/API calls until someone is logged
+                          in (or, on first run, redirects to account setup).
+These are Flask "before_request" hooks below - they run automatically before
+every route function, so individual routes don't need to repeat these checks.
+
+After that, routes fall into two kinds:
+  - Page routes (no "/api/" prefix) - render an HTML template, e.g. "/inventory"
+    renders templates/inventory.html. The page itself is mostly empty; the
+    real data is fetched by JavaScript calling the API routes below.
+  - API routes (prefixed "/api/...") - read/write data as JSON. These call
+    into database.py, which owns all the actual business logic (creating a
+    sale, syncing the cash book, etc.) - this file's job is just to validate
+    the incoming request and translate between HTTP and database.py's
+    plain Python functions.
+
+The file is organized into sections marked with "# --- Section Name ---"
+comments (License, Auth, Pages, Phones, Accounts, Cash Book, ...) - search
+for "# ---" to jump between them.
+
+Business-term glossary (this is a Pakistani phone reseller CRM, so some
+names use Urdu/local shop terms):
+  - "khata"  = the customer/supplier running account (a ledger of who owes
+    the shop money, and who the shop owes money to).
+  - "udhar"  = money owed on credit (not yet paid).
+  - "wasool" = a payment collected from a customer (reduces what they owe).
+  - "ledger_links" (in database.py) = the glue table that keeps a phone
+    sale/purchase, its cash book entry, and its account entry all pointing
+    at each other, so deleting/editing one correctly reverses the others.
+"""
+
 import base64
 import binascii
 import os
@@ -51,6 +96,13 @@ LICENSE_EXEMPT_ENDPOINTS = frozenset({
 
 
 def _current_user_id():
+    """Return the logged-in shop owner's user id, or None if nobody is logged in.
+
+    Every table that stores shop data (phones, accounts, cash book, ...) has
+    a user_id column, so one CRM installation could technically serve more
+    than one shop owner without their data mixing - this is how routes know
+    whose data to read/write.
+    """
     user_id = session.get("user_id")
     if not user_id:
         return None
@@ -165,6 +217,13 @@ def ensure_db():
 
 @app.before_request
 def require_license():
+    """Block every page/API call until this machine has a valid activation key.
+
+    Runs before EVERY request (Flask before_request). See license_guard.py
+    for how the key is checked - it's tied to a stable per-machine ID, not
+    the network MAC address, so it stays valid across reboots/Wi-Fi changes.
+    CRM_SKIP_LICENSE=1 exists only for automated tests, never for real use.
+    """
     if os.environ.get("CRM_SKIP_LICENSE") == "1":
         return
     if request.path.startswith("/static/"):
@@ -181,6 +240,18 @@ def require_license():
 
 @app.before_request
 def require_auth():
+    """Block pages/API calls until someone is logged in.
+
+    Two cases:
+      - No account exists yet at all (fresh install) -> everyone gets sent
+        to the signup/login page so the shop owner can create the first
+        account.
+      - An account exists but this browser session isn't logged in -> send
+        to the login page.
+    AUTH_EXEMPT_ENDPOINTS (login, signup, password reset, activation, static
+    files) are allowed through without being logged in, since you obviously
+    can't log in on a page that itself requires being logged in.
+    """
     if request.path.startswith("/static/"):
         return
     endpoint = request.endpoint or ""
@@ -208,6 +279,9 @@ def require_auth():
 
 
 # --- License ---
+# Routes for the one-time activation screen (see templates/activation.html
+# and license_guard.py). "shutdown_system" also lives here since it needs
+# to be reachable from the app's UI without being blocked by license/auth.
 
 @app.route("/activate")
 def activation_page():
@@ -248,6 +322,10 @@ def shutdown_system():
 
 
 # --- Auth ---
+# Login/signup/password-reset routes. Passwords are never stored in plain
+# text - see database.py's register_user/verify_login for the hashing.
+# Password reset uses a one-time code (OTP) emailed to the shop owner via
+# email_service.py.
 
 @app.route("/login")
 def login_page():
@@ -369,6 +447,9 @@ def logout_page():
 
 
 # --- Pages ---
+# These just render an HTML template - no data is loaded here. Each page's
+# JavaScript (loaded by templates/base.html) calls the matching "/api/..."
+# routes further down to fetch the real data after the page loads.
 
 @app.route("/")
 def today_page():
@@ -595,6 +676,10 @@ def app_version_api():
 
 
 # --- Returns ---
+# A "return" reverses part or all of a purchase or sale (customer brings a
+# phone back). This posts an opposite ledger/cash-book entry rather than
+# deleting the original, so the history stays visible - see database.py's
+# process_purchase_return / process_sale_return.
 
 @app.route("/api/returns", methods=["GET"])
 def list_returns_api():
@@ -641,6 +726,9 @@ def sale_return_inventory_api():
 
 
 # --- Billing ---
+# Sale invoices for printing/WhatsApp (static/whatsapp.js). Invoices are
+# print-only records here - the actual sale/inventory change already
+# happened through the Phones API; billing just formats a receipt for it.
 
 @app.route("/api/billing/inventory")
 def billing_inventory_api():
@@ -697,6 +785,8 @@ def billing_phone_api(phone_id):
 
 
 # --- Purchase Invoices ---
+# Same idea as Billing, but for what the shop bought (from suppliers)
+# instead of what it sold.
 
 @app.route("/api/purchase-invoice/inventory")
 def purchase_invoice_inventory_api():
@@ -749,6 +839,11 @@ def create_purchase_invoice_api():
 
 
 # --- Phones ---
+# The core inventory: every phone the shop has bought, sold, or is holding.
+# Creating/updating/deleting a phone automatically keeps the cash book and
+# accounts (khata) ledger in sync - see database.py's create_phone /
+# update_phone / delete_phone for the actual sync logic (this is the part
+# of the app that has the most business rules).
 
 @app.route("/api/phones", methods=["GET"])
 def list_phones_api():
@@ -917,6 +1012,10 @@ def delete_phone_expense(phone_id, expense_id):
 
 
 # --- Overview / Dashboard ---
+# Summary numbers shown on the Today / Overview pages: stock worth, profit,
+# how much is owed (udhar), cash in hand. These are all *calculated* from
+# the phones/accounts/cash-book tables, not stored separately - so they're
+# always consistent with the underlying ledger.
 
 @app.route("/api/overview")
 def overview_api():
@@ -1122,6 +1221,9 @@ def browse_folder_api():
 
 
 # --- Partners ---
+# Business partners who share ownership/investment in the shop - tracks
+# each partner's invested amount and profit reinvestment/withdrawals
+# separately from regular customer/supplier accounts.
 
 @app.route("/api/partners", methods=["GET"])
 def list_partners_api():
@@ -1199,6 +1301,8 @@ def side_investment_api():
 
 
 # --- Fixed Expenses ---
+# Recurring costs (shop rent, staff salary, etc.) that post straight to the
+# cash book as an outgoing entry, separate from per-phone expenses.
 
 @app.route("/api/fixed-expenses", methods=["GET"])
 def list_fixed_expenses_api():
@@ -1230,6 +1334,8 @@ def delete_fixed_expense_api(expense_id):
 
 
 # --- Bank Accounts ---
+# Separate from the cash book (physical cash) - tracks money sitting in the
+# shop's actual bank account(s) and each deposit/withdrawal against them.
 
 @app.route("/api/banks", methods=["GET"])
 def list_banks_api():
@@ -1344,6 +1450,10 @@ def delete_bank_transaction_api(bank_id, tx_id):
 
 
 # --- Cash Book ---
+# The shop's day-to-day physical cash ledger (money in vs money out). Most
+# entries here are created automatically by other actions (a sale, an
+# expense, a wasool/collection) rather than typed in directly - see the
+# "ledger_links" glossary note at the top of this file.
 
 @app.route("/api/cash-book", methods=["GET"])
 def list_cash_book_api():
@@ -1403,6 +1513,8 @@ def delete_cash_book_entry_api(entry_id):
 
 
 # --- Journal Vouchers ---
+# Manual, free-form ledger entries for anything that doesn't fit the normal
+# sale/purchase/expense flows (accounting adjustments, corrections, etc.).
 
 @app.route("/api/journal-vouchers", methods=["GET"])
 def list_journal_vouchers_api():
@@ -1445,6 +1557,9 @@ def expense_categories_api():
 
 
 # --- Accounts ---
+# The khata: customer and supplier running accounts. Each account has a
+# statement of entries (debit/credit) that nets out to how much is owed
+# to/by that person - this is what "udhar" tracking is built on.
 
 @app.route("/api/accounts", methods=["GET"])
 def list_accounts_api():
@@ -1580,6 +1695,9 @@ def delete_entry_api(account_id, entry_id):
 
 
 # --- Reports ---
+# Read-only lookups/summaries: find a phone by IMEI, list customers who owe
+# money (recovery), expense breakdowns, and the day book (a chronological
+# log of everything that happened on a given day).
 
 @app.route("/find-imei")
 def find_imei_page():
@@ -1638,6 +1756,8 @@ def day_book_api():
 
 
 # --- Backup ---
+# Manual "download my data" export - automatic scheduled backups are
+# handled separately by backup_service.py.
 
 @app.route("/api/backup/export")
 def backup_export():

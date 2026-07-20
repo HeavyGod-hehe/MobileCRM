@@ -44,6 +44,7 @@ SOURCE_NAMES = {
 
 
 def ensure_pyinstaller() -> None:
+    """Install PyInstaller into this Python environment if it's missing."""
     try:
         import PyInstaller  # noqa: F401
     except ImportError:
@@ -54,6 +55,8 @@ def ensure_pyinstaller() -> None:
 
 
 def run_build(spec: str, arch: str) -> None:
+    """Run PyInstaller for one architecture slice, using arch-specific env
+    vars the .spec file reads to pick the right settings for that chip."""
     env = {
         **os.environ,
         "CRM_BUILD_PLATFORM": "mac",
@@ -69,6 +72,9 @@ def run_build(spec: str, arch: str) -> None:
 
 
 def is_macho(path: Path) -> bool:
+    """True if `path` is a compiled Mac binary (Mach-O format), as opposed
+    to a plain data/text file — used to decide which files inside the app
+    bundle need architecture-merging (merge_macho_binary) versus a plain copy."""
     try:
         result = subprocess.run(
             ["file", "-b", str(path)],
@@ -82,6 +88,10 @@ def is_macho(path: Path) -> bool:
 
 
 def merge_macho_binary(arm_path: Path, intel_path: Path, out_path: Path) -> None:
+    """Fuse an arm64 build and an x86_64 build of the SAME binary into one
+    "universal2" file (via Apple's `lipo` tool) that runs natively on both
+    chip types — this is what makes the "Universal Mac" build work without
+    needing Rosetta translation."""
     out_path.parent.mkdir(parents=True, exist_ok=True)
     subprocess.run(
         ["lipo", "-create", str(arm_path), str(intel_path), "-output", str(out_path)],
@@ -91,6 +101,11 @@ def merge_macho_binary(arm_path: Path, intel_path: Path, out_path: Path) -> None
 
 
 def merge_app_bundles(arm_app: Path, intel_app: Path, out_app: Path) -> None:
+    """Build the universal .app bundle: start from a full copy of the arm64
+    bundle (folder structure, resources, Info.plist), then walk every file
+    and replace the compiled binaries with a merged universal2 version
+    (via merge_macho_binary). Non-binary files (templates, static assets)
+    are identical between architectures, so they're left as plain copies."""
     if out_app.exists():
         shutil.rmtree(out_app)
     shutil.copytree(arm_app, out_app, symlinks=True)
@@ -108,6 +123,9 @@ def merge_app_bundles(arm_app: Path, intel_app: Path, out_app: Path) -> None:
 
 
 def verify_universal(app_binary: Path) -> None:
+    """Sanity check after merging: fail loudly if the merged binary doesn't
+    actually contain both architecture slices, instead of silently shipping
+    a broken universal build that only works on one chip type."""
     result = subprocess.run(
         ["lipo", "-info", str(app_binary)],
         capture_output=True,
@@ -131,6 +149,9 @@ def _python_for_arch(arch: str) -> list[str]:
 
 
 def _build_to_temp(arch: str) -> Path:
+    """Build one architecture's .app into a throwaway temp folder (used
+    only as an intermediate step for build_universal_copy — the single-arch
+    build_mac_copy() below writes straight to the real output folder instead)."""
     with tempfile.TemporaryDirectory(prefix=f"crm-mac-{arch}-") as tmp:
         tmp_path = Path(tmp)
         out = tmp_path / "out"
@@ -150,6 +171,11 @@ def build_universal_copy(
     arm64_app: Path | None = None,
     x86_64_app: Path | None = None,
 ) -> Path:
+    """Build (or reuse two prebuilt) arm64 + x86_64 copies and fuse them
+    into one universal2 app. Building both from scratch only works if this
+    Mac can run both architectures natively — pass arm64_app/x86_64_app to
+    skip straight to merging when they were built elsewhere (e.g. two
+    separate CI runners, one per chip)."""
     if sys.platform != "darwin":
         raise SystemExit(
             "macOS customer builds must run on macOS.\n"
@@ -334,6 +360,9 @@ Support: contact your CRM vendor.
 
 
 def verify_no_source(out: Path) -> None:
+    """Safety check run at the end of every build: fail loudly if any raw
+    .py source file (especially generate_key.py, the vendor-only key
+    generator) ended up in the customer folder."""
     for path in out.iterdir():
         if path.suffix == ".py" and path.name in SOURCE_NAMES:
             raise RuntimeError(f"Source file must not be shipped: {path}")
@@ -366,6 +395,11 @@ def build_mac_copy(
     arm64_app: Path | None = None,
     x86_64_app: Path | None = None,
 ) -> Path:
+    """Full single-architecture (or universal, delegated to
+    build_universal_copy) Mac customer-build pipeline: compile with
+    PyInstaller, verify the binary is actually the requested architecture,
+    assemble the .app + FolderPicker + README + quarantine-fix script, then
+    verify no source code leaked into the output."""
     if sys.platform != "darwin":
         raise SystemExit(
             "macOS customer builds must run on macOS.\n"
@@ -415,6 +449,8 @@ def build_mac_copy(
 
 
 def main() -> None:
+    """CLI entry point — see the module docstring at the top of this file
+    for the exact commands (one per architecture)."""
     parser = argparse.ArgumentParser(description="Build Mac Customer Copy")
     parser.add_argument(
         "--arch",

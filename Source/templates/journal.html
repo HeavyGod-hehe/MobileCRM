@@ -11,7 +11,6 @@
 <section class="glass-card rounded-xl p-5 mb-8">
   <p class="text-xs font-semibold uppercase tracking-wider text-slate-500 mb-4">New Settlement</p>
   <form id="jv-form" class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
-    <input type="hidden" id="jv-date">
     <div>
       <label class="block text-xs font-medium text-slate-400 mb-1.5">Reference #</label>
       <input type="text" id="jv-ref" class="input-field" placeholder="JV-001">
@@ -19,6 +18,10 @@
     <div>
       <label class="block text-xs font-medium text-slate-400 mb-1.5">Amount *</label>
       <input type="number" id="jv-amount" class="input-field" min="1" step="1" required placeholder="0">
+    </div>
+    <div>
+      <label class="block text-xs font-medium text-slate-400 mb-1.5">Date</label>
+      <input type="date" id="jv-date" class="input-field">
     </div>
     <div>
       <label class="block text-xs font-medium text-slate-400 mb-1.5">Who is settling the debt (Debit) *</label>
@@ -36,7 +39,7 @@
     </div>
     <div class="sm:col-span-2 lg:col-span-3">
       <label class="block text-xs font-medium text-slate-400 mb-1.5">Narration</label>
-      <input type="text" id="jv-narration" class="input-field" placeholder="e.g. Wasay paid Abuzer on my behalf">
+      <input type="text" id="jv-narration" class="input-field" placeholder="e.g. Ali paid Karim on my behalf">
     </div>
     <div class="sm:col-span-2 lg:col-span-3">
       <button type="submit" class="btn btn-primary btn-sm">Post Settlement</button>

@@ -1,4 +1,27 @@
-/* Shared UI utilities */
+/* Shared UI utilities — loaded on every page (see templates/base.html).
+
+BEGINNER'S MAP OF THIS FILE
+----------------------------
+Plain JavaScript (no framework/build step) that every CRM page shares:
+
+  - toast / openModal / closeModal / wireModal / bumpBadge — small generic
+    helpers used all over the app (notifications, popup forms).
+  - UI_DESIGNS + applyTheme + renderThemeGrid/Dropdown + initThemePicker —
+    the theme switcher (Settings -> Appearance). Themes are just CSS classes
+    swapped on <body> (see static/app.css) plus a value saved to
+    localStorage (THEME_KEY) so it persists across page loads.
+  - initSettingsPage (the biggest function here) — wires up every control
+    on the Settings page: shop details, backup folder picker, email/SMTP
+    config, license info, and the update-checker UI below.
+  - checkForUpdates / startUpdateInstall / pollUpdateProgress /
+    renderUpdatePanel — talk to the /api/app/... routes backed by
+    update_service.py on the server; this is the polling loop that shows a
+    live progress bar while an update downloads and installs.
+  - createSearchableAccountSelect — a reusable "type to filter" dropdown
+    used anywhere the user needs to pick a customer/supplier account.
+  - initApp — called at the bottom of every page; wires up the bits every
+    page needs (theme, modals, page-transition animation, welcome popup).
+*/
 
 const THEME_KEY = 'crm-theme';
 
@@ -114,6 +137,11 @@ function animateValue(el, end, formatter, duration = 600) {
 
 const MODE_KEY = 'crm-theme-mode';
 
+// Switch to `theme`: sets data-theme/data-layout attributes on <html>
+// (app.css keys off these to apply the right colors/layout) and remembers
+// the choice in localStorage so it survives a page reload. A few themes
+// also support a separate light/dark "mode" toggle on top of the theme
+// itself (data-mode) — that's the hasModeToggle branch below.
 function applyTheme(theme, opts) {
   opts = opts || {};
   const design = UI_DESIGNS.find(t => t.id === theme);
@@ -250,6 +278,10 @@ function addShopPhoneRow(value = '') {
   input.focus();
 }
 
+// Read an uploaded logo image, crop it to a centered square, downscale it
+// to `size`x`size` (via an off-screen <canvas>), and return it as a data:
+// URL — this keeps uploaded shop logos small and consistently sized without
+// needing a server-side image library.
 function resizeImageFileToSquareDataUrl(file, size = 200) {
   return new Promise((resolve, reject) => {
     const reader = new FileReader();
@@ -300,6 +332,10 @@ function updateBackupStatusLabel(storage) {
     : 'Last backup: never';
 }
 
+// Wires up every control on the Settings page. Guarded by `if (!authForm)
+// return` below so this is a no-op on any other page (this script is
+// shared/loaded everywhere, but the Settings-specific elements only exist
+// in templates/settings.html).
 async function initSettingsPage() {
   const authForm = document.getElementById('auth-settings-form');
   const storageForm = document.getElementById('storage-settings-form');
@@ -609,6 +645,10 @@ function collectShopPhones() {
 
 let _updatePollTimer = null;
 
+// Paint the Settings-page update section AND (if banner=true) the small
+// top-of-page banner, from one check-for-updates response (see
+// checkForUpdates() below / update_service.check_for_updates() on the
+// server). Shared by both because they show the same info in two places.
 function renderUpdatePanel(data, { banner = false } = {}) {
   const statusEl = document.getElementById('update-status-text');
   const notesEl = document.getElementById('update-notes');
@@ -667,6 +707,11 @@ function renderUpdatePanel(data, { banner = false } = {}) {
   }
 }
 
+// Called every second (see initUpdateUi below) once an install has
+// started, to move the progress bar. Talks to the SAME backend state that
+// update_service.py's _install_worker() thread updates as it downloads/
+// extracts/applies the update, so this is effectively watching that
+// background thread's progress from the browser.
 async function pollUpdateProgress() {
   try {
     const state = await apiFetch('/api/update/status');
@@ -702,6 +747,9 @@ async function pollUpdateProgress() {
   } catch (_) {}
 }
 
+// Kicks off the actual download+install (see /api/update/install ->
+// update_service.start_install(), which runs it on a background thread
+// server-side) and starts polling for progress every 600ms.
 async function startUpdateInstall() {
   if (!confirm('Install the new version now?\n\n• The app will close for about a minute\n• It will reopen automatically\n• Your shop data (Data folder) is kept safe')) {
     return;
@@ -720,6 +768,10 @@ async function startUpdateInstall() {
   }
 }
 
+// Asks the server "is there a newer version?" (see /api/update/check ->
+// update_service.check_for_updates()) and repaints the UI with the answer.
+// Called on every page load (quiet banner check) and by the explicit
+// "Check for updates" button on Settings.
 async function checkForUpdates(options = {}) {
   const { banner = false } = options;
   try {

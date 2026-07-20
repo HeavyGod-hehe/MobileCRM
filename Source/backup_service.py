@@ -54,6 +54,10 @@ def backup_user_data(user_id: int, *, force: bool = False) -> str | None:
 
 
 def backup_all_users(*, force: bool = False) -> list[str]:
+    """Run backup_user_data() for every account in this installation and
+    return the paths that were actually written (skips users with no
+    backup folder configured or with auto-backup turned off, unless
+    force=True)."""
     created: list[str] = []
     with db.db_session() as conn:
         users = conn.execute("SELECT id FROM users").fetchall()
@@ -65,6 +69,7 @@ def backup_all_users(*, force: bool = False) -> list[str]:
 
 
 def list_backup_files(user_id: int) -> list[dict]:
+    """List this user's saved backup files (for the Settings page's restore picker)."""
     with db.db_session() as conn:
         return db.list_backup_files(conn, user_id)
 
@@ -88,6 +93,7 @@ def start_auto_backup_thread() -> None:
     """Background thread — backs up every hour when a backup path is configured."""
 
     def _loop() -> None:
+        # Wait 30s before the first run so it doesn't slow down app startup.
         time.sleep(30)
         while True:
             try:
