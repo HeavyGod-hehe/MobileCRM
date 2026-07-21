@@ -4755,20 +4755,61 @@ def _restore_user_rows(conn, user_id: int) -> None:
             )
 
 
+def _snapshot_live_db(live: sqlite3.Connection, dest_path: Path) -> None:
+    """Write a consistent copy of the live database to dest_path using
+    SQLite's own backup API (never a raw file copy — see backup_service.py's
+    _snapshot_database for why a plain shutil.copy2 of a live, possibly
+    WAL-mode, possibly mid-write database file is not safe, especially on
+    Windows)."""
+    if dest_path.exists():
+        dest_path.unlink()
+    snap_conn = sqlite3.connect(str(dest_path))
+    try:
+        live.backup(snap_conn)
+    finally:
+        snap_conn.close()
+
+
+def _restore_live_db_from_snapshot(dest_path: Path) -> None:
+    """Overwrite the live database's content from a snapshot file, via the
+    backup API (not a file copy). Used only to auto-roll-back a restore that
+    failed its post-restore integrity check."""
+    snap_conn = sqlite3.connect(str(dest_path))
+    try:
+        live = get_connection()
+        try:
+            snap_conn.backup(live)
+        finally:
+            live.close()
+    finally:
+        snap_conn.close()
+
+
 def restore_database_from_backup(backup_path: str, user_id: int) -> str:
     """Restore one user's data from their own backup file, in place, without
     touching any other user's rows in the shared crm.db.
 
     Full-file replacement (the old behaviour) was wrong for a multi-user
-    database: it silently destroyed every other account's data. This does a
-    per-user logical restore instead: within a single transaction, delete
-    this user's current rows and re-insert their rows from the backup,
-    across every user-owned table in the schema (discovered dynamically,
-    see _resolve_table_ownership_paths).
-
-    If the backup predates a schema change the live app has already
-    migrated to, a scratch copy of the backup is migrated up to the current
-    schema first, so the cross-database copy always sees matching columns.
+    database: it silently destroyed every other account's data, and did it
+    with a raw shutil.copy2 straight onto the live db file, which risks a
+    locked or torn copy on Windows if anything else touches the file mid-copy.
+    This instead:
+      1. Checkpoints the WAL and takes a safety snapshot of the live db via
+         the backup API (not a file copy) before touching anything.
+      2. Migrates a scratch copy of the backup up to the current schema, if
+         it's older, so the cross-database copy below always sees matching
+         columns.
+      3. Within a single ordinary write transaction on the live db (the same
+         connection machinery — WAL + busy_timeout — every other write in
+         this app already uses, not a special-cased file swap), deletes this
+         user's current rows and re-inserts their rows from the backup,
+         across every user-owned table in the schema (discovered
+         dynamically, see _resolve_table_ownership_paths).
+      4. Verifies PRAGMA foreign_key_check and PRAGMA integrity_check both
+         come back clean before declaring success. If either fails, the live
+         db is automatically rolled back to the pre-restore snapshot and a
+         clear error is raised — the caller's data is left exactly as it was
+         before the restore was attempted, not partially changed.
     """
     with db_session() as conn:
         src = _validate_restore_source(conn, user_id, backup_path)
@@ -4778,8 +4819,6 @@ def restore_database_from_backup(backup_path: str, user_id: int) -> str:
     safety = dest.with_name(
         f"{dest.stem}.pre_restore_{datetime.now().strftime('%Y%m%d_%H%M%S')}{dest.suffix}"
     )
-    if dest.is_file():
-        shutil.copy2(dest, safety)
 
     with tempfile.TemporaryDirectory(prefix="crm_restore_") as tmp:
         migrated = Path(tmp) / "migrated_backup.db"
@@ -4794,6 +4833,10 @@ def restore_database_from_backup(backup_path: str, user_id: int) -> str:
 
         live = get_connection()
         try:
+            live.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+            if dest.is_file():
+                _snapshot_live_db(live, safety)
+
             live.execute("PRAGMA foreign_keys = OFF")
             live.execute("ATTACH DATABASE ? AS backup_db", (str(migrated),))
             try:
@@ -4806,7 +4849,19 @@ def restore_database_from_backup(backup_path: str, user_id: int) -> str:
             finally:
                 live.execute("DETACH DATABASE backup_db")
             live.execute("PRAGMA foreign_keys = ON")
+
+            fk_errors = live.execute("PRAGMA foreign_key_check").fetchall()
+            integrity = live.execute("PRAGMA integrity_check").fetchone()[0]
         finally:
             live.close()
+
+    if fk_errors or integrity != "ok":
+        if safety.is_file():
+            _restore_live_db_from_snapshot(safety)
+        raise ValueError(
+            "Restore failed its post-restore integrity check and was "
+            "automatically rolled back — your data was not changed. "
+            f"(integrity_check={integrity}, foreign_key_errors={len(fk_errors)})"
+        )
 
     return str(safety) if safety.is_file() else ""

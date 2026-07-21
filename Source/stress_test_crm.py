@@ -1437,6 +1437,80 @@ def main():
     run_test("Backup taken pre-migration restores and cleanly re-migrates after a schema bump",
               test_backup_restore_across_migration)
 
+    # --- Gap coverage: restore while another connection holds the DB open (bug #2) ---
+    #
+    # The old restore did a raw shutil.copy2 straight onto the live db file --
+    # risky if anything else has it open (locked/torn copy, worst on Windows).
+    # Restore now goes through the same WAL + busy_timeout connection every
+    # other write in this app already uses, plus an explicit WAL checkpoint
+    # and post-restore integrity check. This proves a concurrent open
+    # connection during a restore doesn't corrupt the database.
+    def test_restore_with_concurrent_open_connection():
+        with db.db_session() as conn:
+            user_id = db.register_user(
+                conn, "restore_concurrent_user", "pass1234", "", "Concurrent Shop"
+            )["user_id"]
+            acct = db.create_account(conn, user_id, {"name": "Concurrent Original", "contact": "0333"})
+            scratch = Path(tempfile.mkdtemp(prefix="crm_concurrent_backup_"))
+            db.update_storage_settings(conn, user_id, {"local_backup_path": str(scratch)})
+
+        import backup_service
+        backup_path = backup_service.backup_user_data(user_id, force=True)
+        assert backup_path
+
+        # Change data after the backup so restore has something real to revert.
+        with db.db_session() as conn:
+            conn.execute(
+                "UPDATE accounts SET name='Concurrent Changed' WHERE id=?", (acct["id"],)
+            )
+
+        # Hold an open read transaction on another connection/thread
+        # throughout the restore, simulating a request mid-read while a
+        # restore runs concurrently.
+        hold_ready = threading.Event()
+        release_hold = threading.Event()
+        holder_error = []
+
+        def _hold_open_transaction():
+            conn = db.get_connection()
+            try:
+                conn.execute("BEGIN")
+                conn.execute("SELECT COUNT(*) FROM accounts").fetchone()
+                hold_ready.set()
+                release_hold.wait(timeout=10)
+            except Exception as e:
+                holder_error.append(e)
+            finally:
+                try:
+                    conn.rollback()
+                except Exception:
+                    pass
+                conn.close()
+
+        t = threading.Thread(target=_hold_open_transaction, daemon=True)
+        t.start()
+        hold_ready.wait(timeout=5)
+        try:
+            db.restore_database_from_backup(backup_path, user_id)
+        finally:
+            release_hold.set()
+            t.join(timeout=10)
+
+        assert not holder_error, f"Concurrent reader errored: {holder_error}"
+
+        with db.db_session() as conn:
+            integrity = conn.execute("PRAGMA integrity_check").fetchone()[0]
+            assert integrity == "ok", f"DB integrity check failed after concurrent restore: {integrity}"
+            restored = conn.execute(
+                "SELECT name FROM accounts WHERE id=?", (acct["id"],)
+            ).fetchone()
+            assert restored["name"] == "Concurrent Original", (
+                "Restore did not correctly revert data despite a concurrent open connection"
+            )
+
+    run_test("Restore succeeds cleanly with a concurrent open connection (no corruption)",
+              test_restore_with_concurrent_open_connection)
+
     # --- Stress load ---
     STRESS_PHONES = 200
     STRESS_BULK = 50
