@@ -1511,6 +1511,94 @@ def main():
     run_test("Restore succeeds cleanly with a concurrent open connection (no corruption)",
               test_restore_with_concurrent_open_connection)
 
+    # --- Gap coverage: updater path resolution on Windows vs Mac (bug #3) ---
+    #
+    # _resolve_target() in update_service.py used to append "Phone Reseller
+    # CRM" onto customer_install_dir() a second time on Windows, since that
+    # helper already returns the app's own onedir folder there (unlike on
+    # Mac, where it walks back out of Contents/MacOS/ to the folder
+    # containing the .app bundle). That produced a path one directory too
+    # deep, so Windows installs could resolve an update but never apply it.
+    # This simulates both real on-disk layouts in a tmp dir (no actual
+    # install needed) and asserts the resolved app_dir/launcher/install_dir
+    # are the real, existing paths on each platform.
+    def test_update_target_resolution_windows_and_mac():
+        import update_service
+
+        original_platform = sys.platform
+        original_executable = sys.executable
+        had_frozen = hasattr(sys, "frozen")
+        original_frozen = getattr(sys, "frozen", None)
+
+        def _set_frozen(exe_path, platform):
+            sys.platform = platform
+            sys.frozen = True
+            sys.executable = str(exe_path)
+
+        def _restore():
+            sys.platform = original_platform
+            sys.executable = original_executable
+            if had_frozen:
+                sys.frozen = original_frozen
+            elif hasattr(sys, "frozen"):
+                del sys.frozen
+
+        try:
+            # --- Windows onedir layout ---
+            with tempfile.TemporaryDirectory(prefix="crm_update_win_") as tmp:
+                root = Path(tmp).resolve()
+                app_dir = root / "Phone Reseller CRM"
+                (app_dir / "_internal").mkdir(parents=True)
+                (root / "Data").mkdir()
+                exe = app_dir / "Phone Reseller CRM.exe"
+                exe.write_text("stub")
+
+                _set_frozen(exe, "win32")
+                try:
+                    target = update_service._resolve_target()
+                finally:
+                    _restore()
+
+                assert target["kind"] == "windows_onedir"
+                assert target["app_dir"] == app_dir, (
+                    f"Expected app_dir={app_dir}, got {target['app_dir']}"
+                )
+                assert target["launcher"] == exe
+                assert target["install_dir"] == root, (
+                    "install_dir should be the folder containing both the app "
+                    f"dir and Data/, got {target['install_dir']}"
+                )
+                assert target["app_dir"].is_dir() and target["launcher"].is_file(), (
+                    "Resolved Windows paths should point at real, existing paths"
+                )
+
+            # --- Mac .app bundle layout ---
+            with tempfile.TemporaryDirectory(prefix="crm_update_mac_") as tmp:
+                root = Path(tmp).resolve()
+                bundle = root / "Phone Reseller CRM.app"
+                macos_dir = bundle / "Contents" / "MacOS"
+                macos_dir.mkdir(parents=True)
+                (bundle / "Contents" / "Info.plist").write_text("<plist/>")
+                launcher = macos_dir / "PhoneResellerCRM"
+                launcher.write_text("stub")
+
+                _set_frozen(launcher, "darwin")
+                try:
+                    target = update_service._resolve_target()
+                finally:
+                    _restore()
+
+                assert target["kind"] == "mac_app"
+                assert target["app_bundle"] == bundle
+                assert target["launcher"] == launcher
+                assert target["install_dir"] == root
+                assert target["app_bundle"].is_dir() and target["launcher"].is_file()
+        finally:
+            _restore()
+
+    run_test("Updater resolves real Windows and Mac install paths (no phantom one-level-too-deep path)",
+              test_update_target_resolution_windows_and_mac)
+
     # --- Stress load ---
     STRESS_PHONES = 200
     STRESS_BULK = 50

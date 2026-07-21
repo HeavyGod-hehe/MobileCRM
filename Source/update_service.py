@@ -234,17 +234,31 @@ def _resolve_target() -> dict[str, Any]:
     """Figure out where the currently-installed app lives on disk and what
     its launcher executable is called, so the updater knows exactly what to
     replace. Raises on any OS other than Windows/macOS (Linux auto-update
-    isn't supported)."""
-    install = customer_install_dir()
+    isn't supported).
+
+    Windows note: customer_install_dir() already resolves to the PyInstaller
+    onedir app folder itself (it returns sys.executable's own parent — same
+    folder customer_data_dir() sits next to, via `.. / "Data"`). This used to
+    be treated here as if it were the folder ABOVE the app folder, then
+    "Phone Reseller CRM" was appended again — one directory too deep, so
+    app_dir/launcher pointed at a path that never existed and Windows
+    installs could never auto-update (Mac's branch below was never affected,
+    since its equivalent walk-up-out-of-the-bundle logic already lives
+    inside customer_install_dir() itself). Deliberately NOT changing
+    customer_install_dir() itself to fix this — that function also decides
+    where customer_data_dir()/DB_PATH lives, and moving it out from under
+    already-installed customers would look like their database vanished on
+    the next update. This fix is scoped to the updater's own path math only."""
     if sys.platform == "win32":
-        app_dir = install / "Phone Reseller CRM"
-        launcher = app_dir / "Phone Reseller CRM.exe"
+        app_dir = customer_install_dir()
+        launcher = Path(sys.executable).resolve()
         return {
             "kind": "windows_onedir",
-            "install_dir": install,
+            "install_dir": app_dir.parent,
             "app_dir": app_dir,
             "launcher": launcher,
         }
+    install = customer_install_dir()
     if sys.platform == "darwin":
         app_bundle = install / "Phone Reseller CRM.app"
         launcher = app_bundle / "Contents" / "MacOS" / "PhoneResellerCRM"
