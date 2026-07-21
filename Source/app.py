@@ -551,21 +551,40 @@ def purchase_invoice_page():
 def get_shop_settings_api():
     user_id = _current_user_id()
     with db.db_session() as conn:
-        return jsonify(db.get_shop_info(conn, user_id))
+        info = db.get_shop_info(conn, user_id)
+        # cash_in_hand isn't part of get_shop_info() (that's invoice
+        # letterhead data, also used when printing bills) -- read it
+        # separately here so this Settings-only field doesn't leak into the
+        # billing/purchase-invoice pages that reuse get_shop_info().
+        settings = db.get_user_settings(conn, user_id)
+        info["cash_in_hand"] = float(settings.get("cash_in_hand") or 0)
+        return jsonify(info)
 
 
 @app.route("/api/settings/shop", methods=["PUT"])
 def update_shop_settings_api():
     user_id = _current_user_id()
     data = request.get_json(force=True)
+    payload = {
+        "shop_name": data.get("shop_name", ""),
+        "shop_address": data.get("shop_address", ""),
+        "shop_phones": data.get("shop_phones", []),
+        "shop_whatsapp": data.get("shop_whatsapp", ""),
+    }
+    if "cash_in_hand" in data:
+        try:
+            cash_in_hand = float(data.get("cash_in_hand"))
+        except (TypeError, ValueError):
+            return jsonify({"error": "Cash in Hand must be a number"}), 400
+        if cash_in_hand < 0:
+            return jsonify({"error": "Cash in Hand cannot be negative"}), 400
+        payload["cash_in_hand"] = cash_in_hand
     with db.db_session() as conn:
-        db.update_user_settings(conn, user_id, {
-            "shop_name": data.get("shop_name", ""),
-            "shop_address": data.get("shop_address", ""),
-            "shop_phones": data.get("shop_phones", []),
-            "shop_whatsapp": data.get("shop_whatsapp", ""),
-        })
-        return jsonify(db.get_shop_info(conn, user_id))
+        db.update_user_settings(conn, user_id, payload)
+        info = db.get_shop_info(conn, user_id)
+        settings = db.get_user_settings(conn, user_id)
+        info["cash_in_hand"] = float(settings.get("cash_in_hand") or 0)
+        return jsonify(info)
 
 
 _LOGO_DATA_URI_RE = re.compile(r"^data:image/(png|jpeg|jpg|gif|webp);base64,(.+)$", re.DOTALL)

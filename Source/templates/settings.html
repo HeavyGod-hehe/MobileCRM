@@ -51,6 +51,11 @@
         <div id="shop-phones-list" class="space-y-2"></div>
         <button type="button" id="btn-add-phone" class="btn btn-ghost btn-sm mt-2">+ Add Phone Number</button>
       </div>
+      <div class="pt-2 border-t border-white/8">
+        <label class="block text-xs font-medium text-slate-400 mb-1.5" for="shop-info-cash-opening">Cash in Hand (Opening)</label>
+        <input type="number" id="shop-info-cash-opening" class="input-field" min="0" step="0.01" placeholder="0">
+        <p class="text-xs text-slate-500 mt-1.5">The drawer total right now — used as the starting point for Cash Book and Overview reconciliation. Only change this if you're correcting the opening balance, not for a normal sale/expense.</p>
+      </div>
       <button type="submit" class="btn btn-primary">Save Shop Details</button>
     </form>
   </section>

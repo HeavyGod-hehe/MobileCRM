@@ -356,6 +356,8 @@ async function initSettingsPage() {
     if (waEl) waEl.value = shop.shop_whatsapp || '';
     renderShopPhoneRows(shop.shop_phones || []);
     setShopLogoPreview(shop.shop_logo || '');
+    const cashEl = document.getElementById('shop-info-cash-opening');
+    if (cashEl) cashEl.value = shop.cash_in_hand ?? 0;
   } catch (_) {
     renderShopPhoneRows([]);
   }
@@ -515,12 +517,14 @@ async function initSettingsPage() {
     e.preventDefault();
     try {
       const phones = collectShopPhones();
+      const cashEl = document.getElementById('shop-info-cash-opening');
       const payload = {
         shop_name: document.getElementById('shop-info-name').value.trim(),
         shop_address: document.getElementById('shop-info-address').value.trim(),
         shop_phones: phones,
         shop_whatsapp: document.getElementById('shop-info-whatsapp')?.value.trim() || '',
       };
+      if (cashEl) payload.cash_in_hand = cashEl.value;
       await apiFetch('/api/settings/shop', {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
