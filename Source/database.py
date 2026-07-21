@@ -365,6 +365,7 @@ def _init_schema(conn) -> None:
     _migrate_returns_table(conn)
     _migrate_cash_book_account(conn)
     _migrate_journal_vouchers(conn)
+    _migrate_side_investments(conn)
     _migrate_cursor_panga(conn)
     _migrate_payment_methods(conn)
     _migrate_account_entry_payments(conn)
@@ -1242,6 +1243,33 @@ def _migrate_journal_vouchers(conn):
     )
 
 
+def _migrate_side_investments(conn):
+    """Bug #8: add_side_investment() used to link its cash/bank entry with
+    source_id=partner_id -- fine for the link itself, but since every top-up
+    a partner ever makes shares that same partner_id, a future "reverse this
+    side investment" feature calling the generic _reverse_ledger_for_source()
+    with (source_type='side_investment', source_id=partner_id) would delete
+    EVERY top-up that partner ever made, not just one. This table gives each
+    top-up its own row id to use as source_id instead, so it's unambiguous.
+    Existing ledger_links rows from before this fix (source_id=partner_id)
+    are deliberately left as-is -- there's no way to retroactively figure out
+    which individual top-up each one was -- reverse_side_investment() below
+    detects and refuses to touch those instead of guessing."""
+    conn.executescript(
+        """
+        CREATE TABLE IF NOT EXISTS side_investments (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            partner_id INTEGER NOT NULL REFERENCES partners(id),
+            amount REAL NOT NULL,
+            note TEXT NOT NULL DEFAULT '',
+            investment_date TEXT NOT NULL,
+            user_id INTEGER NOT NULL REFERENCES users(id),
+            created_at TEXT NOT NULL DEFAULT (datetime('now'))
+        );
+        """
+    )
+
+
 def _migrate_multi_user(conn):
     conn.executescript(
         """
@@ -1326,6 +1354,8 @@ def _migrate_indexes(conn):
         ("idx_journal_vouchers_user_id", "journal_vouchers", "user_id"),
         ("idx_invoices_user_id", "invoices", "user_id"),
         ("idx_purchase_invoices_user_id", "purchase_invoices", "user_id"),
+        ("idx_side_investments_user_id", "side_investments", "user_id"),
+        ("idx_side_investments_partner_id", "side_investments", "partner_id"),
     )
     for name, table, column in indexes:
         conn.execute(f"CREATE INDEX IF NOT EXISTS {name} ON {table}({column})")
@@ -1969,7 +1999,14 @@ def add_side_investment(conn, user_id, data):
     """Record a partner injecting fresh capital into the business at any
     time, separate from any specific phone purchase. Unlike reinvest_profit
     (an internal transfer of already-earned profit), this is real money
-    entering the business, so it also posts a bank/cash credit."""
+    entering the business, so it also posts a bank/cash credit.
+
+    Each call gets its own side_investments row, and THAT row's id (not the
+    partner's id) is what's used as the ledger_links source_id -- so each
+    top-up is independently identifiable and reversible (see
+    reverse_side_investment below). Using partner_id here directly would
+    mean every top-up a partner ever makes shares one identity, and
+    reversing one could reverse all of them."""
     if not conn.in_transaction:
         conn.execute("BEGIN IMMEDIATE")
     amount = float(data.get("amount") or 0)
@@ -1986,17 +2023,87 @@ def add_side_investment(conn, user_id, data):
     entry_date = _normalize_datetime(data.get("investment_date"), conn, date_only=True)
     note = data.get("note") or f"Side investment from {partner['name']}"
 
+    cursor = conn.execute(
+        """
+        INSERT INTO side_investments (partner_id, amount, note, investment_date, user_id)
+        VALUES (?, ?, ?, ?, ?)
+        """,
+        (partner_id, amount, note, entry_date, user_id),
+    )
+    investment_id = cursor.lastrowid
+
     _post_payment_transaction(
         conn, user_id, payment_method, bank_id, "in", amount, note, entry_date,
-        source_type="side_investment", source_id=partner_id,
+        source_type="side_investment", source_id=investment_id,
     )
 
     new_capital = round(partner["capital"] + amount, 2)
     update_partner(conn, user_id, partner_id, {"capital": new_capital})
     return {
         "partner": get_partner(conn, user_id, partner_id),
+        "investment_id": investment_id,
         "amount": round(amount, 2),
     }
+
+
+def reverse_side_investment(conn, user_id, investment_id):
+    """Undo exactly one side-investment top-up: reverses its cash/bank
+    ledger entry and subtracts it back off the partner's capital.
+
+    The safety check is keyed directly off ledger_links, not off whether a
+    side_investments row exists for this id -- refuses (raises ValueError)
+    unless (source_type='side_investment', source_id=investment_id) resolves
+    to EXACTLY one linked transaction. For any investment created after this
+    fix that's always true (_post_payment_transaction / _create_cash_book_synced
+    create exactly one ledger_links row per call), since its source_id is
+    this row's own unique id. For a legacy row from before this fix --
+    where source_id was the partner's own id, shared by every top-up that
+    partner ever made -- this count will usually be 0 or >1 and gets
+    refused instead of guessing which cash book entry to delete."""
+    if not conn.in_transaction:
+        conn.execute("BEGIN IMMEDIATE")
+
+    links = conn.execute(
+        """
+        SELECT * FROM ledger_links
+        WHERE user_id = ? AND source_type = 'side_investment' AND source_id = ?
+        """,
+        (user_id, investment_id),
+    ).fetchall()
+    if len(links) != 1:
+        raise ValueError(
+            "Cannot safely reverse this side investment: its ledger data is "
+            "ambiguous or missing (predates per-event tracking and may be "
+            "shared with other top-ups for this partner). Reverse the "
+            "linked Cash Book or Bank Account entry manually instead."
+        )
+
+    cb_id = links[0]["cash_book_entry_id"]
+    cb_row = conn.execute(
+        "SELECT amount FROM cash_book_entries WHERE id = ? AND user_id = ?",
+        (cb_id, user_id),
+    ).fetchone() if cb_id else None
+    if not cb_row:
+        raise ValueError("Cannot safely reverse this side investment: its cash book entry is missing")
+    amount = cb_row["amount"]
+
+    investment = conn.execute(
+        "SELECT * FROM side_investments WHERE id = ? AND user_id = ?",
+        (investment_id, user_id),
+    ).fetchone()
+    partner_id = investment["partner_id"] if investment else None
+
+    _reverse_ledger_for_source(conn, user_id, "side_investment", investment_id)
+    if investment:
+        conn.execute("DELETE FROM side_investments WHERE id = ?", (investment_id,))
+
+    if partner_id:
+        partner = get_partner(conn, user_id, partner_id)
+        if partner:
+            new_capital = round(partner["capital"] - amount, 2)
+            update_partner(conn, user_id, partner_id, {"capital": new_capital})
+
+    return {"ok": True, "reversed_amount": round(amount, 2)}
 
 
 # --- Phones ---

@@ -1,13 +1,13 @@
 # Mobile CRM - Logic Review & Stress Test Report
 
-**Generated:** 2026-07-22 04:48:49
-**Database:** `/tmp/crm_stress_bug7.db` (0.39 MB)
+**Generated:** 2026-07-22 04:54:39
+**Database:** `/tmp/crm_stress_bug8.db` (0.4 MB)
 
 ## Summary
 
 | Metric | Value |
 |--------|-------|
-| Tests passed | **38** |
+| Tests passed | **40** |
 | Tests failed | **0** |
 | Warnings | 0 |
 
@@ -17,14 +17,14 @@
 |--------|---------------|
 | Account Entries | 159 |
 | Bank Transactions | 52 |
-| Bulk Create 50 Phones Ms | 13.8 |
-| Bulk Sold 25 Phones Ms | 7.0 |
+| Bulk Create 50 Phones Ms | 12.4 |
+| Bulk Sold 25 Phones Ms | 5.2 |
 | Cash Book Entries | 421 |
 | Cash In Hand | -7099925.0 |
 | Dashboard Net Profit | 810000.0 |
 | Dashboard Stock Worth | 12375800.0 |
 | Dashboard Udhar | 1023500.0 |
-| Db Size Mb | 0.39 |
+| Db Size Mb | 0.4 |
 | Journal Vouchers | 20 |
 | Ledger Links | 392 |
 | Orphan Ledger Account Links | 0 |
@@ -33,46 +33,48 @@
 | Phones Sold | 51 |
 | Phones Total | 210 |
 | Return Logs | 2 |
-| Stress Total Ms | 138.1 |
+| Stress Total Ms | 119.8 |
 | Today Bought | 209 |
 | Today Sold | 26 |
 | Total In Bank | -2662500.0 |
 
 ## Test results
 
-- [PASS] **Purchase + udhar ledger sync** - OK (4ms)
-- [PASS] **Borrow phone ledger sync** - OK (5ms)
+- [PASS] **Purchase + udhar ledger sync** - OK (5ms)
+- [PASS] **Borrow phone ledger sync** - OK (4ms)
 - [PASS] **Sale + receivable ledger sync** - OK (4ms)
-- [PASS] **Phone expense -> cash book sync** - OK (3ms)
+- [PASS] **Phone expense -> cash book sync** - OK (4ms)
 - [PASS] **Food expense -> cash out sync** - OK (4ms)
-- [PASS] **Wasool debit -> cash in sync** - OK (4ms)
-- [PASS] **Delete phone cascades ledger** - OK (5ms)
-- [PASS] **Delete account entry cascades cash book** - OK (5ms)
+- [PASS] **Wasool debit -> cash in sync** - OK (3ms)
+- [PASS] **Delete phone cascades ledger** - OK (4ms)
+- [PASS] **Delete account entry cascades cash book** - OK (4ms)
 - [PASS] **Journal voucher create/delete** - OK (4ms)
 - [PASS] **Purchase return flow** - OK (4ms)
 - [PASS] **Sale return flow** - OK (4ms)
 - [PASS] **Today summary includes sold-as-bought** - OK (4ms)
-- [PASS] **Update phone investments (bug fix)** - OK (4ms)
+- [PASS] **Update phone investments (bug fix)** - OK (5ms)
 - [PASS] **Udhar dashboard no double-count** - OK (5ms)
 - [PASS] **Duplicate IMEI rejected** - OK (4ms)
 - [PASS] **Sale price edit re-syncs cash book** - OK (6ms)
-- [PASS] **Bulk sold udhar requires buyer account** - OK (3ms)
-- [PASS] **Fixed expense posts to cash book** - OK (3ms)
-- [PASS] **Zero cash balance + new account** - OK (5ms)
-- [PASS] **Mixed-activity ledger reconciliation (220 randomized transactions)** - OK (629ms)
-- [PASS] **Concurrent double-sell on the same phone is rejected, not double-posted** - OK (875ms)
-- [PASS] **Concurrent double-return on the same sale is rejected, not double-refunded** - OK (470ms)
-- [PASS] **Concurrent double-return on the same purchase is rejected, not double-refunded** - OK (472ms)
+- [PASS] **Bulk sold udhar requires buyer account** - OK (5ms)
+- [PASS] **Fixed expense posts to cash book** - OK (5ms)
+- [PASS] **Zero cash balance + new account** - OK (6ms)
+- [PASS] **Mixed-activity ledger reconciliation (220 randomized transactions)** - OK (688ms)
+- [PASS] **Concurrent double-sell on the same phone is rejected, not double-posted** - OK (884ms)
+- [PASS] **Concurrent double-return on the same sale is rejected, not double-refunded** - OK (473ms)
+- [PASS] **Concurrent double-return on the same purchase is rejected, not double-refunded** - OK (475ms)
 - [PASS] **Concurrent double-edit of the same phone expense stays consistent (last-write-wins, no duplicates)** - OK (15ms)
-- [PASS] **Concurrent double-delete of the same phone is idempotent (no crash, no double-reversal)** - OK (15ms)
-- [PASS] **Concurrent invoice creation gets distinct numbers (confirms existing lock holds)** - OK (11ms)
+- [PASS] **Concurrent double-delete of the same phone is idempotent (no crash, no double-reversal)** - OK (14ms)
+- [PASS] **Concurrent invoice creation gets distinct numbers (confirms existing lock holds)** - OK (9ms)
 - [PASS] **Duplicate explicit invoice number is rejected, not silently duplicated** - OK (11ms)
 - [PASS] **Invoice dedupe migration repairs pre-existing duplicates and restores uniqueness** - OK (4ms)
-- [PASS] **License activation is hardware-bound; reuse on another machine fails** - OK (12ms)
-- [PASS] **Forgot-password OTP flow end to end (SMTP transport mocked, real app logic)** - OK (2395ms)
-- [PASS] **Restore only touches the requesting user's rows, others untouched** - OK (1189ms)
-- [PASS] **Restore rejects path traversal and another user's backup file** - OK (17ms)
-- [PASS] **Backup taken pre-migration restores and cleanly re-migrates after a schema bump** - OK (626ms)
+- [PASS] **Reversing one side investment doesn't touch the partner's other top-ups** - OK (586ms)
+- [PASS] **Side investment reversal refuses ambiguous pre-fix legacy data instead of guessing** - OK (577ms)
+- [PASS] **License activation is hardware-bound; reuse on another machine fails** - OK (11ms)
+- [PASS] **Forgot-password OTP flow end to end (SMTP transport mocked, real app logic)** - OK (2341ms)
+- [PASS] **Restore only touches the requesting user's rows, others untouched** - OK (1177ms)
+- [PASS] **Restore rejects path traversal and another user's backup file** - OK (16ms)
+- [PASS] **Backup taken pre-migration restores and cleanly re-migrates after a schema bump** - OK (628ms)
 - [PASS] **Restore succeeds cleanly with a concurrent open connection (no corruption)** - OK (609ms)
 - [PASS] **Updater resolves real Windows and Mac install paths (no phantom one-level-too-deep path)** - OK (13ms)
 - [PASS] **No orphan cash ledger links** - 

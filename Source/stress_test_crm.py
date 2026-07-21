@@ -1170,6 +1170,106 @@ def main():
     run_test("Invoice dedupe migration repairs pre-existing duplicates and restores uniqueness",
               test_invoice_dedupe_migration_repairs_existing_duplicates)
 
+    # --- Gap coverage: side investment reversal is per-event, not per-partner (bug #8) ---
+    def test_side_investment_reversal_is_per_event():
+        with db.db_session() as conn:
+            u = db.register_user(conn, "side_inv_user", "pass1234", "", "Side Inv Shop")
+            si_uid = u["user_id"]
+            partner = db.create_partner(conn, si_uid, {"name": "Top-up Partner", "capital": 0})
+            partner_id = partner["id"]
+
+            first = db.add_side_investment(conn, si_uid, {
+                "partner_id": partner_id, "amount": 50000, "payment_method": "cash",
+            })
+            second = db.add_side_investment(conn, si_uid, {
+                "partner_id": partner_id, "amount": 75000, "payment_method": "cash",
+            })
+            assert first["investment_id"] != second["investment_id"], (
+                "Each side investment must get its own identity, not share the partner's id"
+            )
+
+            partner_after_both = db.get_partner(conn, si_uid, partner_id)
+            assert partner_after_both["capital"] == 125000
+
+            cb_count_before = conn.execute(
+                "SELECT COUNT(*) c FROM cash_book_entries WHERE user_id=? AND note LIKE 'Side investment%'",
+                (si_uid,),
+            ).fetchone()["c"]
+            assert cb_count_before == 2
+
+        # Reversing the FIRST top-up must only undo that one event -- the
+        # second top-up's cash book entry and capital contribution must
+        # survive untouched. This is exactly the bug: source_id used to be
+        # the partner's own id, shared by both top-ups, so reversing one
+        # could wipe out both.
+        with db.db_session() as conn:
+            result = db.reverse_side_investment(conn, si_uid, first["investment_id"])
+            assert result["reversed_amount"] == 50000
+
+            partner_after_reverse = db.get_partner(conn, si_uid, partner_id)
+            assert partner_after_reverse["capital"] == 75000, (
+                f"Expected only the reversed 50000 to come off capital, got {partner_after_reverse['capital']}"
+            )
+
+            cb_count_after = conn.execute(
+                "SELECT COUNT(*) c FROM cash_book_entries WHERE user_id=? AND note LIKE 'Side investment%'",
+                (si_uid,),
+            ).fetchone()["c"]
+            assert cb_count_after == 1, (
+                "Reversing one side investment deleted more than its own cash book entry"
+            )
+
+            still_there = conn.execute(
+                "SELECT COUNT(*) c FROM side_investments WHERE id = ?", (second["investment_id"],)
+            ).fetchone()["c"]
+            assert still_there == 1, "The other top-up's own record should be untouched"
+
+    run_test("Reversing one side investment doesn't touch the partner's other top-ups",
+              test_side_investment_reversal_is_per_event)
+
+    def test_side_investment_reversal_refuses_ambiguous_legacy_data():
+        # Simulate data from BEFORE this fix: two independent top-ups whose
+        # ledger_links both used source_id=partner_id (ambiguous -- can't
+        # tell which cash book entry belongs to which top-up). reversal must
+        # refuse instead of guessing / deleting both.
+        with db.db_session() as conn:
+            u = db.register_user(conn, "side_inv_legacy_user", "pass1234", "", "Legacy Shop")
+            lg_uid = u["user_id"]
+            partner = db.create_partner(conn, lg_uid, {"name": "Legacy Partner", "capital": 0})
+            partner_id = partner["id"]
+
+            cb1 = db._create_cash_book_synced(conn, lg_uid, {
+                "entry_type": "in", "amount": 20000, "note": "Legacy top-up 1",
+                "entry_date": "2026-01-01",
+            }, source_type="side_investment", source_id=partner_id)
+            cb2 = db._create_cash_book_synced(conn, lg_uid, {
+                "entry_type": "in", "amount": 30000, "note": "Legacy top-up 2",
+                "entry_date": "2026-01-02",
+            }, source_type="side_investment", source_id=partner_id)
+            assert cb1 and cb2
+
+            link_count = conn.execute(
+                "SELECT COUNT(*) c FROM ledger_links WHERE user_id=? AND source_type='side_investment' AND source_id=?",
+                (lg_uid, partner_id),
+            ).fetchone()["c"]
+            assert link_count == 2, "Test setup should reproduce the ambiguous legacy shape"
+
+            try:
+                db.reverse_side_investment(conn, lg_uid, partner_id)
+                raise AssertionError("Expected reversal of ambiguous legacy data to be refused")
+            except ValueError as e:
+                assert "ambiguous" in str(e).lower()
+
+            # Neither legacy cash book entry should have been touched.
+            remaining = conn.execute(
+                "SELECT COUNT(*) c FROM cash_book_entries WHERE user_id=? AND note LIKE 'Legacy top-up%'",
+                (lg_uid,),
+            ).fetchone()["c"]
+            assert remaining == 2, "Refused reversal must not delete anything"
+
+    run_test("Side investment reversal refuses ambiguous pre-fix legacy data instead of guessing",
+              test_side_investment_reversal_refuses_ambiguous_legacy_data)
+
     # --- Gap coverage: licensing lifecycle ---
     #
     # There is no license server and no deactivate/reissue endpoint in this
