@@ -1069,6 +1069,107 @@ def main():
     run_test("Concurrent invoice creation gets distinct numbers (confirms existing lock holds)",
               test_concurrent_invoice_numbering)
 
+    # --- Gap coverage: invoice numbers unique per user (bug #7) ---
+    def test_duplicate_invoice_number_rejected():
+        with db.db_session() as conn:
+            p = db.create_phone(conn, c_uid, {
+                "model": "Dup Invoice Phone", "type": "PTA", "purchase_price": 30000,
+                "status": "Sold", "sale_price": 40000,
+                "purchase_payment_method": "cash", "sale_payment_method": "cash",
+                "imei": "888800000004444",
+            })
+            phone_id = p["id"]
+            first = db.create_invoice(conn, c_uid, {
+                "customer_name": "First Buyer", "phone_id": phone_id,
+                "model": "Dup Invoice Phone", "amount": 40000,
+            })
+
+        # Simulates the real bug trigger: the billing form pre-fills
+        # invoice_number from an existing invoice when you view/reprint it
+        # (templates/billing.html), so re-submitting sends that SAME number
+        # back as an explicit value on a NEW invoice.
+        with db.db_session() as conn:
+            try:
+                db.create_invoice(conn, c_uid, {
+                    "customer_name": "Second Buyer", "phone_id": phone_id,
+                    "model": "Dup Invoice Phone", "amount": 40000,
+                    "invoice_number": first["invoice_number"],
+                })
+                raise AssertionError("Expected a duplicate explicit invoice_number to be rejected")
+            except ValueError as e:
+                assert "already exists" in str(e)
+
+        # Same check for purchase invoices.
+        with db.db_session() as conn:
+            first_pi = db.create_purchase_invoice(conn, c_uid, {
+                "supplier_name": "Dup Supplier", "model": "Dup Invoice Phone", "amount": 30000,
+            })
+        with db.db_session() as conn:
+            try:
+                db.create_purchase_invoice(conn, c_uid, {
+                    "supplier_name": "Dup Supplier 2", "model": "Dup Invoice Phone", "amount": 30000,
+                    "invoice_number": first_pi["invoice_number"],
+                })
+                raise AssertionError("Expected a duplicate explicit purchase invoice_number to be rejected")
+            except ValueError as e:
+                assert "already exists" in str(e)
+
+    run_test("Duplicate explicit invoice number is rejected, not silently duplicated",
+              test_duplicate_invoice_number_rejected)
+
+    def test_invoice_dedupe_migration_repairs_existing_duplicates():
+        # Simulate a customer database that predates this fix: temporarily
+        # drop the unique index, insert genuine duplicate rows directly
+        # (bypassing create_invoice, the same way old data already on disk
+        # would look), then run the same migration init_db() runs on every
+        # launch and confirm it repairs the duplicates and the index comes
+        # back -- proving existing customer data survives this fix cleanly.
+        with db.db_session() as conn:
+            conn.execute("DROP INDEX IF EXISTS idx_invoices_user_invoice_unique")
+            conn.execute(
+                "INSERT INTO invoices (invoice_number, customer_name, invoice_date, user_id) "
+                "VALUES (9001, 'Old Row A', date('now'), ?)", (c_uid,)
+            )
+            conn.execute(
+                "INSERT INTO invoices (invoice_number, customer_name, invoice_date, user_id) "
+                "VALUES (9001, 'Old Row B (duplicate)', date('now'), ?)", (c_uid,)
+            )
+            dupe_count = conn.execute(
+                "SELECT COUNT(*) c FROM invoices WHERE user_id=? AND invoice_number=9001", (c_uid,)
+            ).fetchone()["c"]
+            assert dupe_count == 2, "Test setup should have created a real duplicate"
+
+            db._migrate_unique_invoice_numbers(conn)
+
+            rows = conn.execute(
+                "SELECT invoice_number, customer_name FROM invoices "
+                "WHERE user_id=? AND customer_name IN ('Old Row A', 'Old Row B (duplicate)') "
+                "ORDER BY customer_name",
+                (c_uid,),
+            ).fetchall()
+            numbers = {r["customer_name"]: r["invoice_number"] for r in rows}
+            assert numbers["Old Row A"] == 9001, "Oldest duplicate should keep its original number"
+            assert numbers["Old Row B (duplicate)"] != 9001, (
+                "Later duplicate should have been renumbered"
+            )
+
+            # Index must exist again and actually enforce uniqueness now.
+            index_exists = conn.execute(
+                "SELECT 1 FROM sqlite_master WHERE type='index' AND name='idx_invoices_user_invoice_unique'"
+            ).fetchone()
+            assert index_exists, "Unique index should be recreated after dedupe"
+            try:
+                conn.execute(
+                    "INSERT INTO invoices (invoice_number, customer_name, invoice_date, user_id) "
+                    "VALUES (9001, 'Should Fail', date('now'), ?)", (c_uid,)
+                )
+                raise AssertionError("Expected the unique index to reject a fresh duplicate insert")
+            except sqlite3.IntegrityError:
+                pass
+
+    run_test("Invoice dedupe migration repairs pre-existing duplicates and restores uniqueness",
+              test_invoice_dedupe_migration_repairs_existing_duplicates)
+
     # --- Gap coverage: licensing lifecycle ---
     #
     # There is no license server and no deactivate/reissue endpoint in this

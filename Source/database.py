@@ -380,6 +380,7 @@ def _init_schema(conn) -> None:
     _migrate_multi_user(conn)
     _migrate_purchase_invoices(conn)
     _migrate_indexes(conn)
+    _migrate_unique_invoice_numbers(conn)
     _run_schema_migrations(conn)
 
 
@@ -1328,6 +1329,63 @@ def _migrate_indexes(conn):
     )
     for name, table, column in indexes:
         conn.execute(f"CREATE INDEX IF NOT EXISTS {name} ON {table}({column})")
+
+
+def _dedupe_invoice_numbers(conn, table: str) -> None:
+    """Bug #7: invoice_number was never unique per user — duplicates were
+    possible (e.g. the billing/purchase-invoice forms pre-fill this field
+    from an existing invoice when you view/reprint it, and re-submitting
+    creates a second row with the same number). Run before adding the
+    UNIQUE(user_id, invoice_number) index below so that index creation can
+    never fail on a customer database that already has some: for each
+    duplicate group, the oldest row keeps its number and every later
+    duplicate is renumbered to the next free number for that user."""
+    dupe_groups = conn.execute(
+        f"""
+        SELECT user_id, invoice_number FROM {table}
+        GROUP BY user_id, invoice_number
+        HAVING COUNT(*) > 1
+        """
+    ).fetchall()
+    for group in dupe_groups:
+        user_id, number = group["user_id"], group["invoice_number"]
+        rows = conn.execute(
+            f"""
+            SELECT id FROM {table}
+            WHERE user_id = ? AND invoice_number = ?
+            ORDER BY created_at ASC, id ASC
+            """,
+            (user_id, number),
+        ).fetchall()
+        next_free = conn.execute(
+            f"SELECT COALESCE(MAX(invoice_number), 0) + 1 AS n FROM {table} WHERE user_id = ?",
+            (user_id,),
+        ).fetchone()["n"]
+        for row in rows[1:]:  # rows[0] (oldest) keeps its original number
+            conn.execute(
+                f"UPDATE {table} SET invoice_number = ? WHERE id = ?",
+                (next_free, row["id"]),
+            )
+            print(
+                f"[invoice dedupe] {table}: user {user_id} invoice #{number} "
+                f"(row id {row['id']}) was a duplicate — renumbered to #{next_free}"
+            )
+            next_free += 1
+
+
+def _migrate_unique_invoice_numbers(conn) -> None:
+    """Repair any existing duplicates, then enforce uniqueness going forward.
+    Runs unconditionally every startup like _migrate_indexes() above (not
+    gated behind the versioned SCHEMA_MIGRATIONS system): a brand-new
+    database has zero rows so dedup is a no-op and the index is created
+    fresh; an existing database gets deduped first so the index creation
+    itself can never fail on data that predates this fix."""
+    for table in ("invoices", "purchase_invoices"):
+        _dedupe_invoice_numbers(conn, table)
+        conn.execute(
+            f"CREATE UNIQUE INDEX IF NOT EXISTS idx_{table}_user_invoice_unique "
+            f"ON {table}(user_id, invoice_number)"
+        )
 
 
 def _copy_legacy_settings_to_user(conn, user_id, legacy=None):
@@ -4448,32 +4506,54 @@ def create_invoice(conn, user_id, data):
         # near-simultaneous saves (e.g. a double-click) can't both grab the
         # same invoice number.
         conn.execute("BEGIN IMMEDIATE")
-    inv_num = data.get("invoice_number") or _next_invoice_number(conn, user_id)
-    cursor = conn.execute(
-        """
-        INSERT INTO invoices (
-            invoice_number, customer_name, customer_phone, phone_id,
-            model, variant, imei, phone_type, condition, amount,
-            warranty, notes, invoice_date, user_id
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-        """,
-        (
-            int(inv_num),
-            data.get("customer_name", ""),
-            data.get("customer_phone", ""),
-            data.get("phone_id"),
-            data.get("model", ""),
-            data.get("variant", ""),
-            data.get("imei", ""),
-            data.get("phone_type", ""),
-            data.get("condition", ""),
-            float(data.get("amount") or 0),
-            data.get("warranty", ""),
-            data.get("notes", ""),
-            data.get("invoice_date") or _local_date(conn),
-            user_id,
-        ),
-    )
+    explicit_num = data.get("invoice_number")
+    attempts = 1 if explicit_num else 5
+    for attempt in range(attempts):
+        inv_num = int(explicit_num) if explicit_num else _next_invoice_number(conn, user_id)
+        try:
+            cursor = conn.execute(
+                """
+                INSERT INTO invoices (
+                    invoice_number, customer_name, customer_phone, phone_id,
+                    model, variant, imei, phone_type, condition, amount,
+                    warranty, notes, invoice_date, user_id
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    int(inv_num),
+                    data.get("customer_name", ""),
+                    data.get("customer_phone", ""),
+                    data.get("phone_id"),
+                    data.get("model", ""),
+                    data.get("variant", ""),
+                    data.get("imei", ""),
+                    data.get("phone_type", ""),
+                    data.get("condition", ""),
+                    float(data.get("amount") or 0),
+                    data.get("warranty", ""),
+                    data.get("notes", ""),
+                    data.get("invoice_date") or _local_date(conn),
+                    user_id,
+                ),
+            )
+            break
+        except sqlite3.IntegrityError:
+            if explicit_num:
+                # A user-typed/pre-filled number that already belongs to this
+                # account -- never silently substitute a different number
+                # for what they asked for, surface a clear error instead.
+                raise ValueError(
+                    f"Invoice #{inv_num} already exists for this account — "
+                    "choose a different invoice number."
+                )
+            if attempt == attempts - 1:
+                raise RuntimeError(
+                    "Could not allocate a unique invoice number after several attempts"
+                )
+            # Auto-generated number lost a race (should be extremely rare —
+            # BEGIN IMMEDIATE above already serializes writers; this is
+            # defense in depth) -- retry with a freshly computed number.
+            continue
     return get_invoice(conn, user_id, cursor.lastrowid)
 
 
@@ -4515,31 +4595,47 @@ def create_purchase_invoice(conn, user_id, data):
     """Create a printable purchase-invoice record (paperwork only — does not post to cash book)."""
     if not conn.in_transaction:
         conn.execute("BEGIN IMMEDIATE")
-    inv_num = data.get("invoice_number") or _next_purchase_invoice_number(conn, user_id)
-    cursor = conn.execute(
-        """
-        INSERT INTO purchase_invoices (
-            invoice_number, supplier_name, supplier_contact, phone_id,
-            model, variant, imei, phone_type, condition, amount,
-            notes, invoice_date, user_id
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-        """,
-        (
-            int(inv_num),
-            data.get("supplier_name", ""),
-            data.get("supplier_contact", ""),
-            data.get("phone_id"),
-            data.get("model", ""),
-            data.get("variant", ""),
-            data.get("imei", ""),
-            data.get("phone_type", ""),
-            data.get("condition", ""),
-            float(data.get("amount") or 0),
-            data.get("notes", ""),
-            data.get("invoice_date") or _local_date(conn),
-            user_id,
-        ),
-    )
+    explicit_num = data.get("invoice_number")
+    attempts = 1 if explicit_num else 5
+    for attempt in range(attempts):
+        inv_num = int(explicit_num) if explicit_num else _next_purchase_invoice_number(conn, user_id)
+        try:
+            cursor = conn.execute(
+                """
+                INSERT INTO purchase_invoices (
+                    invoice_number, supplier_name, supplier_contact, phone_id,
+                    model, variant, imei, phone_type, condition, amount,
+                    notes, invoice_date, user_id
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    int(inv_num),
+                    data.get("supplier_name", ""),
+                    data.get("supplier_contact", ""),
+                    data.get("phone_id"),
+                    data.get("model", ""),
+                    data.get("variant", ""),
+                    data.get("imei", ""),
+                    data.get("phone_type", ""),
+                    data.get("condition", ""),
+                    float(data.get("amount") or 0),
+                    data.get("notes", ""),
+                    data.get("invoice_date") or _local_date(conn),
+                    user_id,
+                ),
+            )
+            break
+        except sqlite3.IntegrityError:
+            if explicit_num:
+                raise ValueError(
+                    f"Purchase invoice #{inv_num} already exists for this account — "
+                    "choose a different invoice number."
+                )
+            if attempt == attempts - 1:
+                raise RuntimeError(
+                    "Could not allocate a unique invoice number after several attempts"
+                )
+            continue
     return get_purchase_invoice(conn, user_id, cursor.lastrowid)
 
 

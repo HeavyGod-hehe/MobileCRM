@@ -805,9 +805,12 @@ def list_invoices_api():
 def create_invoice_api():
     user_id = _current_user_id()
     data = request.get_json(force=True)
-    with db.db_session() as conn:
-        invoice = db.create_invoice(conn, user_id, data)
-        return jsonify(invoice), 201
+    try:
+        with db.db_session() as conn:
+            invoice = db.create_invoice(conn, user_id, data)
+            return jsonify(invoice), 201
+    except ValueError as exc:
+        return jsonify({"error": str(exc)}), 400
 
 
 @app.route("/api/billing/phone/<int:phone_id>")
@@ -869,9 +872,12 @@ def create_purchase_invoice_api():
     if err:
         return jsonify({"error": err}), 400
     data["amount"] = amount
-    with db.db_session() as conn:
-        invoice = db.create_purchase_invoice(conn, user_id, data)
-        return jsonify(invoice), 201
+    try:
+        with db.db_session() as conn:
+            invoice = db.create_purchase_invoice(conn, user_id, data)
+            return jsonify(invoice), 201
+    except ValueError as exc:
+        return jsonify({"error": str(exc)}), 400
 
 
 # --- Phones ---
