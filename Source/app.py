@@ -1097,7 +1097,7 @@ def restore_backup_api():
         return jsonify({"error": "Select a backup file to restore"}), 400
     import backup_service
     try:
-        safety = backup_service.restore_from_backup(backup_path)
+        safety = backup_service.restore_from_backup(user_id, backup_path)
     except ValueError as e:
         return jsonify({"error": str(e)}), 400
     session.clear()

@@ -52,6 +52,7 @@ import shutil
 import sqlite3
 import os
 import sys
+import tempfile
 from contextlib import contextmanager
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -206,13 +207,20 @@ SCHEMA_MIGRATIONS = (
 
 
 def _backup_before_schema_migration(conn, from_version: int, to_version: int) -> Path | None:
-    """Save a timestamped copy of the live database before a schema change
-    is applied, using SQLite's own backup API (not a raw file copy — see
+    """Save a timestamped copy of the database before a schema change is
+    applied, using SQLite's own backup API (not a raw file copy — see
     backup_service.py for why that matters). Skipped for a brand-new,
-    not-yet-created database since there's nothing to protect yet."""
-    if not DB_PATH.is_file():
+    not-yet-created database since there's nothing to protect yet.
+
+    Reads the file path from `conn` itself (PRAGMA database_list) rather
+    than the global DB_PATH, so this also works correctly when migrating a
+    scratch copy of a restored backup (see restore_database_from_backup),
+    not just the one live app database."""
+    db_file = conn.execute("PRAGMA database_list").fetchone()["file"]
+    if not db_file or not Path(db_file).is_file():
         return None
-    backup_dir = DB_PATH.parent / "pre_migration_backups"
+    db_file_path = Path(db_file)
+    backup_dir = db_file_path.parent / "pre_migration_backups"
     backup_dir.mkdir(parents=True, exist_ok=True)
     stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     dest = backup_dir / f"crm_pre_v{from_version}_to_v{to_version}_{stamp}.db"
@@ -242,11 +250,18 @@ def _run_schema_migrations(conn) -> None:
         conn.execute(f"PRAGMA user_version = {version}")
 
 
-def init_db():
-    with db_session() as conn:
-        _recover_crashed_table_rebuild(conn, "phones", "phones_migrated")
-        _recover_crashed_table_rebuild(conn, "phones", "phones_status_migrated")
-        conn.executescript(
+def _init_schema(conn) -> None:
+    """Create every table and run every migration, bringing whatever
+    database `conn` points at up to CURRENT_SCHEMA_VERSION.
+
+    Deliberately excludes ensure_customer_data_layout(), which touches the
+    global live app paths (DB_PATH, customer_data_dir()) and must never run
+    against a scratch/temp connection — see restore_database_from_backup(),
+    which calls this on a throwaway copy of a backup file to bring it up to
+    the current schema before importing rows from it."""
+    _recover_crashed_table_rebuild(conn, "phones", "phones_migrated")
+    _recover_crashed_table_rebuild(conn, "phones", "phones_status_migrated")
+    conn.executescript(
             """
             CREATE TABLE IF NOT EXISTS settings (
                 key TEXT PRIMARY KEY,
@@ -344,28 +359,33 @@ def init_db():
             );
             """
         )
-        _migrate_phones_table(conn)
-        _migrate_phone_columns(conn)
-        _migrate_phone_statuses(conn)
-        _migrate_returns_table(conn)
-        _migrate_cash_book_account(conn)
-        _migrate_journal_vouchers(conn)
-        _migrate_cursor_panga(conn)
-        _migrate_payment_methods(conn)
-        _migrate_account_entry_payments(conn)
-        _migrate_more_fixes(conn)
-        _migrate_ledger_sync(conn)
-        _migrate_fixed_expense_ledger(conn)
+    _migrate_phones_table(conn)
+    _migrate_phone_columns(conn)
+    _migrate_phone_statuses(conn)
+    _migrate_returns_table(conn)
+    _migrate_cash_book_account(conn)
+    _migrate_journal_vouchers(conn)
+    _migrate_cursor_panga(conn)
+    _migrate_payment_methods(conn)
+    _migrate_account_entry_payments(conn)
+    _migrate_more_fixes(conn)
+    _migrate_ledger_sync(conn)
+    _migrate_fixed_expense_ledger(conn)
 
-        for key, value in DEFAULT_SETTINGS.items():
-            conn.execute(
-                "INSERT OR IGNORE INTO settings (key, value) VALUES (?, ?)",
-                (key, value),
-            )
-        _migrate_multi_user(conn)
-        _migrate_purchase_invoices(conn)
-        _migrate_indexes(conn)
-        _run_schema_migrations(conn)
+    for key, value in DEFAULT_SETTINGS.items():
+        conn.execute(
+            "INSERT OR IGNORE INTO settings (key, value) VALUES (?, ?)",
+            (key, value),
+        )
+    _migrate_multi_user(conn)
+    _migrate_purchase_invoices(conn)
+    _migrate_indexes(conn)
+    _run_schema_migrations(conn)
+
+
+def init_db():
+    with db_session() as conn:
+        _init_schema(conn)
         ensure_customer_data_layout(conn)
 
 
@@ -4537,6 +4557,11 @@ def list_purchase_invoices(conn, user_id, limit=50):
 
 
 def list_backup_files(conn, user_id):
+    """List backup files for the restore picker. Restricted to files this
+    specific user created (matched by their own username-slug prefix) even
+    though `local_backup_path` is, by default, one shared folder for every
+    account on this installation — otherwise the picker would let a user
+    browse to (and restore from) another user's backup."""
     settings = get_storage_settings(conn, user_id)
     backup_dir = (settings.get("local_backup_path") or "").strip()
     if not backup_dir:
@@ -4544,8 +4569,9 @@ def list_backup_files(conn, user_id):
     path = Path(backup_dir)
     if not path.is_dir():
         return []
+    slug = backup_username_slug(conn, user_id)
     files = sorted(
-        {*path.glob("*_crm_backup_*.db"), *path.glob("crm_backup_*.db")},
+        set(path.glob(f"{slug}_crm_backup_*.db")),
         key=lambda p: p.stat().st_mtime,
         reverse=True,
     )
@@ -4563,7 +4589,7 @@ def list_backup_files(conn, user_id):
 
 def _validate_backup_file(path: Path) -> None:
     """Open the candidate backup and confirm it's an intact CRM database
-    before it's allowed to overwrite the live one. A corrupted, empty, or
+    before it's allowed to import into the live one. A corrupted, empty, or
     unrelated .db file gets rejected here instead of destroying today's data."""
     try:
         check_conn = sqlite3.connect(str(path))
@@ -4584,17 +4610,203 @@ def _validate_backup_file(path: Path) -> None:
         check_conn.close()
 
 
-def restore_database_from_backup(backup_path: str) -> str:
+def _validate_restore_source(conn, user_id: int, backup_path: str) -> Path:
+    """Resolve and sandbox the chosen backup file to this user's own backup
+    folder and their own filename prefix. Rejects path traversal, symlink
+    escapes, absolute paths elsewhere, and other users' backup files."""
+    if not backup_path:
+        raise ValueError("Select a backup file to restore")
     src = Path(backup_path).expanduser().resolve()
     if not src.is_file():
         raise ValueError("Backup file not found")
     if src.suffix.lower() != ".db":
         raise ValueError("Please select a .db backup file")
+
+    settings = get_storage_settings(conn, user_id)
+    backup_dir = (settings.get("local_backup_path") or "").strip()
+    if not backup_dir:
+        raise ValueError("No backup folder is configured for this account")
+    allowed_root = Path(backup_dir).expanduser().resolve()
+    if allowed_root not in src.parents:
+        raise ValueError("That file is not inside your backup folder")
+
+    slug = backup_username_slug(conn, user_id)
+    if not src.name.startswith(f"{slug}_crm_backup_"):
+        raise ValueError("That backup file does not belong to this account")
+
+    return src
+
+
+def _tables_with_user_id_column(conn) -> list[str]:
+    """Every table in the current schema that has its own `user_id` column,
+    discovered dynamically (never hardcoded) so a per-user restore can never
+    silently miss a table a future migration adds. Deliberately excludes
+    `users` (has no user_id column — it's the identity table itself, id is
+    its own key) and `settings` (global, pre-multi-user legacy table)."""
+    tables = [
+        r["name"] for r in conn.execute(
+            "SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'"
+        ).fetchall()
+    ]
+    return [
+        t for t in tables
+        if any(c["name"] == "user_id" for c in conn.execute(f"PRAGMA table_info({t})").fetchall())
+    ]
+
+
+def _resolve_table_ownership_paths(conn) -> dict:
+    """Map every user-owned table (direct `user_id` column, or a row that
+    belongs to a user only via a foreign key into an already-resolved
+    user-owned table) to how to scope it to one user_id.
+
+    Returns an (insertion-ordered) dict of:
+      table -> ("direct",)                     -- has its own user_id column
+      table -> ("via", fk_column, parent_table) -- owned through a parent FK
+
+    Built by walking the live schema (sqlite_master + PRAGMA foreign_key_list)
+    rather than a hand-maintained table list, per the rule that silently
+    missing a table here is exactly the bug this restore rewrite exists to
+    close. If a table can't be resolved either way, this raises loudly
+    instead of quietly skipping it — a new unresolvable table must get an
+    explicit rule added here before restore can be trusted again."""
+    all_tables = [
+        r["name"] for r in conn.execute(
+            "SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'"
+        ).fetchall()
+    ]
+    direct = set(_tables_with_user_id_column(conn))
+    paths: dict = {t: ("direct",) for t in all_tables if t in direct}
+
+    remaining = [t for t in all_tables if t not in direct and t not in ("users", "settings")]
+    resolved_targets = set(direct)
+    changed = True
+    while changed and remaining:
+        changed = False
+        still_remaining = []
+        for t in remaining:
+            fks = conn.execute(f"PRAGMA foreign_key_list({t})").fetchall()
+            cols = {c["name"]: c for c in conn.execute(f"PRAGMA table_info({t})").fetchall()}
+            found = None
+            for fk in fks:
+                parent = fk["table"]
+                child_col = fk["from"]
+                if parent in resolved_targets and cols.get(child_col) is not None \
+                        and cols[child_col]["notnull"]:
+                    found = (child_col, parent)
+                    break
+            if found:
+                paths[t] = ("via",) + found
+                resolved_targets.add(t)
+                changed = True
+            else:
+                still_remaining.append(t)
+        remaining = still_remaining
+
+    if remaining:
+        raise RuntimeError(
+            "Restore cannot determine per-user ownership for table(s) "
+            f"{remaining} — add an explicit rule in "
+            "_resolve_table_ownership_paths before restore can proceed safely."
+        )
+    return paths
+
+
+def _restore_user_rows(conn, user_id: int) -> None:
+    """Replace exactly one user's rows across every user-owned table, from
+    the database ATTACHed as `backup_db`, leaving every other user's data in
+    the live database completely untouched. Must run with
+    `PRAGMA foreign_keys = OFF` on `conn` for the duration (set by the
+    caller) since deletes/inserts happen table-by-table, not in dependency
+    order for FK purposes."""
+    ownership = _resolve_table_ownership_paths(conn)
+
+    # Delete children before parents: a "via" table's delete depends on the
+    # live parent table's rows still being present (to look up which ids
+    # belonged to this user), so parents must not be cleared first.
+    for table, path in reversed(list(ownership.items())):
+        if path[0] == "direct":
+            conn.execute(f"DELETE FROM {table} WHERE user_id = ?", (user_id,))
+        else:
+            _, fk_col, parent = path
+            conn.execute(
+                f"DELETE FROM {table} WHERE {fk_col} IN "
+                f"(SELECT id FROM {parent} WHERE user_id = ?)",
+                (user_id,),
+            )
+
+    # Insert order doesn't matter: foreign_keys is OFF for this transaction,
+    # and the source (backup_db) is read-only/untouched throughout.
+    for table, path in ownership.items():
+        cols = [c["name"] for c in conn.execute(f"PRAGMA table_info({table})").fetchall()]
+        col_list = ", ".join(cols)
+        if path[0] == "direct":
+            conn.execute(
+                f"INSERT INTO {table} ({col_list}) "
+                f"SELECT {col_list} FROM backup_db.{table} WHERE user_id = ?",
+                (user_id,),
+            )
+        else:
+            _, fk_col, parent = path
+            conn.execute(
+                f"INSERT INTO {table} ({col_list}) "
+                f"SELECT {col_list} FROM backup_db.{table} WHERE {fk_col} IN "
+                f"(SELECT id FROM backup_db.{parent} WHERE user_id = ?)",
+                (user_id,),
+            )
+
+
+def restore_database_from_backup(backup_path: str, user_id: int) -> str:
+    """Restore one user's data from their own backup file, in place, without
+    touching any other user's rows in the shared crm.db.
+
+    Full-file replacement (the old behaviour) was wrong for a multi-user
+    database: it silently destroyed every other account's data. This does a
+    per-user logical restore instead: within a single transaction, delete
+    this user's current rows and re-insert their rows from the backup,
+    across every user-owned table in the schema (discovered dynamically,
+    see _resolve_table_ownership_paths).
+
+    If the backup predates a schema change the live app has already
+    migrated to, a scratch copy of the backup is migrated up to the current
+    schema first, so the cross-database copy always sees matching columns.
+    """
+    with db_session() as conn:
+        src = _validate_restore_source(conn, user_id, backup_path)
     _validate_backup_file(src)
 
     dest = DB_PATH.resolve()
-    safety = dest.with_suffix(".db.pre_restore")
+    safety = dest.with_name(
+        f"{dest.stem}.pre_restore_{datetime.now().strftime('%Y%m%d_%H%M%S')}{dest.suffix}"
+    )
     if dest.is_file():
         shutil.copy2(dest, safety)
-    shutil.copy2(src, dest)
+
+    with tempfile.TemporaryDirectory(prefix="crm_restore_") as tmp:
+        migrated = Path(tmp) / "migrated_backup.db"
+        shutil.copy2(src, migrated)
+        mig_conn = sqlite3.connect(str(migrated))
+        mig_conn.row_factory = sqlite3.Row
+        try:
+            _init_schema(mig_conn)
+            mig_conn.commit()
+        finally:
+            mig_conn.close()
+
+        live = get_connection()
+        try:
+            live.execute("PRAGMA foreign_keys = OFF")
+            live.execute("ATTACH DATABASE ? AS backup_db", (str(migrated),))
+            try:
+                live.execute("BEGIN")
+                _restore_user_rows(live, user_id)
+                live.commit()
+            except Exception:
+                live.rollback()
+                raise
+            finally:
+                live.execute("DETACH DATABASE backup_db")
+            live.execute("PRAGMA foreign_keys = ON")
+        finally:
+            live.close()
+
     return str(safety) if safety.is_file() else ""

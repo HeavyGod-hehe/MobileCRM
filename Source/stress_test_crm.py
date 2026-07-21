@@ -1213,26 +1213,151 @@ def main():
     run_test("Forgot-password OTP flow end to end (SMTP transport mocked, real app logic)",
               test_forgot_password_otp_flow)
 
+    # --- Gap coverage: per-user restore (bug #1 / #2) ---
+    #
+    # restore_database_from_backup used to be a full-file copy: restoring ANY
+    # user's backup replaced the entire shared crm.db, destroying every other
+    # account's data. It's now a per-user logical restore -- only the
+    # requesting user's rows are touched, across every user-owned table in
+    # the schema (discovered dynamically, not a hardcoded list).
+    def test_restore_is_per_user_only():
+        with db.db_session() as conn:
+            user_a = db.register_user(conn, "restore_user_a", "pass1234", "", "Shop A")["user_id"]
+            user_b = db.register_user(conn, "restore_user_b", "pass1234", "", "Shop B")["user_id"]
+            db.update_storage_settings(conn, user_a, {"local_backup_path": str(Path(tempfile.gettempdir()) / "crm_restore_test_backups")})
+            db.update_storage_settings(conn, user_b, {"local_backup_path": str(Path(tempfile.gettempdir()) / "crm_restore_test_backups")})
+            acct_a = db.create_account(conn, user_a, {"name": "A Original Account", "contact": "0300"})
+            acct_b = db.create_account(conn, user_b, {"name": "B Untouched Account", "contact": "0311"})
+
+        # Snapshot user B's full state before anything else happens, to prove
+        # it is byte-for-byte unaffected by user A's restore later.
+        with db.db_session() as conn:
+            b_accounts_before = [dict(r) for r in conn.execute(
+                "SELECT * FROM accounts WHERE user_id=?", (user_b,)
+            ).fetchall()]
+            b_phones_before = [dict(r) for r in conn.execute(
+                "SELECT * FROM phones WHERE user_id=?", (user_b,)
+            ).fetchall()]
+
+        # Take user A's backup (into their own configured backup folder).
+        import backup_service
+        backup_path = backup_service.backup_user_data(user_a, force=True)
+        assert backup_path, "Expected a backup file path for user A"
+
+        # Now user A changes data AFTER the backup (renames the account,
+        # adds a phone) -- restore should revert exactly this.
+        with db.db_session() as conn:
+            conn.execute(
+                "UPDATE accounts SET name = 'A Changed Post-Backup' WHERE id = ?",
+                (acct_a["id"],),
+            )
+            db.create_phone(conn, user_a, {
+                "model": "Post-Backup Phone", "type": "PTA",
+                "purchase_price": 50000, "status": "Bought",
+            })
+
+        db.restore_database_from_backup(backup_path, user_a)
+
+        with db.db_session() as conn:
+            a_account = conn.execute(
+                "SELECT name FROM accounts WHERE id = ?", (acct_a["id"],)
+            ).fetchone()
+            assert a_account["name"] == "A Original Account", (
+                "Restore should have reverted user A's account name"
+            )
+            a_phone_count = conn.execute(
+                "SELECT COUNT(*) c FROM phones WHERE user_id=?", (user_a,)
+            ).fetchone()["c"]
+            assert a_phone_count == 0, (
+                "Restore should have removed the phone user A added after the backup"
+            )
+
+            b_accounts_after = [dict(r) for r in conn.execute(
+                "SELECT * FROM accounts WHERE user_id=?", (user_b,)
+            ).fetchall()]
+            b_phones_after = [dict(r) for r in conn.execute(
+                "SELECT * FROM phones WHERE user_id=?", (user_b,)
+            ).fetchall()]
+            assert b_accounts_after == b_accounts_before, (
+                "User B's accounts changed as a side effect of user A's restore"
+            )
+            assert b_phones_after == b_phones_before, (
+                "User B's phones changed as a side effect of user A's restore"
+            )
+
+    run_test("Restore only touches the requesting user's rows, others untouched",
+              test_restore_is_per_user_only)
+
+    def test_restore_rejects_path_traversal_and_other_users_backup():
+        # Look up the two users created in the previous test by username, so
+        # this test doesn't depend on run order beyond having already run.
+        with db.db_session() as conn:
+            row_a = conn.execute("SELECT id FROM users WHERE username='restore_user_a'").fetchone()
+            row_b = conn.execute("SELECT id FROM users WHERE username='restore_user_b'").fetchone()
+            user_a, user_b = row_a["id"], row_b["id"]
+            settings_a = db.get_storage_settings(conn, user_a)
+
+        import backup_service
+        backup_b_path = backup_service.backup_user_data(user_b, force=True)
+        assert backup_b_path
+
+        # User A must not be able to restore User B's backup file, even
+        # though both currently share the same configured backup folder.
+        try:
+            db.restore_database_from_backup(backup_b_path, user_a)
+            raise AssertionError("Expected restoring another user's backup file to be rejected")
+        except ValueError:
+            pass
+
+        # A real .db file that exists but sits outside the user's configured
+        # backup folder (path traversal / arbitrary path) must be rejected,
+        # even though it passes every other validation check.
+        backup_dir = Path(settings_a["local_backup_path"])
+        outside_dir = Path(tempfile.mkdtemp(prefix="crm_restore_outside_"))
+        outside_db = outside_dir / "x_crm_backup_x.db"
+        # Build it as a genuinely valid CRM db so only the path check can reject it.
+        with db.db_session() as conn:
+            snap_conn = sqlite3.connect(str(outside_db))
+            try:
+                conn.backup(snap_conn)
+            finally:
+                snap_conn.close()
+        traversal_path = str(backup_dir / ".." / outside_dir.name / outside_db.name)
+        for bad_path in (
+            str(outside_db),          # outside the allowed folder entirely
+            traversal_path,           # "../<other dir>/..." from inside the allowed folder
+            str(backup_dir / "does_not_exist_crm_backup_x.db"),  # inside folder but missing
+        ):
+            try:
+                db.restore_database_from_backup(bad_path, user_a)
+                raise AssertionError(f"Expected path to be rejected: {bad_path}")
+            except ValueError:
+                pass
+
+    run_test("Restore rejects path traversal and another user's backup file",
+              test_restore_rejects_path_traversal_and_other_users_backup)
+
     # --- Gap coverage: backup/restore across a schema migration ---
     #
     # CURRENT_SCHEMA_VERSION is still 1 in this codebase (no real migration has
     # shipped yet through the versioned system added for this purpose), so
     # there's nothing real to restore "across." This test registers a
     # synthetic v2 migration for the duration of the test to validate the
-    # *mechanism* the moment a real one ships: a backup taken before an update,
-    # then restored after the app has already migrated the live DB forward,
-    # must either cleanly re-migrate or be clearly rejected -- not silently
-    # corrupt data.
+    # *mechanism* the moment a real one ships: a backup taken on an older
+    # schema, then restored (per-user) after the live app has already
+    # migrated forward, must come in through the current schema -- not
+    # silently corrupt data or crash on a column mismatch.
     def test_backup_restore_across_migration():
         with db.db_session() as conn:
-            conn.execute(
-                "INSERT OR IGNORE INTO settings (key, value) VALUES ('migration_probe', 'v1_value')"
-            )
+            user_id = db.register_user(conn, "restore_migration_user", "pass1234", "", "Migration Shop")["user_id"]
+            acct = db.create_account(conn, user_id, {"name": "Pre-Migration Account", "contact": "0322"})
             version_before = conn.execute("PRAGMA user_version").fetchone()[0]
+            scratch = Path(tempfile.mkdtemp(prefix="crm_migration_backup_"))
+            db.update_storage_settings(conn, user_id, {"local_backup_path": str(scratch)})
+            slug = db.backup_username_slug(conn, user_id)
         assert version_before == db.CURRENT_SCHEMA_VERSION
 
-        scratch = Path(tempfile.mkdtemp(prefix="crm_migration_backup_"))
-        old_backup_path = scratch / "v1_backup.db"
+        old_backup_path = scratch / f"{slug}_crm_backup_v1.db"
         with db.db_session() as conn:
             backup_conn = sqlite3.connect(str(old_backup_path))
             try:
@@ -1245,6 +1370,10 @@ def main():
                 "CREATE TABLE IF NOT EXISTS _test_migration_v2_marker (id INTEGER PRIMARY KEY, note TEXT)"
             )
             conn.execute("INSERT INTO _test_migration_v2_marker (note) VALUES ('migrated')")
+            if not db._column_exists(conn, "accounts", "migration_v2_column"):
+                conn.execute(
+                    "ALTER TABLE accounts ADD COLUMN migration_v2_column TEXT NOT NULL DEFAULT 'v2_default'"
+                )
 
         original_version = db.CURRENT_SCHEMA_VERSION
         original_migrations = db.SCHEMA_MIGRATIONS
@@ -1269,29 +1398,37 @@ def main():
                 "Expected a timestamped pre-migration backup file to be created automatically"
             )
 
-            # Customer restores a backup taken BEFORE they updated the app (still schema v1)
-            db.restore_database_from_backup(str(old_backup_path))
+            # Delete the account live (simulating data changed after the old
+            # backup was taken), then restore that user from the pre-migration
+            # (schema v1) backup -- restore must migrate its scratch copy to
+            # v2 internally before importing, and the LIVE db's own schema
+            # version must never move backwards.
             with db.db_session() as conn:
-                v_restored = conn.execute("PRAGMA user_version").fetchone()[0]
-            assert v_restored == 1, (
-                f"Restored pre-migration backup should carry version 1, got {v_restored}"
-            )
+                conn.execute("DELETE FROM accounts WHERE id = ?", (acct["id"],))
+                # This synthetic marker table has no owner and only existed to
+                # prove the migration ran (already asserted above) -- it's not
+                # part of the real per-user schema, so drop it before restore
+                # rather than teaching the ownership resolver to special-case
+                # a test-only table. A genuinely un-owned table appearing in
+                # a real migration should keep failing restore loudly.
+                conn.execute("DROP TABLE IF EXISTS _test_migration_v2_marker")
 
-            # Relaunch again -- init_db() must detect the restored DB is behind and
-            # cleanly re-run the pending migration, not silently skip it or crash.
-            db.init_db()
+            db.restore_database_from_backup(str(old_backup_path), user_id)
+
             with db.db_session() as conn:
-                v_final = conn.execute("PRAGMA user_version").fetchone()[0]
-                assert v_final == 2, f"Migration did not re-apply after restoring an older backup: {v_final}"
-                marker2 = conn.execute(
-                    "SELECT COUNT(*) c FROM _test_migration_v2_marker"
-                ).fetchone()["c"]
-                assert marker2 == 1
-                probe = conn.execute(
-                    "SELECT value FROM settings WHERE key='migration_probe'"
+                v_after_restore = conn.execute("PRAGMA user_version").fetchone()[0]
+                assert v_after_restore == 2, (
+                    f"Live schema version must not revert on a per-user restore, got {v_after_restore}"
+                )
+                restored = conn.execute(
+                    "SELECT * FROM accounts WHERE id = ?", (acct["id"],)
                 ).fetchone()
-                assert probe and probe["value"] == "v1_value", (
-                    "Data present before the restore did not survive migrate-on-restore"
+                assert restored is not None, "Account from the v1 backup should have been restored"
+                assert restored["name"] == "Pre-Migration Account"
+                assert restored["migration_v2_column"] == "v2_default", (
+                    "Row restored from an older-schema backup should carry the "
+                    "new column's default, added by migrating the scratch copy "
+                    "before import -- not be missing it or crash"
                 )
         finally:
             db.CURRENT_SCHEMA_VERSION = original_version

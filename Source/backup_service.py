@@ -74,9 +74,10 @@ def list_backup_files(user_id: int) -> list[dict]:
         return db.list_backup_files(conn, user_id)
 
 
-def restore_from_backup(backup_path: str) -> str:
-    """Replace live database with a backup copy. Returns path to safety copy."""
-    return db.restore_database_from_backup(backup_path)
+def restore_from_backup(user_id: int, backup_path: str) -> str:
+    """Restore this user's own data from their backup copy. Returns path to
+    the safety copy taken automatically before the restore."""
+    return db.restore_database_from_backup(backup_path, user_id)
 
 
 def run_startup_backups() -> list[str]:
