@@ -30,33 +30,62 @@ from app_paths import customer_data_dir
 
 
 def _fallback_secret() -> str:
-    """Default secret used when CRM_LICENSE_SECRET isn't set. Split across
-    two base64 fragments so a naive scan of the compiled module's string
-    constants doesn't hand over the whole value in one read — this raises
-    the bar slightly, it does not stop real reverse engineering (see module
-    docstring)."""
+    """Default secret used when no CRM_LICENSE_SECRET reaches this build at
+    all. Split across two base64 fragments so a naive scan of the compiled
+    module's string constants doesn't hand over the whole value in one read
+    — this raises the bar slightly, it does not stop real reverse
+    engineering (see module docstring)."""
     return (
         base64.b64decode("Q1JNLVJlc2VsbGVyLXYyLWQxODMwMmVjYzdjNTc4N2Q=").decode()
         + base64.b64decode("OThkMDQwZTAzZmMzNjhiNDhkYmJkMmVhMmUyOWZiMGM=").decode()
     )
 
 
+def _build_baked_secret() -> str | None:
+    """A secret baked in at BUILD time from the CRM_LICENSE_SECRET CI/repo
+    secret, into a small text file the build scripts write and the .spec
+    files bundle alongside the frozen app (see build_customer_windows_copy.py
+    / build_customer_mac.py). A plain environment variable set only during
+    the CI build step would have no effect here — this module runs fresh on
+    the CUSTOMER's machine every launch, reading the customer's own (empty)
+    environment, not whatever the build pipeline had set months earlier.
+    Bundling the value into a file PyInstaller ships with the app is what
+    actually gets a rotated secret onto the customer's machine. Returns None
+    outside a frozen build, or if the file wasn't bundled (an older build,
+    or one made before the CI secret was configured)."""
+    if not getattr(sys, "frozen", False):
+        return None
+    try:
+        secret_path = Path(sys._MEIPASS) / "license_build_secret.txt"
+        if secret_path.is_file():
+            value = secret_path.read_text(encoding="utf-8").strip()
+            return value or None
+    except OSError:
+        pass
+    return None
+
+
 # The FIRST secret in this tuple is the one used to SIGN new activation keys
 # (generate_key.py always signs with _LICENSE_SECRETS[0]). Every secret in
-# the tuple is accepted when VERIFYING a key, so changing CRM_LICENSE_SECRET
+# the tuple is accepted when VERIFYING a key, so rotating CRM_LICENSE_SECRET
 # for a future release rotates the signing secret going forward without
 # breaking any key issued under an older secret.
 #
 # Vendor: set CRM_LICENSE_SECRET as a CI secret (see HOW_TO_RELEASE.md)
 # before building a release — a secret that only lives in your build
 # pipeline, never in source control, is the one change here that actually
-# matters. Without it, every build silently falls back to the value below,
-# which is visible to anyone who decompiles the app (as this file's
-# docstring explains). If you ever add a NEW secret this way after
-# customers are already activated, append the old one(s) as extra legacy
-# entries below instead of removing them, so their keys keep working.
+# matters. The build scripts now refuse to build at all if this isn't set
+# (see build_customer_windows_copy.py / build_customer_mac.py), so a build
+# silently falling back to the hardcoded value below (visible to anyone who
+# decompiles the app, as this file's docstring explains) should no longer
+# happen for a real release. If you ever rotate the secret after customers
+# are already activated, append the old one(s) as extra legacy entries below
+# instead of removing them, so their keys keep working.
 _env_secret = os.environ.get("CRM_LICENSE_SECRET")
-_LICENSE_SECRETS = (_env_secret, _fallback_secret()) if _env_secret else (_fallback_secret(),)
+_build_secret = _build_baked_secret()
+_LICENSE_SECRETS = tuple(
+    s for s in (_env_secret, _build_secret, _fallback_secret()) if s
+) or (_fallback_secret(),)
 _LICENSE_SECRET = _LICENSE_SECRETS[0]  # kept for any external reference to the active secret
 
 

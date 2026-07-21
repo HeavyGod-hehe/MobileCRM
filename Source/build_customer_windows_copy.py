@@ -44,6 +44,25 @@ def ensure_pyinstaller() -> None:
         )
 
 
+def _write_license_secret_file() -> None:
+    """Bake CRM_LICENSE_SECRET (the CI/repo secret) into a small text file
+    the .spec bundles alongside the frozen app, so it actually reaches the
+    customer's machine — see license_guard._build_baked_secret() for why a
+    plain env var set only during this build step would otherwise have zero
+    effect at runtime on the customer's own machine. Refuses to build at all
+    if the secret isn't set, so a missing CI secret fails loudly here
+    instead of silently shipping every customer the hardcoded fallback
+    secret (the exact bug this exists to close). Never prints the value."""
+    secret = os.environ.get("CRM_LICENSE_SECRET", "").strip()
+    if not secret:
+        raise SystemExit(
+            "CRM_LICENSE_SECRET is not set in the environment — refusing to "
+            "build a customer release without it. Set it as a CI/repo "
+            "secret (see HOW_TO_RELEASE.md) before building."
+        )
+    (ROOT / "license_build_secret.txt").write_text(secret, encoding="utf-8")
+
+
 def run_build(spec: str) -> None:
     """Run PyInstaller against one .spec file (there are two: the main app
     and the separate FolderPicker helper .exe — see folder_picker.py)."""
@@ -140,25 +159,33 @@ def main() -> None:
         shutil.rmtree(OUT)
     OUT.mkdir(parents=True)
 
-    print("Building Phone Reseller CRM ...")
-    run_build("PhoneResellerCRM-win.spec")
+    _write_license_secret_file()
+    try:
+        print("Building Phone Reseller CRM ...")
+        run_build("PhoneResellerCRM-win.spec")
 
-    app_src = ROOT / "dist" / "Phone Reseller CRM"
-    if not app_src.is_dir():
-        raise FileNotFoundError(f"Expected app folder at {app_src}")
+        app_src = ROOT / "dist" / "Phone Reseller CRM"
+        if not app_src.is_dir():
+            raise FileNotFoundError(f"Expected app folder at {app_src}")
 
-    shutil.copytree(app_src, OUT / "Phone Reseller CRM")
+        shutil.copytree(app_src, OUT / "Phone Reseller CRM")
 
-    print("Building FolderPicker ...")
-    run_build("FolderPicker.spec")
-    picker_src = ROOT / "dist" / "FolderPicker.exe"
-    if not picker_src.is_file():
-        raise FileNotFoundError(f"Expected FolderPicker.exe at {picker_src}")
-    shutil.copy2(picker_src, OUT / "FolderPicker.exe")
+        print("Building FolderPicker ...")
+        run_build("FolderPicker.spec")
+        picker_src = ROOT / "dist" / "FolderPicker.exe"
+        if not picker_src.is_file():
+            raise FileNotFoundError(f"Expected FolderPicker.exe at {picker_src}")
+        shutil.copy2(picker_src, OUT / "FolderPicker.exe")
 
-    write_start_here(OUT)
-    (OUT / "license.json").write_text("{}\n", encoding="utf-8")
-    verify_no_source(OUT)
+        write_start_here(OUT)
+        (OUT / "license.json").write_text("{}\n", encoding="utf-8")
+        verify_no_source(OUT)
+    finally:
+        # Never leave the plaintext secret lying around in the source tree
+        # once the build (successful or not) is done.
+        secret_file = ROOT / "license_build_secret.txt"
+        if secret_file.is_file():
+            secret_file.unlink()
 
     print(f"\nOK Customer Windows Copy ready:\n  {OUT}\n")
 

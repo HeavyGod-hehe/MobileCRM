@@ -6,6 +6,14 @@ from pathlib import Path
 ROOT = Path(SPECPATH)
 VERSION = (ROOT / "VERSION").read_text(encoding="utf-8").strip()
 
+_license_secret_file = ROOT / "license_build_secret.txt"
+if not _license_secret_file.is_file():
+    raise SystemExit(
+        "license_build_secret.txt is missing — build_customer_windows_copy.py "
+        "writes it from CRM_LICENSE_SECRET before invoking PyInstaller. Don't "
+        "run this .spec directly; use that script (or the CI workflow)."
+    )
+
 a = Analysis(
     ["launch_crm.py"],
     pathex=[str(ROOT)],
@@ -15,6 +23,7 @@ a = Analysis(
         (str(ROOT / "static"), "static"),
         (str(ROOT / "folder_picker.py"), "."),
         (str(ROOT / "VERSION"), "."),
+        (str(_license_secret_file), "."),
     ],
     hiddenimports=[
         "werkzeug.security",

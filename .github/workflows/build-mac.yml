@@ -28,6 +28,8 @@ jobs:
           pip install -r Source/requirements.txt pyinstaller
 
       - name: Build Customer Copy Apple Silicon
+        env:
+          CRM_LICENSE_SECRET: ${{ secrets.CRM_LICENSE_SECRET }}
         run: python Source/build_customer_mac.py --arch arm64
 
       - name: Upload artifact
@@ -68,6 +70,8 @@ jobs:
           file "$MARKUPSAFE_SO" | grep -q x86_64
 
       - name: Build Customer Copy Intel Mac
+        env:
+          CRM_LICENSE_SECRET: ${{ secrets.CRM_LICENSE_SECRET }}
         run: arch -x86_64 python Source/build_customer_mac.py --arch x86_64
 
       - name: Upload artifact
@@ -102,6 +106,8 @@ jobs:
             -r Source/requirements.txt pyinstaller
 
       - name: Build Customer Copy Universal Mac
+        env:
+          CRM_LICENSE_SECRET: ${{ secrets.CRM_LICENSE_SECRET }}
         run: python Source/build_customer_mac.py --arch universal
 
       - name: Upload artifact

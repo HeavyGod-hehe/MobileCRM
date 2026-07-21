@@ -24,6 +24,8 @@ jobs:
           pip install -r Source/requirements.txt pyinstaller
 
       - name: Build Customer Windows Copy
+        env:
+          CRM_LICENSE_SECRET: ${{ secrets.CRM_LICENSE_SECRET }}
         run: python Source/build_customer_windows_copy.py
 
       - name: Upload artifact

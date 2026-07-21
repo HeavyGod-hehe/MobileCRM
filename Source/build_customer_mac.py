@@ -54,6 +54,25 @@ def ensure_pyinstaller() -> None:
         )
 
 
+def _write_license_secret_file() -> None:
+    """Bake CRM_LICENSE_SECRET (the CI/repo secret) into a small text file
+    the .spec bundles alongside the frozen app, so it actually reaches the
+    customer's machine — see license_guard._build_baked_secret() for why a
+    plain env var set only during this build step would otherwise have zero
+    effect at runtime on the customer's own machine. Refuses to build at all
+    if the secret isn't set, so a missing CI secret fails loudly here
+    instead of silently shipping every customer the hardcoded fallback
+    secret (the exact bug this exists to close). Never prints the value."""
+    secret = os.environ.get("CRM_LICENSE_SECRET", "").strip()
+    if not secret:
+        raise SystemExit(
+            "CRM_LICENSE_SECRET is not set in the environment — refusing to "
+            "build a customer release without it. Set it as a CI/repo "
+            "secret (see HOW_TO_RELEASE.md) before building."
+        )
+    (ROOT / "license_build_secret.txt").write_text(secret, encoding="utf-8")
+
+
 def run_build(spec: str, arch: str) -> None:
     """Run PyInstaller for one architecture slice, using arch-specific env
     vars the .spec file reads to pick the right settings for that chip."""
@@ -471,7 +490,18 @@ def main() -> None:
         help="Prebuilt x86_64 .app to merge (universal only; skips building from source)",
     )
     args = parser.parse_args()
-    build_mac_copy(args.arch, arm64_app=args.arm64_app, x86_64_app=args.x86_64_app)
+
+    building_locally = not (args.arm64_app and args.x86_64_app)
+    if building_locally:
+        _write_license_secret_file()
+    try:
+        build_mac_copy(args.arch, arm64_app=args.arm64_app, x86_64_app=args.x86_64_app)
+    finally:
+        # Never leave the plaintext secret lying around in the source tree
+        # once the build (successful or not) is done.
+        secret_file = ROOT / "license_build_secret.txt"
+        if secret_file.is_file():
+            secret_file.unlink()
 
 
 if __name__ == "__main__":

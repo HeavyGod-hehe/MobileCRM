@@ -11,6 +11,14 @@ VERSION = (ROOT / "VERSION").read_text(encoding="utf-8").strip()
 _mac_arch = os.environ.get("CRM_MAC_ARCH", "").strip().lower()
 TARGET_ARCH = _mac_arch if _mac_arch in ("arm64", "x86_64") else None
 
+_license_secret_file = ROOT / "license_build_secret.txt"
+if not _license_secret_file.is_file():
+    raise SystemExit(
+        "license_build_secret.txt is missing — build_customer_mac.py writes "
+        "it from CRM_LICENSE_SECRET before invoking PyInstaller. Don't run "
+        "this .spec directly; use that script (or the CI workflow)."
+    )
+
 a = Analysis(
     ["launch_crm.py"],
     pathex=[str(ROOT)],
@@ -20,6 +28,7 @@ a = Analysis(
         (str(ROOT / "static"), "static"),
         (str(ROOT / "folder_picker.py"), "."),
         (str(ROOT / "VERSION"), "."),
+        (str(_license_secret_file), "."),
     ],
     hiddenimports=[
         "werkzeug.security",

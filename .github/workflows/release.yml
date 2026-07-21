@@ -23,7 +23,9 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
-      - run: |
+      - env:
+          CRM_LICENSE_SECRET: ${{ secrets.CRM_LICENSE_SECRET }}
+        run: |
           python -m pip install --upgrade pip
           pip install -r Source/requirements.txt pyinstaller
           python Source/build_customer_mac.py --arch arm64
@@ -50,7 +52,9 @@ jobs:
         with:
           python-version: '3.12'
           architecture: x64
-      - run: |
+      - env:
+          CRM_LICENSE_SECRET: ${{ secrets.CRM_LICENSE_SECRET }}
+        run: |
           arch -x86_64 python -m pip install --upgrade pip
           arch -x86_64 python -m pip install --no-cache-dir -r Source/requirements.txt pyinstaller
           arch -x86_64 python Source/build_customer_mac.py --arch x86_64
@@ -68,7 +72,9 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
-      - run: |
+      - env:
+          CRM_LICENSE_SECRET: ${{ secrets.CRM_LICENSE_SECRET }}
+        run: |
           python -m pip install --upgrade pip
           pip install -r Source/requirements.txt pyinstaller
           python Source/build_customer_windows_copy.py
