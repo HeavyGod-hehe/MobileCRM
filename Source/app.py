@@ -47,6 +47,7 @@ import base64
 import binascii
 import os
 import re
+import secrets
 import sqlite3
 import subprocess
 import sys
@@ -70,7 +71,42 @@ if getattr(sys, "frozen", False):
 else:
     app = Flask(__name__)
 
-app.secret_key = os.environ.get("CRM_SECRET_KEY", "crm-local-dev-secret-change-in-prod")
+def _load_or_create_secret_key() -> str:
+    """A hardcoded Flask secret_key meant every customer build shipped the
+    exact same session-signing key -- anyone who decompiled/grepped one
+    customer's .exe could forge a valid session cookie for every other
+    installation. Generate a random key per installation on first run
+    instead, and persist it next to that installation's own database (so
+    later launches reuse the same key -- sessions survive a normal restart,
+    just not a fresh reinstall/wipe of the Data folder). CRM_SECRET_KEY is
+    kept only as a deterministic override for the test suite, never as a
+    fallback a real customer build silently ships with."""
+    env_key = os.environ.get("CRM_SECRET_KEY")
+    if env_key:
+        return env_key
+
+    key_path = db.DB_PATH.parent / "secret_key"
+    key_path.parent.mkdir(parents=True, exist_ok=True)
+    if key_path.is_file():
+        existing = key_path.read_text(encoding="utf-8").strip()
+        if existing:
+            return existing
+
+    new_key = secrets.token_hex(32)
+    # Write to a temp file and rename into place, same pattern as
+    # license_guard.save_license() -- a crash mid-write can't leave a
+    # half-written key file this way (rename is atomic).
+    tmp_path = key_path.with_suffix(".tmp")
+    tmp_path.write_text(new_key, encoding="utf-8")
+    try:
+        os.chmod(tmp_path, 0o600)
+    except OSError:
+        pass
+    tmp_path.replace(key_path)
+    return new_key
+
+
+app.secret_key = _load_or_create_secret_key()
 
 APP_VERSION = (Path(__file__).parent / "VERSION").read_text(encoding="utf-8").strip() if not getattr(sys, "frozen", False) else ""
 if getattr(sys, "frozen", False):
