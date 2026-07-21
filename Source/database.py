@@ -1672,7 +1672,14 @@ def request_password_reset(conn, email):
     if not row:
         raise ValueError("No account found with that email")
 
-    email_cfg = get_email_settings(conn, None)
+    # Use the REQUESTING user's own SMTP settings, never another account's —
+    # this used to always resolve to user id 1's Gmail credentials regardless
+    # of who was actually requesting the reset, silently sending (or failing
+    # to send) OTPs using a stranger's mailbox. The generic vendor-contact
+    # fallback below stays global by design (it's the vendor's own WhatsApp/
+    # support note, shown on the login page before anyone is authenticated,
+    # not a personal credential).
+    email_cfg = get_email_settings(conn, row["id"])
     if not email_cfg["gmail_configured"]:
         info = get_vendor_reset_info(conn)
         wa = info.get("vendor_whatsapp") or ""
@@ -1702,14 +1709,13 @@ def request_password_reset(conn, email):
     )
 
     import email_service
-    admin_id = conn.execute("SELECT id FROM users ORDER BY id ASC LIMIT 1").fetchone()["id"]
-    admin_settings = get_user_settings(conn, admin_id)
+    requester_settings = get_user_settings(conn, row["id"])
     email_service.send_otp_email(
         email,
         otp,
-        smtp_user=admin_settings["gmail_smtp_user"],
-        smtp_password=admin_settings["gmail_smtp_app_password"],
-        shop_name=row["shop_name"] or admin_settings.get("shop_name", "Phone Reseller CRM"),
+        smtp_user=requester_settings["gmail_smtp_user"],
+        smtp_password=requester_settings["gmail_smtp_app_password"],
+        shop_name=row["shop_name"] or requester_settings.get("shop_name", "Phone Reseller CRM"),
     )
     return {
         "ok": True,

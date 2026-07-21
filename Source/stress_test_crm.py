@@ -1156,13 +1156,35 @@ def main():
             with db.db_session() as conn:
                 ou = db.register_user(conn, "otp_stress", "otppass123", "otp_stress@example.com", "OTP Shop")
                 o_uid = ou["user_id"]
-                # request_password_reset() reads Gmail SMTP settings from the
-                # first-ever registered user in the DB (single-admin config for
-                # the whole shop), not from the user requesting the reset --
-                # so the sender credentials must be set on that admin user.
+                # Bug #4: request_password_reset() used to always read Gmail
+                # SMTP settings from the first-ever registered user in the DB,
+                # regardless of who was actually requesting the reset --
+                # silently sending (or trying to send) using a stranger's
+                # mailbox. It must now resolve strictly from the REQUESTING
+                # user's own settings. Prove isolation first: configure valid
+                # SMTP creds on the admin (first) user only, leave the
+                # requesting user's own settings empty, and confirm the
+                # requester's reset falls back to the vendor message instead
+                # of silently borrowing the admin's credentials.
                 admin_id = conn.execute("SELECT id FROM users ORDER BY id ASC LIMIT 1").fetchone()["id"]
                 db.update_user_settings(conn, admin_id, {
-                    "gmail_smtp_user": "vendor@example.com",
+                    "gmail_smtp_user": "admin@example.com",
+                    "gmail_smtp_app_password": "validapppassword",
+                })
+
+            with db.db_session() as conn:
+                result = db.request_password_reset(conn, "otp_stress@example.com")
+                assert result["ok"] is True and result["email_sent"] is False, (
+                    "Requesting user has no SMTP settings of their own -- must not "
+                    "silently send using the admin user's credentials"
+                )
+                assert result["vendor_fallback"] is True
+
+            # Now configure the REQUESTING user's own SMTP settings -- only
+            # then should sending actually work.
+            with db.db_session() as conn:
+                db.update_user_settings(conn, o_uid, {
+                    "gmail_smtp_user": "otp_stress@example.com",
                     "gmail_smtp_app_password": "validapppassword",
                 })
 
@@ -1198,9 +1220,11 @@ def main():
                 except ValueError:
                     pass
 
-            # Bad Gmail App Password surfaces as a clear ValueError, not a raw crash
+            # Bad Gmail App Password on the REQUESTING user surfaces as a
+            # clear ValueError, not a raw crash -- and admin's still-valid
+            # credentials must not be used as a silent fallback here either.
             with db.db_session() as conn:
-                db.update_user_settings(conn, admin_id, {"gmail_smtp_app_password": "wrongpassword"})
+                db.update_user_settings(conn, o_uid, {"gmail_smtp_app_password": "wrongpassword"})
             with db.db_session() as conn:
                 try:
                     db.request_password_reset(conn, "otp_stress@example.com")
