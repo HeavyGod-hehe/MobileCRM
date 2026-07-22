@@ -7,6 +7,7 @@ script after the CRM process exits (required on Windows/macOS).
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import platform
@@ -152,16 +153,43 @@ def _pick_download(manifest: dict[str, Any]) -> dict[str, Any] | None:
     return None
 
 
+def _is_valid_manifest(data: Any) -> bool:
+    """Structural check on a fetched manifest before it's trusted anywhere
+    else in this module. Bug #10: nothing validated version.json's shape
+    before this -- a malformed manifest (e.g. a download entry that's a
+    string instead of an object) would crash check_for_updates() with an
+    AttributeError instead of being treated as "no update available," the
+    same way an unreachable manifest already is."""
+    if not isinstance(data, dict):
+        return False
+    version = data.get("version")
+    if not isinstance(version, str) or not version.strip():
+        return False
+    downloads = data.get("downloads")
+    if downloads is not None:
+        if not isinstance(downloads, dict):
+            return False
+        for entry in downloads.values():
+            if not isinstance(entry, dict):
+                return False
+            if "url" in entry and not isinstance(entry["url"], str):
+                return False
+            if "sha256" in entry and not isinstance(entry["sha256"], str):
+                return False
+    return True
+
+
 def fetch_manifest(url: str | None = None) -> dict[str, Any] | None:
     """Download and parse version.json from the public releases repo.
-    Returns None on any network/parse failure rather than raising, since a
-    failed update check should be invisible to the shop owner, not a crash."""
+    Returns None on any network/parse/shape failure rather than raising,
+    since a failed update check should be invisible to the shop owner, not
+    a crash."""
     manifest_url = (url or DEFAULT_MANIFEST_URL).strip()
     if not manifest_url:
         return None
     try:
         data = _http_get_json(manifest_url, timeout=4)
-        if isinstance(data, dict) and data.get("version"):
+        if _is_valid_manifest(data):
             return data
     except (urllib.error.URLError, TimeoutError, json.JSONDecodeError, OSError):
         pass
@@ -211,6 +239,7 @@ def check_for_updates() -> dict[str, Any]:
         "release_notes": release_notes,
         "download_hint": page_url,
         "download_url": (download or {}).get("url"),
+        "download_sha256": (download or {}).get("sha256"),
         "can_auto_install": can_auto_install,
         "platform": platform_key(),
         "frozen": is_frozen_build(),
@@ -465,7 +494,15 @@ def _apply_downloaded_update(zip_path: Path, target: dict[str, Any]) -> None:
     os._exit(0)
 
 
-def _install_worker(download_url: str) -> None:
+def _sha256_file(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as f:
+        for chunk in iter(lambda: f.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def _install_worker(download_url: str, expected_sha256: str | None = None) -> None:
     """Runs in a background thread (started by start_install() below): does
     the actual download + apply, updating _state as it progresses so the
     web UI's polling can show a live progress bar. Any exception here is
@@ -480,6 +517,16 @@ def _install_worker(download_url: str) -> None:
 
         _set_state(status="downloading", progress=0, message="Downloading update…")
         _download_file(download_url, zip_path)
+
+        if expected_sha256:
+            _set_state(status="downloading", progress=99, message="Verifying download…")
+            actual = _sha256_file(zip_path)
+            if actual.lower() != expected_sha256.lower():
+                raise RuntimeError(
+                    "Downloaded update failed checksum verification — the file "
+                    "may be corrupted or incomplete. Please try again."
+                )
+
         _apply_downloaded_update(zip_path, target)
     except Exception as exc:
         _set_state(status="error", error=str(exc), message=str(exc))
@@ -498,11 +545,16 @@ def start_install(download_url: str | None = None) -> dict[str, Any]:
     if not url:
         raise RuntimeError("No download URL for this platform in the update manifest.")
 
+    # Only trust the manifest's checksum when downloading the exact URL it
+    # was computed for -- an explicitly overridden download_url has no
+    # known-good checksum to verify against.
+    expected_sha256 = info.get("download_sha256") if url == info.get("download_url") else None
+
     with _state_lock:
         if _state.get("status") in ("downloading", "extracting", "applying", "restarting"):
             return dict(_state)
 
     _set_state(status="checking", progress=0, message="Starting update…", error=None)
-    thread = threading.Thread(target=_install_worker, args=(url,), daemon=True)
+    thread = threading.Thread(target=_install_worker, args=(url, expected_sha256), daemon=True)
     thread.start()
     return get_update_state()

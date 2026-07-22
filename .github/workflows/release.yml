@@ -179,8 +179,17 @@ jobs:
             --version "${{ steps.ver.outputs.version }}" \
             --repo "$RELEASES_REPO" \
             --tag "v${{ steps.ver.outputs.version }}" \
+            --artifacts-dir dist \
             --output releases-repo/version.json
           cp Source/VERSION releases-repo/VERSION
+
+      - name: Validate release manifest
+        # A malformed version.json wouldn't fail CI before this existed --
+        # it would silently ship, and every customer's in-app updater would
+        # either crash or quietly stop offering updates. Fail the release
+        # here instead, before the manifest is committed to the public repo.
+        run: |
+          python Source/scripts/validate_release.py releases-repo/version.json --artifacts-dir dist
 
       - name: Commit manifest to releases repo
         working-directory: releases-repo
