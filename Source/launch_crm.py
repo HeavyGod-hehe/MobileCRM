@@ -182,6 +182,13 @@ def _run_server(port: int) -> None:
     from app import app
 
     _log(f"Server ready at http://{HOST}:{port}")
+    if HOST not in ("127.0.0.1", "localhost", "::1"):
+        _log(
+            f"WARNING: CRM_HOST={HOST} is a non-loopback address -- this app "
+            "has no CSRF protection and was built for localhost-only use. "
+            "Anyone who can reach this address on the network can use the "
+            "CRM as if they were logged in. Only do this on a trusted network."
+        )
     app.run(host=HOST, port=port, debug=False, use_reloader=False, threaded=True)
 
 

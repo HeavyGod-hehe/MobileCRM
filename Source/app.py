@@ -1936,7 +1936,16 @@ if __name__ == "__main__":
     print(f"  Server: {url}")
     print("  Press Ctrl+C to stop.\n")
 
+    if _HOST not in ("127.0.0.1", "localhost", "::1"):
+        print(
+            "  WARNING: CRM_HOST is set to a non-loopback address "
+            f"({_HOST}) -- this app has no CSRF protection and was built "
+            "for localhost-only use. Anyone who can reach this address on "
+            "your network can use the CRM as if they were logged in. Only "
+            "do this on a network you trust.\n"
+        )
+
     backup_service.run_startup_backups()
     backup_service.start_auto_backup_thread()
     threading.Thread(target=_open_browser, args=(_HOST, port), daemon=True).start()
-    app.run(host="127.0.0.1", port=port, debug=False, use_reloader=False)
+    app.run(host=_HOST, port=port, debug=False, use_reloader=False)
