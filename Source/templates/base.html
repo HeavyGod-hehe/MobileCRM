@@ -203,6 +203,21 @@
       d.textContent = s || '';
       return d.innerHTML;
     };
+    // Bug #24 (2026-07-22): audited every innerHTML assignment in
+    // templates/*.html and static/ui.js for a sink that skips this
+    // function (or its static/ui.js twin, _escSelectHtml — same
+    // textContent-round-trip technique) on user-entered text (account
+    // names/contact, phone model/condition/imei/notes, invoice fields,
+    // journal narration/reference, etc). Text fields do accept raw
+    // HTML/script on the way IN with no rejection (confirmed, e.g. an
+    // account name can literally contain <script>) -- but every render
+    // path found escapes it on the way OUT before insertion, so it's
+    // never interpreted as markup. No `| safe` filter anywhere in the
+    // Jinja templates either. Conclusion: not exploitable as shipped.
+    // Keep it that way -- any NEW innerHTML write of user text must call
+    // esc()/_escSelectHtml() too, not assume Jinja's own auto-escaping
+    // covers client-side JS renders (it doesn't -- that's a separate
+    // escaping boundary).
   </script>
   {% block scripts %}{% endblock %}
 </body>
