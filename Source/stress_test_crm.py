@@ -14,7 +14,7 @@ import threading
 import time
 import traceback
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 
 # Use isolated DB unless already set
@@ -1727,6 +1727,72 @@ def main():
 
     run_test("Forgot-password OTP flow end to end (SMTP transport mocked, real app logic)",
               test_forgot_password_otp_flow)
+
+    # --- Gap coverage: OTP rate limiting / lockout (bug #16) ---
+    def test_otp_rate_limit_locks_out_after_max_attempts():
+        rl_email = "rl_otp_bug16@example.com"
+        db._otp_rate_limit_clear(rl_email)  # defensive, in case of prior test leakage
+        with db.db_session() as conn:
+            u = db.register_user(conn, "otp_ratelimit_user", "pass1234", rl_email, "RL Shop")
+            rl_uid = u["user_id"]
+            expires = (datetime.utcnow() + timedelta(minutes=10)).strftime("%Y-%m-%d %H:%M:%S")
+            conn.execute(
+                "INSERT INTO password_reset_tokens (user_id, email, otp, expires_at) VALUES (?, ?, ?, ?)",
+                (rl_uid, rl_email, "654321", expires),
+            )
+
+        try:
+            for attempt in range(db._OTP_MAX_ATTEMPTS):
+                with db.db_session() as conn:
+                    try:
+                        db.verify_otp_and_reset_password(conn, rl_email, "000000", "wrongpass1")
+                        raise AssertionError("Expected a wrong OTP to be rejected")
+                    except ValueError as e:
+                        assert "too many" not in str(e).lower(), (
+                            f"Should not be locked out yet after only {attempt + 1} attempt(s)"
+                        )
+
+            # The rate limit is now exhausted -- even the CORRECT OTP must be
+            # rejected by the lockout, not silently let through.
+            with db.db_session() as conn:
+                try:
+                    db.verify_otp_and_reset_password(conn, rl_email, "654321", "newpassword1")
+                    raise AssertionError(
+                        "Expected lockout to block verification even with the correct OTP"
+                    )
+                except ValueError as e:
+                    assert "too many" in str(e).lower()
+        finally:
+            db._otp_rate_limit_clear(rl_email)
+
+    run_test("OTP verification locks out after too many wrong attempts",
+              test_otp_rate_limit_locks_out_after_max_attempts)
+
+    def test_otp_expires_after_ten_minutes_not_fifteen():
+        assert db._OTP_EXPIRY_MINUTES == 10, (
+            "OTP expiry should be 10 minutes per bug #16, not the old 15"
+        )
+        rl_email = "rl_otp_expiry_bug16@example.com"
+        db._otp_rate_limit_clear(rl_email)
+        with db.db_session() as conn:
+            u = db.register_user(conn, "otp_expiry_user", "pass1234", rl_email, "Expiry Shop")
+            e_uid = u["user_id"]
+            # An OTP issued 11 minutes ago (past the 10-minute expiry) must
+            # be rejected as expired, not accepted.
+            expires = (datetime.utcnow() - timedelta(minutes=1)).strftime("%Y-%m-%d %H:%M:%S")
+            conn.execute(
+                "INSERT INTO password_reset_tokens (user_id, email, otp, expires_at) VALUES (?, ?, ?, ?)",
+                (e_uid, rl_email, "111222", expires),
+            )
+        with db.db_session() as conn:
+            try:
+                db.verify_otp_and_reset_password(conn, rl_email, "111222", "newpassword1")
+                raise AssertionError("Expected an expired OTP to be rejected")
+            except ValueError as e:
+                assert "expired" in str(e).lower()
+        db._otp_rate_limit_clear(rl_email)
+
+    run_test("OTP expires after 10 minutes", test_otp_expires_after_ten_minutes_not_fifteen)
 
     # --- Gap coverage: per-user restore (bug #1 / #2) ---
     #

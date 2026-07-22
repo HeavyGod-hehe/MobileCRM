@@ -53,6 +53,8 @@ import sqlite3
 import os
 import sys
 import tempfile
+import threading
+import time
 from contextlib import contextmanager
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -1814,6 +1816,54 @@ def get_vendor_reset_info(conn):
     }
 
 
+# --- OTP rate limiting (bug #16) ---
+#
+# A 6-digit OTP is only as safe as the number of guesses an attacker gets.
+# In-memory is fine here: this is a single local desktop process per shop,
+# not a multi-worker web server where state would need to be shared.
+_OTP_ATTEMPT_WINDOW_SECONDS = 15 * 60
+_OTP_MAX_ATTEMPTS = 5
+_OTP_LOCKOUT_SECONDS = 15 * 60
+_OTP_EXPIRY_MINUTES = 10
+
+_otp_rate_lock = threading.Lock()
+_otp_attempts: dict[str, list[float]] = {}
+_otp_lockout_until: dict[str, float] = {}
+
+
+def _otp_rate_limit_check(email: str) -> None:
+    """Raises ValueError if this email identifier is currently locked out
+    from OTP verification attempts."""
+    now = time.time()
+    with _otp_rate_lock:
+        lockout_until = _otp_lockout_until.get(email)
+        if lockout_until and now < lockout_until:
+            wait_minutes = max(1, int((lockout_until - now) // 60) + 1)
+            raise ValueError(
+                f"Too many incorrect attempts — try again in about {wait_minutes} minute(s)."
+            )
+
+
+def _otp_rate_limit_record_attempt(email: str) -> None:
+    """Record one failed verification attempt; locks the identifier out for
+    _OTP_LOCKOUT_SECONDS once _OTP_MAX_ATTEMPTS is reached within the
+    rolling _OTP_ATTEMPT_WINDOW_SECONDS window."""
+    now = time.time()
+    with _otp_rate_lock:
+        attempts = [t for t in _otp_attempts.get(email, []) if now - t < _OTP_ATTEMPT_WINDOW_SECONDS]
+        attempts.append(now)
+        _otp_attempts[email] = attempts
+        if len(attempts) >= _OTP_MAX_ATTEMPTS:
+            _otp_lockout_until[email] = now + _OTP_LOCKOUT_SECONDS
+
+
+def _otp_rate_limit_clear(email: str) -> None:
+    """Reset rate-limit state for this identifier after a successful reset."""
+    with _otp_rate_lock:
+        _otp_attempts.pop(email, None)
+        _otp_lockout_until.pop(email, None)
+
+
 def request_password_reset(conn, email):
     email = email.strip().lower()
     if not email:
@@ -1847,7 +1897,7 @@ def request_password_reset(conn, email):
         }
 
     otp = f"{random.randint(100000, 999999)}"
-    expires = (datetime.utcnow() + timedelta(minutes=15)).strftime("%Y-%m-%d %H:%M:%S")
+    expires = (datetime.utcnow() + timedelta(minutes=_OTP_EXPIRY_MINUTES)).strftime("%Y-%m-%d %H:%M:%S")
     conn.execute(
         "UPDATE password_reset_tokens SET used = 1 WHERE user_id = ? AND used = 0",
         (row["id"],),
@@ -1885,10 +1935,16 @@ def verify_otp_and_reset_password(conn, email, otp, new_password):
     if not new_password or len(new_password) < 6:
         raise ValueError("New password must be at least 6 characters")
 
+    # Bug #16: check BEFORE touching the DB, so a locked-out identifier
+    # can't keep spending guesses just because each individual check below
+    # is cheap -- the lockout itself has to be the first gate.
+    _otp_rate_limit_check(email)
+
     user = conn.execute(
         "SELECT id FROM users WHERE lower(email) = ?", (email,)
     ).fetchone()
     if not user:
+        _otp_rate_limit_record_attempt(email)
         raise ValueError("Invalid email or OTP")
 
     token = conn.execute(
@@ -1900,9 +1956,11 @@ def verify_otp_and_reset_password(conn, email, otp, new_password):
         (user["id"], email, otp),
     ).fetchone()
     if not token:
+        _otp_rate_limit_record_attempt(email)
         raise ValueError("Invalid or expired OTP")
 
     if token["expires_at"] < datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S"):
+        _otp_rate_limit_record_attempt(email)
         raise ValueError("OTP has expired — request a new one")
 
     conn.execute(
@@ -1913,6 +1971,7 @@ def verify_otp_and_reset_password(conn, email, otp, new_password):
         "UPDATE password_reset_tokens SET used = 1 WHERE id = ?",
         (token["id"],),
     )
+    _otp_rate_limit_clear(email)
     return {"ok": True, "message": "Password updated. You can sign in now."}
 
 
