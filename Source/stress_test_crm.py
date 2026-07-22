@@ -627,6 +627,32 @@ def main():
 
     run_test("Bank opening balance rejects negative values", test_bank_negative_initial_balance_rejected)
 
+    # --- Gap coverage: signup backup runs in the background, not on the request path (bug #20) ---
+    def test_signup_backup_runs_in_background_not_blocking():
+        import backup_service
+        with db.db_session() as conn:
+            u = db.register_user(conn, "signup_bg_user", "pass1234", "", "Signup BG Shop")
+            bg_uid = u["user_id"]
+            scratch = Path(tempfile.mkdtemp(prefix="crm_signup_backup_"))
+            db.update_user_settings(conn, bg_uid, {"local_backup_path": str(scratch)})
+
+        t0 = time.perf_counter()
+        thread = backup_service.start_signup_backup_thread(bg_uid)
+        elapsed_ms = (time.perf_counter() - t0) * 1000
+        assert elapsed_ms < 50, (
+            f"start_signup_backup_thread should return near-instantly (not block on the "
+            f"backup itself), took {elapsed_ms:.1f}ms"
+        )
+
+        thread.join(timeout=10)
+        assert not thread.is_alive(), "Background signup backup did not complete in time"
+
+        backups = list(scratch.glob("*_crm_backup_*.db"))
+        assert backups, "Expected the background thread to have actually written a real backup file"
+
+    run_test("Signup backup runs in the background and still actually completes",
+              test_signup_backup_runs_in_background_not_blocking)
+
     run_test("Delete account entry cascades cash book", test_delete_account_entry_cascade)
     run_test("Journal voucher create/delete", test_journal_voucher)
     run_test("Purchase return flow", test_purchase_return)

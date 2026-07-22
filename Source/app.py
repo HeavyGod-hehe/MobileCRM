@@ -411,7 +411,7 @@ def auth_signup():
         session["username"] = user["username"]
         session["show_welcome"] = True
         import backup_service
-        backup_service.backup_user_data(user["user_id"], force=True)
+        backup_service.start_signup_backup_thread(user["user_id"])
         return jsonify({"ok": True, **user})
     except ValueError as e:
         return jsonify({"error": str(e)}), 400

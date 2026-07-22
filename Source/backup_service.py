@@ -9,6 +9,27 @@ from datetime import datetime
 from pathlib import Path
 
 import database as db
+from app_paths import customer_data_dir
+
+
+def _log_path() -> Path | None:
+    data_dir = customer_data_dir()
+    if not data_dir:
+        return None
+    data_dir.mkdir(parents=True, exist_ok=True)
+    return data_dir / "crm.log"
+
+
+def _log(message: str) -> None:
+    """Same append-only Data/crm.log pattern launch_crm.py uses -- writes
+    are a no-op when running from source (customer_data_dir() is None
+    there), which is fine since dev runs already print to a real console."""
+    path = _log_path()
+    if not path:
+        return
+    stamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    with path.open("a", encoding="utf-8") as handle:
+        handle.write(f"[{stamp}] {message}\n")
 
 
 def _snapshot_database(source_conn: sqlite3.Connection, dest_path: Path) -> None:
@@ -104,3 +125,28 @@ def start_auto_backup_thread() -> None:
             time.sleep(BACKUP_INTERVAL_SECONDS)
 
     threading.Thread(target=_loop, daemon=True, name="crm-auto-backup").start()
+
+
+def start_signup_backup_thread(user_id: int) -> threading.Thread:
+    """Bug #20: the signup route used to call backup_user_data() directly
+    on the request thread, so a slow disk (or, before it was fixed, any
+    error the sync backup raised, which was never caught here) held up the
+    signup response -- or made it fail outright even though the account
+    was already created. Runs in the background instead so signup responds
+    immediately; success/failure is written to Data/crm.log either way.
+    Returns the Thread (callers don't need it -- app.py doesn't -- but
+    tests can join() it to deterministically wait for completion)."""
+
+    def _run() -> None:
+        try:
+            path = backup_user_data(user_id, force=True)
+            if path:
+                _log(f"Signup backup completed for user {user_id}: {path}")
+            else:
+                _log(f"Signup backup skipped for user {user_id} (no backup folder configured)")
+        except Exception as exc:
+            _log(f"Signup backup FAILED for user {user_id}: {exc}")
+
+    thread = threading.Thread(target=_run, daemon=True, name="crm-signup-backup")
+    thread.start()
+    return thread
