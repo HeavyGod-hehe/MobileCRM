@@ -99,8 +99,6 @@ CONDITION_OPTIONS = [
     ]
 ]
 
-DEFAULT_USER = {"username": "shahir", "password": "test123"}
-
 DEFAULT_SETTINGS = {
     "partner1_name": "",
     "partner1_capital": "0",
