@@ -2871,8 +2871,36 @@ def update_phone(conn, user_id, phone_id, data):
 
 
 def delete_phone(conn, user_id, phone_id):
-    if get_phone(conn, user_id, phone_id):
-        _reverse_phone_ledger(conn, user_id, phone_id)
+    if not get_phone(conn, user_id, phone_id):
+        return
+    # Bug #18: invoices.phone_id / purchase_invoices.phone_id have no FK
+    # constraint at all (unlike return_logs.phone_id, which is
+    # ON DELETE SET NULL), so a hard delete used to silently orphan any
+    # printed invoice referencing this phone. Block the delete instead of
+    # cascading through a real paper trail -- the shop owner should
+    # explicitly decide what happens to invoices already handed to a
+    # customer/supplier, not have them silently reference a phone that no
+    # longer exists.
+    invoice_count = conn.execute(
+        "SELECT COUNT(*) c FROM invoices WHERE phone_id = ? AND user_id = ?",
+        (phone_id, user_id),
+    ).fetchone()["c"]
+    purchase_invoice_count = conn.execute(
+        "SELECT COUNT(*) c FROM purchase_invoices WHERE phone_id = ? AND user_id = ?",
+        (phone_id, user_id),
+    ).fetchone()["c"]
+    if invoice_count or purchase_invoice_count:
+        parts = []
+        if invoice_count:
+            parts.append(f"{invoice_count} sale invoice(s)")
+        if purchase_invoice_count:
+            parts.append(f"{purchase_invoice_count} purchase invoice(s)")
+        raise ValueError(
+            f"Can't delete this phone — it has {' and '.join(parts)} on record. "
+            "Mark it as Returned to Supplier instead, or delete those invoices "
+            "first if they were created by mistake."
+        )
+    _reverse_phone_ledger(conn, user_id, phone_id)
     conn.execute(
         "DELETE FROM phones WHERE id = ? AND user_id = ?",
         (phone_id, user_id),
@@ -2881,15 +2909,24 @@ def delete_phone(conn, user_id, phone_id):
 
 def bulk_delete_phones(conn, user_id, phone_ids):
     deleted = 0
+    errors = []
     for phone_id in phone_ids:
+        phone_id = int(phone_id)
         existing = conn.execute(
             "SELECT id FROM phones WHERE id = ? AND user_id = ?",
-            (int(phone_id), user_id),
+            (phone_id, user_id),
         ).fetchone()
-        if existing:
-            delete_phone(conn, user_id, int(phone_id))
+        if not existing:
+            continue
+        try:
+            delete_phone(conn, user_id, phone_id)
             deleted += 1
-    return {"deleted": deleted}
+        except ValueError as e:
+            # Same pattern as bulk_mark_sold: one phone with linked invoices
+            # shouldn't block deleting the rest of the batch -- collect it
+            # and keep going.
+            errors.append(f"Phone #{phone_id}: {e}")
+    return {"deleted": deleted, "errors": errors}
 
 
 def bulk_mark_sold(conn, user_id, items, default_sale_price=None):

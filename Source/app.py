@@ -1039,6 +1039,8 @@ def delete_phone(phone_id):
                 "error": "Can't delete this phone — it still has linked cash "
                          "or account entries. Remove those first, then try again.",
             }), 409
+        except ValueError as exc:
+            return jsonify({"error": str(exc)}), 409
         return jsonify({"ok": True})
 
 

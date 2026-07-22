@@ -510,6 +510,97 @@ def main():
     run_test("Food expense -> cash out sync", test_food_expense_cash_out)
     run_test("Wasool debit -> cash in sync", test_wasool_cash_in)
     run_test("Delete phone cascades ledger", test_delete_phone_cascade)
+
+    # --- Gap coverage: deleting a phone must not orphan its invoices (bug #18) ---
+    def test_delete_phone_blocked_when_invoices_exist():
+        with db.db_session() as conn:
+            p = db.create_phone(conn, user_id, {
+                "model": "Invoice Guard Phone", "type": "PTA", "purchase_price": 30000,
+                "status": "Sold", "sale_price": 40000,
+                "purchase_payment_method": "cash", "sale_payment_method": "cash",
+                "imei": "888800000007777",
+            })
+            phone_id = p["id"]
+            db.create_invoice(conn, user_id, {
+                "customer_name": "Invoice Guard Buyer", "phone_id": phone_id,
+                "model": "Invoice Guard Phone", "amount": 40000,
+            })
+
+            try:
+                db.delete_phone(conn, user_id, phone_id)
+                raise AssertionError("Expected deleting a phone with a sale invoice to be blocked")
+            except ValueError as e:
+                assert "invoice" in str(e).lower()
+
+            still_there = db.get_phone(conn, user_id, phone_id)
+            assert still_there is not None, "Blocked delete must not remove the phone"
+
+            invoice_count = conn.execute(
+                "SELECT COUNT(*) c FROM invoices WHERE phone_id = ?", (phone_id,)
+            ).fetchone()["c"]
+            assert invoice_count == 1, "Blocked delete must not touch the invoice either"
+
+        # A separate phone with a PURCHASE invoice (not a sale invoice) must
+        # be blocked the same way.
+        with db.db_session() as conn:
+            p2 = db.create_phone(conn, user_id, {
+                "model": "Purchase Invoice Guard Phone", "type": "PTA", "purchase_price": 25000,
+                "status": "Bought", "purchase_payment_method": "cash",
+                "imei": "888800000008888",
+            })
+            phone2_id = p2["id"]
+            db.create_purchase_invoice(conn, user_id, {
+                "supplier_name": "Guard Supplier", "phone_id": phone2_id,
+                "model": "Purchase Invoice Guard Phone", "amount": 25000,
+            })
+            try:
+                db.delete_phone(conn, user_id, phone2_id)
+                raise AssertionError("Expected deleting a phone with a purchase invoice to be blocked")
+            except ValueError as e:
+                assert "invoice" in str(e).lower()
+
+        # A phone with NO invoices at all must still delete normally.
+        with db.db_session() as conn:
+            p3 = db.create_phone(conn, user_id, {
+                "model": "No Invoice Phone", "type": "PTA", "purchase_price": 20000,
+                "status": "Bought", "purchase_payment_method": "cash",
+                "imei": "888800000009999",
+            })
+            phone3_id = p3["id"]
+            db.delete_phone(conn, user_id, phone3_id)
+            assert db.get_phone(conn, user_id, phone3_id) is None
+
+    run_test("Deleting a phone with invoices on record is blocked, not silently orphaning them",
+              test_delete_phone_blocked_when_invoices_exist)
+
+    def test_bulk_delete_phones_reports_blocked_ones_without_aborting_the_batch():
+        with db.db_session() as conn:
+            deletable = db.create_phone(conn, user_id, {
+                "model": "Bulk Deletable Phone", "type": "PTA", "purchase_price": 15000,
+                "status": "Bought", "purchase_payment_method": "cash",
+                "imei": "888800000010000",
+            })
+            blocked = db.create_phone(conn, user_id, {
+                "model": "Bulk Blocked Phone", "type": "PTA", "purchase_price": 15000,
+                "status": "Bought", "purchase_payment_method": "cash",
+                "imei": "888800000010001",
+            })
+            db.create_purchase_invoice(conn, user_id, {
+                "supplier_name": "Bulk Guard Supplier", "phone_id": blocked["id"],
+                "model": "Bulk Blocked Phone", "amount": 15000,
+            })
+
+            result = db.bulk_delete_phones(conn, user_id, [deletable["id"], blocked["id"]])
+            assert result["deleted"] == 1
+            assert len(result["errors"]) == 1
+            assert f"#{blocked['id']}" in result["errors"][0]
+            assert "invoice" in result["errors"][0].lower()
+
+            assert db.get_phone(conn, user_id, deletable["id"]) is None
+            assert db.get_phone(conn, user_id, blocked["id"]) is not None
+
+    run_test("Bulk delete skips phones blocked by invoices instead of aborting the whole batch",
+              test_bulk_delete_phones_reports_blocked_ones_without_aborting_the_batch)
     run_test("Delete account entry cascades cash book", test_delete_account_entry_cascade)
     run_test("Journal voucher create/delete", test_journal_voucher)
     run_test("Purchase return flow", test_purchase_return)
@@ -2323,15 +2414,18 @@ def main():
         else:
             report.add("No orphan account ledger links", True)
 
-        # Delete 30 phones and verify ledger cleanup
+        # Delete 30 phones and verify ledger cleanup. Uses bulk_delete_phones
+        # (not a raw per-phone loop) since bug #18 now blocks deleting a
+        # phone that has invoices on record -- some of these 30 accumulated
+        # invoices earlier in this same stress run, and bulk_delete_phones
+        # already skips those gracefully instead of aborting the batch.
         to_delete = conn.execute(
             "SELECT id FROM phones WHERE user_id=? AND status='Bought' LIMIT 30",
             (user_id,),
         ).fetchall()
         links_before = count_table(conn, "ledger_links", user_id)
         cb_before = count_table(conn, "cash_book_entries", user_id)
-        for row in to_delete:
-            db.delete_phone(conn, user_id, row["id"])
+        db.bulk_delete_phones(conn, user_id, [row["id"] for row in to_delete])
         links_after = count_table(conn, "ledger_links", user_id)
         cb_after = count_table(conn, "cash_book_entries", user_id)
         if links_after >= links_before:
