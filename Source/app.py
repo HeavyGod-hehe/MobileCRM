@@ -1125,9 +1125,12 @@ def dashboard():
 def update_settings():
     user_id = _current_user_id()
     data = request.get_json(force=True)
-    with db.db_session() as conn:
-        db.update_user_settings(conn, user_id, data)
-        return jsonify(db.compute_dashboard(conn, user_id))
+    try:
+        with db.db_session() as conn:
+            db.update_user_settings(conn, user_id, data)
+            return jsonify(db.compute_dashboard(conn, user_id))
+    except ValueError as exc:
+        return jsonify({"error": str(exc)}), 400
 
 
 @app.route("/api/storage/settings", methods=["GET"])

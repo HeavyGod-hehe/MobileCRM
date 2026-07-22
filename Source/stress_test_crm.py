@@ -627,6 +627,44 @@ def main():
 
     run_test("Purchases/expenses just after local midnight land in today's reports, not UTC-yesterday's",
               test_utc_vs_local_midnight_report_alignment)
+
+    # --- Gap coverage: purchase_invoice_counter allow-list + loud unknown keys (bug #14) ---
+    def test_purchase_invoice_counter_setting_persists_and_unknown_keys_are_loud():
+        with db.db_session() as conn:
+            u = db.register_user(conn, "settings_allowlist_user", "pass1234", "", "Allowlist Shop")
+            s_uid = u["user_id"]
+
+            db.update_user_settings(conn, s_uid, {"purchase_invoice_counter": "5000"})
+            settings = db.get_user_settings(conn, s_uid)
+            assert settings.get("purchase_invoice_counter") == "5000", (
+                "purchase_invoice_counter must actually persist, not be silently dropped"
+            )
+
+            try:
+                db.update_user_settings(conn, s_uid, {"this_key_does_not_exist": "x"})
+                raise AssertionError("Expected an unknown settings key to raise, not silently vanish")
+            except ValueError as e:
+                assert "this_key_does_not_exist" in str(e)
+
+            # A request mixing a real key with a bogus one must reject the
+            # whole thing (loud) rather than silently applying the good key
+            # and dropping the bad one.
+            theme_before = db.get_user_settings(conn, s_uid).get("theme")
+            try:
+                db.update_user_settings(conn, s_uid, {
+                    "theme": "some-distinct-test-theme", "totally_bogus_key": "y",
+                })
+                raise AssertionError("Expected a mixed valid/unknown key request to be rejected entirely")
+            except ValueError:
+                pass
+            settings_after = db.get_user_settings(conn, s_uid)
+            assert settings_after.get("theme") == theme_before, (
+                "A rejected mixed request must not partially apply the valid key it was bundled with"
+            )
+
+    run_test("purchase_invoice_counter persists; unknown setting keys raise instead of vanishing",
+              test_purchase_invoice_counter_setting_persists_and_unknown_keys_are_loud)
+
     run_test("Today summary includes sold-as-bought", test_today_bought_includes_sold)
     run_test("Update phone investments (bug fix)", test_update_investments)
     run_test("Udhar dashboard no double-count", test_udhar_no_double_count)

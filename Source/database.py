@@ -1647,12 +1647,19 @@ def update_user_settings(conn, user_id, data):
         "last_backup_at", "auto_backup_enabled",
         "shop_whatsapp", "vendor_whatsapp", "vendor_support_note",
         "gmail_smtp_user", "gmail_smtp_app_password", "invoice_counter",
-        "profit_reinvested_total",
+        "purchase_invoice_counter", "profit_reinvested_total",
     }
+    # Bug #14: this used to silently `continue` past any key not in
+    # `allowed` -- which is exactly how purchase_invoice_counter's own save
+    # (a few lines below, in _next_purchase_invoice_number) went missing
+    # for who knows how long without a single error anywhere. An unknown
+    # key is now loud instead: a future settings key added here without
+    # updating this set fails immediately, not silently.
+    unknown = [k for k in data if k not in allowed]
+    if unknown:
+        raise ValueError(f"Unknown setting key(s): {', '.join(sorted(unknown))}")
     user_fields = {}
     for key, value in data.items():
-        if key not in allowed:
-            continue
         if key in ("theme", "shop_name"):
             user_fields[key] = str(value)
         elif key == "shop_phones":
