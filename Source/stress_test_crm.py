@@ -701,16 +701,49 @@ def main():
                 f"Expected all three expense types in the breakdown, got {categories}"
             )
 
-            # A debit against the same expense-category account (e.g. a
-            # phone_expense's own mirrored account entry) must NOT also be
-            # counted here -- only 'credit' entries represent an expense.
+            # A STANDALONE debit against the same expense-category account
+            # (e.g. the shopkeeper manually recording a refund/credit note
+            # from the vendor) is a genuine reduction and must lower the
+            # total.
             db.create_entry(conn, food["id"], {
-                "entry_type": "debit", "amount": 200, "note": "Refund",
+                "entry_type": "debit", "amount": 200, "note": "Vendor refund",
                 "payment_source": "cash",
             }, user_id=es_uid)
-            summary_after_debit = db.expense_summary(conn, es_uid)
-            assert summary_after_debit["total_account_expenses"] == 750, (
-                "A debit entry on an expense-category account must not be counted as an expense"
+            summary_after_manual_debit = db.expense_summary(conn, es_uid)
+            assert summary_after_manual_debit["total_account_expenses"] == 550, (
+                f"Expected 750 - 200 = 550 after a standalone refund, got "
+                f"{summary_after_manual_debit['total_account_expenses']}"
+            )
+            refund_rows = [
+                e for e in summary_after_manual_debit["entries"]
+                if e["category"] == "Account Expense" and e["amount"] < 0
+            ]
+            assert len(refund_rows) == 1 and refund_rows[0]["amount"] == -200
+
+            # A debit that's the MIRRORED side of a phone_expense with its
+            # own account_id linked (add_phone_expense always creates this
+            # as account_entry_type='debit') must NOT also reduce the
+            # total here -- that event is already counted in
+            # total_phone_expenses, so subtracting it again would
+            # double-count it in the other direction.
+            p2 = db.create_phone(conn, es_uid, {
+                "model": "Expense Test Phone 2", "type": "PTA", "purchase_price": 20000,
+                "status": "Bought", "purchase_payment_method": "cash", "force": True,
+                "imei": "888800000012222",
+            })
+            db.add_phone_expense(conn, es_uid, p2["id"], {
+                "amount": 300, "description": "Battery replacement",
+                "payment_source": "cash", "account_id": food["id"], "force": True,
+            })
+            summary_after_linked_expense = db.expense_summary(conn, es_uid)
+            assert summary_after_linked_expense["total_phone_expenses"] == 1300, (
+                f"Expected phone expenses 1000 + 300 = 1300, got "
+                f"{summary_after_linked_expense['total_phone_expenses']}"
+            )
+            assert summary_after_linked_expense["total_account_expenses"] == 550, (
+                "A phone_expense's own mirrored debit on an expense-category account "
+                f"must not also reduce the account total, got "
+                f"{summary_after_linked_expense['total_account_expenses']}"
             )
 
     run_test("Expense Summary includes phone, fixed, AND account-based expenses",

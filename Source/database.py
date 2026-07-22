@@ -3460,18 +3460,24 @@ def list_fixed_expenses(conn, user_id):
 
 def expense_summary(conn, user_id, start_date=None, end_date=None):
     """Combined view of per-phone expenses, fixed (overhead) expenses, and
-    (bug #23) credit entries against accounts marked as an expense category
-    -- the third way to record an expense, which used to be invisible here
-    even though the money left correctly through the Cash Book and that
+    (bug #23) entries against accounts marked as an expense category -- the
+    third way to record an expense, which used to be invisible here even
+    though the money moved correctly through the Cash Book and that
     account's own statement.
 
-    Only entry_type='credit' rows on an is_expense_category account count
-    as an expense here -- a 'debit' against such an account is always
-    created as the mirrored SIDE of a phone_expense that already has its
-    own account_id linked (see add_phone_expense/_create_cash_book_synced,
-    account_entry_type='debit' whenever an account_id is given), so
-    filtering to 'credit' only is what keeps this from double-counting
-    those phone expenses a second time here.
+    A 'credit' on an is_expense_category account always counts as an
+    expense here. A 'debit' on one is more subtle: add_phone_expense (via
+    _create_cash_book_synced) always creates the DEBIT side of its own
+    mirrored account entry whenever the expense has an account_id linked
+    (account_entry_type='debit'), and that event is already counted in
+    total_phone_expenses -- subtracting it again here would double-count
+    it in the other direction. A genuine standalone debit (e.g. a
+    shopkeeper manually recording a refund/credit note from a vendor
+    against this category) is NOT linked to a phone_expense and should
+    reduce the total. The two are told apart via ledger_links: an account
+    entry recorded by _create_cash_book_synced always gets a
+    ledger_links row for its own source_type ('phone_expense' in this
+    case); a manually-entered debit via create_entry never does.
     """
     phone_rows = conn.execute(
         """
@@ -3496,12 +3502,22 @@ def expense_summary(conn, user_id, start_date=None, end_date=None):
     ).fetchall()
     account_rows = conn.execute(
         """
-        SELECT ae.id, ae.amount, ae.note AS description,
+        SELECT ae.id, ae.amount, ae.entry_type, ae.note AS description,
                date(ae.created_at, 'localtime') AS expense_date,
                a.name AS account_name, a.id AS account_id
         FROM account_entries ae
         JOIN accounts a ON a.id = ae.account_id
-        WHERE a.user_id = ? AND a.is_expense_category = 1 AND ae.entry_type = 'credit'
+        WHERE a.user_id = ? AND a.is_expense_category = 1
+          AND (
+            ae.entry_type = 'credit'
+            OR (
+              ae.entry_type = 'debit'
+              AND NOT EXISTS (
+                SELECT 1 FROM ledger_links ll
+                WHERE ll.account_entry_id = ae.id AND ll.source_type = 'phone_expense'
+              )
+            )
+          )
         ORDER BY ae.created_at DESC
         """,
         (user_id,),
@@ -3518,9 +3534,19 @@ def expense_summary(conn, user_id, start_date=None, end_date=None):
     fixed_expenses = [
         {**dict(r), "category": "Fixed Expense"} for r in fixed_rows if _in_range(r["expense_date"])
     ]
-    account_expenses = [
-        {**dict(r), "category": "Account Expense"} for r in account_rows if _in_range(r["expense_date"])
-    ]
+    account_expenses = []
+    for r in account_rows:
+        if not _in_range(r["expense_date"]):
+            continue
+        d = dict(r)
+        # A standalone debit (refund/credit-note against this expense
+        # category) reduces the total -- represented as a negative amount
+        # so the entries list and the running total stay consistent with
+        # each other at a glance.
+        if d.pop("entry_type") == "debit":
+            d["amount"] = -abs(d["amount"])
+        d["category"] = "Account Expense"
+        account_expenses.append(d)
     combined = sorted(
         phone_expenses + fixed_expenses + account_expenses,
         key=lambda x: x["expense_date"] or "", reverse=True,
