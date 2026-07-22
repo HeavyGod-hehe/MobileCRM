@@ -4714,6 +4714,23 @@ def delete_journal_voucher(conn, user_id, voucher_id):
 # --- Backup / Export ---
 
 def export_all_data(conn, user_id):
+    """Full JSON export of everything this user owns, for the Settings ->
+    Export JSON feature.
+
+    This was missing journal_vouchers, return_logs, invoices,
+    purchase_invoices, side_investments, and ledger_links entirely --
+    found while auditing user-owned tables for the restore fix (bug #1),
+    which discovers them dynamically instead of hand-listing them. Kept
+    this one hand-listed (not switched to that same dynamic resolver)
+    because several tables here deliberately export the friendlier
+    computed dict from their own list_*()/*_to_dict() helper (e.g.
+    phones' net_profit, accounts' balance/is_expense_category, banks'
+    balance) rather than raw columns -- a fully generic dump would lose
+    that. password_reset_tokens is deliberately excluded (security-
+    sensitive OTP codes, no value to the shop owner reading this file);
+    user_settings is already represented via `settings` above in decoded
+    form, so the raw key/value table would just be redundant.
+    """
     settings = get_user_settings(conn, user_id)
     return {
         "settings": settings,
@@ -4770,6 +4787,22 @@ def export_all_data(conn, user_id):
                 JOIN phones p ON p.id = pi.phone_id
                 WHERE p.user_id = ?
                 """,
+                (user_id,),
+            ).fetchall()
+        ],
+        "journal_vouchers": list_journal_vouchers(conn, user_id),
+        "return_logs": list_return_logs(conn, user_id),
+        "invoices": list_invoices(conn, user_id, limit=-1),
+        "purchase_invoices": list_purchase_invoices(conn, user_id, limit=-1),
+        "side_investments": [
+            dict(r) for r in conn.execute(
+                "SELECT * FROM side_investments WHERE user_id = ? ORDER BY created_at DESC",
+                (user_id,),
+            ).fetchall()
+        ],
+        "ledger_links": [
+            dict(r) for r in conn.execute(
+                "SELECT * FROM ledger_links WHERE user_id = ? ORDER BY id",
                 (user_id,),
             ).fetchall()
         ],

@@ -749,6 +749,71 @@ def main():
     run_test("Expense Summary includes phone, fixed, AND account-based expenses",
               test_expense_summary_includes_all_three_expense_types)
 
+    # --- Gap coverage: export_all_data() completeness (found during bug #1's audit) ---
+    def test_export_all_data_includes_every_user_owned_table():
+        with db.db_session() as conn:
+            u = db.register_user(conn, "export_completeness_user", "pass1234", "", "Export Shop")
+            e_uid = u["user_id"]
+            partner = db.create_partner(conn, e_uid, {"name": "Export Partner", "capital": 10000})
+            supplier = db.create_account(conn, e_uid, {"name": "Export Supplier"})
+            buyer = db.create_account(conn, e_uid, {"name": "Export Buyer"})
+
+            p = db.create_phone(conn, e_uid, {
+                "model": "Export Test Phone", "type": "PTA", "purchase_price": 20000,
+                "status": "Sold", "sale_price": 28000,
+                "purchase_payment_method": "cash", "sale_payment_method": "cash",
+                "imei": "888800000013333", "buyer_name": "Export Buyer",
+                "supplier_account_id": supplier["id"], "force": True,
+            })
+            db.create_invoice(conn, e_uid, {
+                "customer_name": "Export Buyer", "phone_id": p["id"],
+                "model": "Export Test Phone", "amount": 28000,
+            })
+            db.create_purchase_invoice(conn, e_uid, {
+                "supplier_name": "Export Supplier", "phone_id": p["id"],
+                "model": "Export Test Phone", "amount": 20000,
+            })
+            db.create_journal_voucher(conn, e_uid, {
+                "debit_account_id": supplier["id"], "credit_account_id": buyer["id"],
+                "amount": 500, "narration": "Export JV test",
+            })
+            result = db.add_side_investment(conn, e_uid, {
+                "partner_id": partner["id"], "amount": 5000, "payment_method": "cash",
+            })
+            p2 = db.create_phone(conn, e_uid, {
+                "model": "Export Return Phone", "type": "PTA", "purchase_price": 15000,
+                "status": "Bought", "purchase_payment_method": "cash",
+                "imei": "888800000014444", "force": True,
+            })
+            db.process_purchase_return(conn, e_uid, {"phone_id": p2["id"], "refund_amount": 15000})
+
+            export = db.export_all_data(conn, e_uid)
+
+            expected_nonempty = [
+                "phones", "accounts", "account_entries", "invoices",
+                "purchase_invoices", "journal_vouchers", "side_investments",
+                "return_logs", "ledger_links",
+            ]
+            for key in expected_nonempty:
+                assert key in export, f"export_all_data() is missing the '{key}' key entirely"
+                assert export[key], (
+                    f"export_all_data()['{key}'] should be non-empty given the test data created, "
+                    f"got {export[key]!r}"
+                )
+
+            # Sensitive/redundant tables must NOT leak into the export.
+            assert "password_reset_tokens" not in export
+            assert "user_settings" not in export
+
+            # Spot-check the actual content, not just non-emptiness.
+            assert any(inv["amount"] == 28000 for inv in export["invoices"])
+            assert any(inv["amount"] == 20000 for inv in export["purchase_invoices"])
+            assert any(si["amount"] == 5000 for si in export["side_investments"])
+            assert any(rl["return_type"] == "purchase" for rl in export["return_logs"])
+
+    run_test("export_all_data() includes every user-owned table (invoices, JVs, side investments, returns, ledger links)",
+              test_export_all_data_includes_every_user_owned_table)
+
     def test_expense_category_migration_backfills_legacy_contact_trick_accounts():
         with db.db_session() as conn:
             u = db.register_user(conn, "expense_migration_user", "pass1234", "", "Migration Expense Shop")
