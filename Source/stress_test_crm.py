@@ -155,6 +155,10 @@ def main():
         supplier_id, buyer_id = supplier["id"], buyer["id"]
         bank = db.create_bank(conn, user_id, {"name": "HBL Stress", "initial_balance": 1000000})
         bank_id = bank["id"]
+        # Generous opening cash: this fixture is reused across dozens of
+        # tests below posting real cash-out purchases/expenses, none of
+        # which are testing bug #11's negative-balance guard itself.
+        db.update_user_settings(conn, user_id, {"cash_in_hand": "500000000"})
 
     # --- Unit / sync tests ---
     def test_purchase_with_udhar():
@@ -480,9 +484,10 @@ def main():
             # amount — not just log a bank-side row.
             db.create_bank_transaction(
                 conn, bank["id"],
-                {"transaction_type": "credit", "amount": 5000, "note": "Test deposit"},
+                {"transaction_type": "credit", "amount": 5000, "note": "Test deposit", "force": True},
                 user_id=user_id,
                 mirror_cash_book=True,
+                force=True,
             )
             balance_after_deposit = db.cash_in_hand_balance(conn, user_id)
             assert balance_after_deposit == balance_after - 5000
@@ -536,12 +541,19 @@ def main():
         with db.db_session() as conn:
             ru = db.register_user(conn, "reconcile_stress", "recon12345", "", "Reconcile Stress Shop")
             r_uid = ru["user_id"]
-            r_bank = db.create_bank(conn, r_uid, {"name": "Recon Bank", "initial_balance": 0})
+            # This test measures DRIFT (actual delta vs expected delta), not
+            # absolute balances, so a generous opening cushion is transparent
+            # to what it verifies -- without it, bug #11's negative-balance
+            # guard would correctly (but unhelpfully) reject some of these
+            # 220 random cash-out operations, since this test starts at zero
+            # by design to keep the drift math simple.
+            r_bank = db.create_bank(conn, r_uid, {"name": "Recon Bank", "initial_balance": 500000000})
             r_bank_id = r_bank["id"]
             r_supplier = db.create_account(conn, r_uid, {"name": "Recon Supplier"})
             r_buyer = db.create_account(conn, r_uid, {"name": "Recon Buyer"})
             r_util = db.create_account(conn, r_uid, {"name": "Recon Utilities", "contact": "expense category"})
             r_supplier_id, r_buyer_id, r_util_id = r_supplier["id"], r_buyer["id"], r_util["id"]
+            db.update_user_settings(conn, r_uid, {"cash_in_hand": "500000000"})
             cash_open = db.cash_in_hand_balance(conn, r_uid)
             bank_open = db.total_bank_balance(conn, r_uid)
 
@@ -736,6 +748,10 @@ def main():
     with db.db_session() as conn:
         cu = db.register_user(conn, "concur_stress", "concur12345", "", "Concurrency Shop")
         c_uid = cu["user_id"]
+        # Generous opening cash balance: this fixture is reused across many
+        # concurrency/invoice tests below that post real cash-out purchases
+        # and aren't testing bug #11's negative-balance guard themselves.
+        db.update_user_settings(conn, c_uid, {"cash_in_hand": "100000000"})
 
     # update_phone() only takes SQLite's write lock early (BEGIN IMMEDIATE) when
     # an IMEI is being changed (see the duplicate-IMEI race comment in
@@ -1170,6 +1186,129 @@ def main():
     run_test("Invoice dedupe migration repairs pre-existing duplicates and restores uniqueness",
               test_invoice_dedupe_migration_repairs_existing_duplicates)
 
+    # --- Gap coverage: negative cash/bank guard is soft, not a hard block (bug #11) ---
+    def test_negative_cash_guard_soft_blocks_then_allows_with_force():
+        with db.db_session() as conn:
+            u = db.register_user(conn, "neg_cash_user", "pass1234", "", "Neg Cash Shop")
+            n_uid = u["user_id"]
+
+        # Starts at 0 cash on purpose -- this test IS about the guard. Let
+        # the warning propagate OUT of db_session() (as it would through a
+        # real app.py route) so its own rollback actually runs, instead of
+        # catching it inside the `with` block and leaving the phone insert
+        # that already ran uncommitted-but-visible on the same connection.
+        try:
+            with db.db_session() as conn:
+                db.create_phone(conn, n_uid, {
+                    "model": "Guard Test Phone", "type": "PTA", "purchase_price": 10000,
+                    "status": "Bought", "purchase_payment_method": "cash",
+                })
+            raise AssertionError("Expected a cash purchase with insufficient funds to be rejected")
+        except db.NegativeBalanceWarning as w:
+            assert w.target == "cash"
+            assert w.current_balance == 0
+            assert w.amount == 10000
+            assert w.resulting_balance == -10000
+
+        # Nothing should have been written -- the whole phone insert (and
+        # its ledger postings) must roll back together with the warning.
+        with db.db_session() as conn:
+            count = conn.execute(
+                "SELECT COUNT(*) c FROM phones WHERE user_id=?", (n_uid,)
+            ).fetchone()["c"]
+            assert count == 0, "A rejected purchase must not leave a partial phone row behind"
+
+        # The SAME request with force=True must go through (soft guard, not
+        # a hard block -- shopkeepers legitimately record entries out of order).
+        with db.db_session() as conn:
+            phone = db.create_phone(conn, n_uid, {
+                "model": "Guard Test Phone", "type": "PTA", "purchase_price": 10000,
+                "status": "Bought", "purchase_payment_method": "cash", "force": True,
+            })
+            assert phone is not None
+            balance = db.cash_in_hand_balance(conn, n_uid)
+            assert balance == -10000, f"Expected cash to actually go negative after force=True, got {balance}"
+
+    run_test("Negative cash guard blocks by default, allows through with force=True",
+              test_negative_cash_guard_soft_blocks_then_allows_with_force)
+
+    def test_negative_bank_guard_on_withdrawal():
+        with db.db_session() as conn:
+            u = db.register_user(conn, "neg_bank_user", "pass1234", "", "Neg Bank Shop")
+            b_uid = u["user_id"]
+            bank = db.create_bank(conn, b_uid, {"name": "Empty Bank", "initial_balance": 0})
+            bank_id = bank["id"]
+
+            try:
+                db.create_bank_transaction(
+                    conn, bank_id, {"transaction_type": "debit", "amount": 5000, "note": "Withdrawal"},
+                    user_id=b_uid, mirror_cash_book=True,
+                )
+                raise AssertionError("Expected a withdrawal exceeding the bank balance to be rejected")
+            except db.NegativeBalanceWarning as w:
+                assert w.target == "bank"
+                assert w.name == "Empty Bank"
+                assert w.resulting_balance == -5000
+
+            tx_count = conn.execute(
+                "SELECT COUNT(*) c FROM bank_transactions WHERE bank_account_id=?", (bank_id,)
+            ).fetchone()["c"]
+            assert tx_count == 0, "A rejected withdrawal must not leave a partial bank_transactions row"
+
+        with db.db_session() as conn:
+            db.create_bank_transaction(
+                conn, bank_id,
+                {"transaction_type": "debit", "amount": 5000, "note": "Withdrawal"},
+                user_id=b_uid, mirror_cash_book=True, force=True,
+            )
+            bank_after = db.get_bank(conn, b_uid, bank_id)
+            assert bank_after["balance"] == -5000
+            # Withdrawal mirrors as cash IN (money into the drawer) -- never
+            # guarded, should always succeed regardless of force.
+            cash_after = db.cash_in_hand_balance(conn, b_uid)
+            assert cash_after == 5000
+
+    run_test("Negative bank guard blocks a withdrawal by default, allows through with force=True",
+              test_negative_bank_guard_on_withdrawal)
+
+    def test_negative_cash_guard_on_bank_deposit():
+        # A manual bank Deposit pulls cash OUT of the drawer -- if the drawer
+        # doesn't have it, this must be guarded exactly like any other cash
+        # outflow, even though the primary movement here is bank-side (credit).
+        with db.db_session() as conn:
+            u = db.register_user(conn, "neg_deposit_user", "pass1234", "", "Neg Deposit Shop")
+            d_uid = u["user_id"]
+            bank = db.create_bank(conn, d_uid, {"name": "Deposit Target Bank", "initial_balance": 0})
+            bank_id = bank["id"]
+
+        # Same reasoning as the cash-purchase test above: let the warning
+        # propagate out of db_session() so its rollback actually undoes the
+        # bank_transactions row the deposit already inserted before the
+        # cash-side mirror check ran, instead of catching it inside the
+        # `with` block and observing uncommitted state on the same connection.
+        try:
+            with db.db_session() as conn:
+                db.create_bank_transaction(
+                    conn, bank_id, {"transaction_type": "credit", "amount": 2000, "note": "Deposit"},
+                    user_id=d_uid, mirror_cash_book=True,
+                )
+            raise AssertionError("Expected a deposit exceeding cash in hand to be rejected")
+        except db.NegativeBalanceWarning as w:
+            assert w.target == "cash"
+            assert w.resulting_balance == -2000
+
+        with db.db_session() as conn:
+            bank_tx_count = conn.execute(
+                "SELECT COUNT(*) c FROM bank_transactions WHERE bank_account_id=?", (bank_id,)
+            ).fetchone()["c"]
+            assert bank_tx_count == 0, (
+                "A rejected deposit must not leave a partial bank_transactions row "
+                "even though the rejection came from the cash-side check"
+            )
+
+    run_test("Negative cash guard also blocks a bank deposit that would overdraw the drawer",
+              test_negative_cash_guard_on_bank_deposit)
+
     # --- Gap coverage: side investment reversal is per-event, not per-partner (bug #8) ---
     def test_side_investment_reversal_is_per_event():
         with db.db_session() as conn:
@@ -1478,7 +1617,7 @@ def main():
             )
             db.create_phone(conn, user_a, {
                 "model": "Post-Backup Phone", "type": "PTA",
-                "purchase_price": 50000, "status": "Bought",
+                "purchase_price": 50000, "status": "Bought", "force": True,
             })
 
         db.restore_database_from_backup(backup_path, user_a)
@@ -1832,6 +1971,11 @@ def main():
     with db.db_session() as conn:
         # Bulk create phones
         t0 = time.perf_counter()
+        # force=True throughout this load-generation section: it's testing
+        # sync/throughput at volume, not realistic cash discipline (which
+        # bug #11's dedicated tests below cover) -- without it, this
+        # section would correctly (but unhelpfully) trip the new negative-
+        # balance guard partway through.
         created = db.create_phones_bulk(conn, user_id, {
             "model": "Stress iPhone 15",
             "type": "PTA",
@@ -1840,6 +1984,7 @@ def main():
             "status": "Bought",
             "purchase_payment_method": "cash",
             "imeis": [{"imei": f"35693803564{i:04d}", "imei2": ""} for i in range(STRESS_BULK)],
+            "force": True,
         })
         bulk_ms = (time.perf_counter() - t0) * 1000
         report.stats["bulk_create_50_phones_ms"] = round(bulk_ms, 1)
@@ -1862,6 +2007,7 @@ def main():
                 "status": "Bought",
                 "purchase_payment_method": method,
                 "imei": f"9900000000{i:05d}",
+                "force": True,
             }
             if method == "bank":
                 data["purchase_bank_id"] = bank_id
@@ -1883,6 +2029,7 @@ def main():
                 "amount": 1000 + i * 10,
                 "note": f"Stress CB {i}",
                 "payment_source": "cash",
+                "force": True,
             })
 
         # Account entries
@@ -1892,6 +2039,7 @@ def main():
                 "amount": 500 + i * 5,
                 "note": f"Meal {i}",
                 "payment_source": "cash",
+                "force": True,
             }, user_id=user_id)
 
         # Journal vouchers

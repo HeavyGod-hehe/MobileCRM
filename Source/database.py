@@ -903,9 +903,56 @@ def _reverse_ledger_for_source(conn, user_id, source_type, source_id):
             seen_ac.add(ac_id)
 
 
+class NegativeBalanceWarning(ValueError):
+    """Bug #11: raised instead of posting a cash/bank movement that would
+    take the balance below zero, unless the caller passes force=True. A
+    subclass of ValueError so existing `except ValueError` handlers still
+    catch it (never crashes a route that hasn't been updated yet) -- routes
+    that want to offer a confirm-and-retry UI can catch this specific type
+    first and surface its structured fields instead of just str(e).
+
+    This is deliberately a soft, force-overridable guard, not a hard block:
+    shopkeepers legitimately record entries out of order sometimes (e.g. a
+    purchase logged before that morning's cash deposit is entered), and a
+    hard block would be more disruptive than the problem it prevents."""
+
+    def __init__(self, target: str, *, current_balance: float, amount: float, name: str = ""):
+        self.target = target  # "cash" or "bank"
+        self.current_balance = round(current_balance, 2)
+        self.amount = round(amount, 2)
+        self.resulting_balance = round(current_balance - amount, 2)
+        self.name = name
+        label = f"{name} " if name else ""
+        super().__init__(
+            f"This would take {label}{target} balance to "
+            f"{self.resulting_balance:,.2f} (currently {self.current_balance:,.2f}). "
+            "Confirm to proceed anyway."
+        )
+
+
+def _check_cash_not_negative(conn, user_id, amount, force: bool) -> None:
+    if force or amount <= 0:
+        return
+    current = cash_in_hand_balance(conn, user_id)
+    if current - amount < 0:
+        raise NegativeBalanceWarning("cash", current_balance=current, amount=amount)
+
+
+def _check_bank_not_negative(conn, user_id, bank_id, amount, force: bool) -> None:
+    if force or amount <= 0:
+        return
+    current = _bank_balance(conn, bank_id)
+    if current - amount < 0:
+        bank = get_bank(conn, user_id, bank_id) if user_id else None
+        raise NegativeBalanceWarning(
+            "bank", current_balance=current, amount=amount,
+            name=(bank["name"] if bank else ""),
+        )
+
+
 def _create_cash_book_synced(
     conn, user_id, data, source_type=None, source_id=None, *,
-    account_entry_type=None, link_account=True,
+    account_entry_type=None, link_account=True, force=False,
 ):
     """Create one cash book (physical cash) entry, and - depending on
     payment_source/account_id - also create the matching bank transaction
@@ -943,6 +990,12 @@ def _create_cash_book_synced(
     amount = float(data["amount"])
     entry_date = data.get("entry_date") or _local_date(conn)
 
+    if entry_type == "out":
+        if payment_source == "cash":
+            _check_cash_not_negative(conn, user_id, amount, force)
+        elif payment_source == "bank":
+            _check_bank_not_negative(conn, user_id, bank_account_id, amount, force)
+
     cursor = conn.execute(
         """
         INSERT INTO cash_book_entries (
@@ -957,11 +1010,15 @@ def _create_cash_book_synced(
     account_entry_id = None
 
     if payment_source == "bank":
+        # force=True here: the bank-negative check for this movement was
+        # already done above (with the caller's real `force` value) before
+        # any row was written -- this internal post must not re-check and
+        # potentially reject a request the caller already confirmed.
         tx = create_bank_transaction(conn, bank_account_id, {
             "transaction_type": "credit" if entry_type == "in" else "debit",
             "amount": amount,
             "note": note or f"Cash book {entry_type} — entry #{entry_id}",
-        })
+        }, user_id=user_id, force=True)
         bank_tx_id = tx["id"]
         conn.execute(
             "UPDATE cash_book_entries SET linked_bank_transaction_id = ? WHERE id = ?",
@@ -1000,7 +1057,7 @@ def _create_cash_book_synced(
 def _create_account_entry_synced(
     conn, user_id, account_id, entry_type, amount, note, *,
     source_type=None, source_id=None, payment_source="", bank_account_id=None,
-    mirror_cash_book=False, cash_book_entry_type="in",
+    mirror_cash_book=False, cash_book_entry_type="in", force=False,
 ):
     """Create one account (khata) entry - and, if mirror_cash_book=True,
     also create the matching cash book entry (e.g. a "wasool" collection
@@ -1018,7 +1075,7 @@ def _create_account_entry_synced(
             "note": note,
             "payment_source": "cash",
             "entry_date": _local_date(conn),
-        }, link_account=False)
+        }, link_account=False, force=force)
         cash_book_entry_id = cb["cash_book_entry_id"]
         conn.execute(
             "UPDATE account_entries SET payment_source = 'cash', linked_cash_book_entry_id = ? WHERE id = ?",
@@ -1036,7 +1093,7 @@ def _create_account_entry_synced(
             "payment_source": "bank",
             "bank_account_id": bank_account_id,
             "entry_date": _local_date(conn),
-        }, link_account=False)
+        }, link_account=False, force=force)
         cash_book_entry_id = cb["cash_book_entry_id"]
         conn.execute(
             "UPDATE account_entries SET payment_source = 'bank', bank_account_id = ?, linked_cash_book_entry_id = ? WHERE id = ?",
@@ -2236,6 +2293,7 @@ def _save_phone_extras(conn, user_id, phone_id, data):
 def _post_payment_transaction(
     conn, user_id, payment_method, bank_id, entry_type, amount, note, entry_date,
     *, source_type=None, source_id=None, account_id=None, account_entry_type=None,
+    force=False,
 ):
     """Record cash book or bank movement with optional account link."""
     if amount <= 0:
@@ -2257,11 +2315,13 @@ def _post_payment_transaction(
         conn, user_id, data,
         source_type=source_type, source_id=source_id,
         account_entry_type=account_entry_type,
+        force=force,
     )
 
 
 def _post_purchase_ledger(conn, user_id, phone_id, data):
     """Sync purchase/borrow to cash book and supplier account."""
+    force = bool(data.get("force"))
     acquisition = (data.get("acquisition_type") or "purchase").strip().lower()
     purchase_price = float(data.get("purchase_price") or 0)
     payable = float(data.get("payable_amount") or 0)
@@ -2293,6 +2353,7 @@ def _post_purchase_ledger(conn, user_id, phone_id, data):
             source_type="phone_purchase", source_id=phone_id,
             account_id=supplier_account_id,
             account_entry_type="credit" if supplier_account_id else None,
+            force=force,
         )
         if cb:
             purchase_cb_id = cb.get("cash_book_entry_id") or cb.get("id")
@@ -2846,7 +2907,9 @@ def add_phone_expense(conn, user_id, phone_id, data):
             "account_id": account_id,
             "payment_source": data.get("payment_source") or "cash",
             "bank_account_id": data.get("bank_account_id"),
-        }, source_type="phone_expense", source_id=expense_id, account_entry_type="debit" if account_id else None)
+        }, source_type="phone_expense", source_id=expense_id,
+           account_entry_type="debit" if account_id else None,
+           force=bool(data.get("force")))
         cash_book_entry_id = cb.get("cash_book_entry_id") or cb.get("id")
         account_entry_id = cb.get("account_entry_id")
         conn.execute(
@@ -2911,7 +2974,9 @@ def update_phone_expense(conn, user_id, phone_id, expense_id, data):
             "account_id": account_id,
             "payment_source": data.get("payment_source") or "cash",
             "bank_account_id": data.get("bank_account_id"),
-        }, source_type="phone_expense", source_id=expense_id, account_entry_type="debit" if account_id else None)
+        }, source_type="phone_expense", source_id=expense_id,
+           account_entry_type="debit" if account_id else None,
+           force=bool(data.get("force")))
         cash_book_entry_id = cb.get("cash_book_entry_id") or cb.get("id")
         account_entry_id = cb.get("account_entry_id")
         conn.execute(
@@ -3219,7 +3284,8 @@ def process_sale_return(conn, user_id, data):
             "payment_source": data.get("payment_source") or "cash",
             "bank_account_id": data.get("bank_account_id"),
         }, source_type="sale_return", source_id=log_id,
-           account_entry_type="debit" if account_id else None)
+           account_entry_type="debit" if account_id else None,
+           force=bool(data.get("force")))
 
     log = conn.execute(
         "SELECT * FROM return_logs WHERE id = ?", (log_id,)
@@ -3304,7 +3370,7 @@ def create_fixed_expense(conn, user_id, data):
             "entry_date": conn.execute("SELECT date('now','localtime')").fetchone()[0],
             "payment_source": data.get("payment_source") or "cash",
             "bank_account_id": data.get("bank_account_id"),
-        }, source_type="fixed_expense", source_id=expense_id)
+        }, source_type="fixed_expense", source_id=expense_id, force=bool(data.get("force")))
         cash_book_entry_id = cb.get("cash_book_entry_id") or cb.get("id")
         conn.execute(
             "UPDATE fixed_expenses SET cash_book_entry_id = ? WHERE id = ?",
@@ -3456,7 +3522,7 @@ def list_bank_transactions(conn, bank_id):
 
 def _mirror_bank_tx_to_cash_book(
     conn, user_id, bank_id, bank_tx_id, tx_type, amount, note, *,
-    entry_date=None, source_type=None, source_id=None,
+    entry_date=None, source_type=None, source_id=None, force=False,
 ):
     """Record a manual bank Deposit/Withdrawal as the real cash movement it is:
     a Deposit moves cash out of the drawer into the bank (cash 'out'), a
@@ -3465,6 +3531,10 @@ def _mirror_bank_tx_to_cash_book(
     previously this was recorded as another bank-side row, so Cash in Hand
     never moved and a Withdrawal looked like it did nothing."""
     entry_type = "out" if tx_type == "credit" else "in"
+    if entry_type == "out":
+        # A Deposit pulls this amount out of the physical drawer -- soft-guard
+        # it the same way every other cash outflow is guarded.
+        _check_cash_not_negative(conn, user_id, amount, force)
     bank = get_bank(conn, user_id, bank_id)
     bank_name = bank["name"] if bank else "bank"
     label = f"Deposit to {bank_name}" if tx_type == "credit" else f"Withdrawal from {bank_name}"
@@ -3495,12 +3565,19 @@ def _mirror_bank_tx_to_cash_book(
     return entry_id
 
 
-def create_bank_transaction(conn, bank_id, data, user_id=None, *, mirror_cash_book=False):
+def create_bank_transaction(conn, bank_id, data, user_id=None, *, mirror_cash_book=False, force=False):
     tx_type = data["transaction_type"]
     if tx_type not in BANK_TX_TYPES:
         raise ValueError("Invalid transaction type")
     amount = float(data["amount"])
     note = data.get("note", "")
+
+    if tx_type == "debit":
+        # A debit decreases this bank's own balance (a withdrawal, or any
+        # other bank-side outflow) -- soft-guard it the same way cash
+        # outflows are guarded in _create_cash_book_synced.
+        _check_bank_not_negative(conn, user_id, bank_id, amount, force)
+
     cursor = conn.execute(
         """
         INSERT INTO bank_transactions (bank_account_id, transaction_type, amount, note)
@@ -3515,6 +3592,7 @@ def create_bank_transaction(conn, bank_id, data, user_id=None, *, mirror_cash_bo
             entry_date=data.get("entry_date"),
             source_type="bank_transaction",
             source_id=tx_id,
+            force=force,
         )
     row = conn.execute(
         "SELECT * FROM bank_transactions WHERE id = ?", (tx_id,)
@@ -3634,7 +3712,7 @@ def list_cash_book(conn, user_id):
 
 
 def create_cash_book_entry(conn, user_id, data):
-    result = _create_cash_book_synced(conn, user_id, data)
+    result = _create_cash_book_synced(conn, user_id, data, force=bool(data.get("force")))
     account_id = data.get("account_id")
     if account_id:
         result["account_name"] = get_account(conn, user_id, int(account_id))["name"]
@@ -4140,6 +4218,7 @@ def create_entry(conn, account_id, data, user_id=None):
             bank_account_id=bank_account_id,
             mirror_cash_book=True,
             cash_book_entry_type=cash_direction,
+            force=bool(data.get("force")),
         )
 
     account_entry_id = _insert_account_entry(

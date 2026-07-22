@@ -181,6 +181,18 @@ def _validate_entry_type(entry_type):
     return None
 
 
+def _negative_balance_response(w):
+    """Shared 409 response shape for db.NegativeBalanceWarning (bug #11) --
+    lets the frontend show a confirm dialog ("this would take Cash to
+    -500, proceed?") and resubmit the same request with force: true,
+    instead of a plain error toast."""
+    return jsonify({
+        "error": str(w), "requires_confirmation": True,
+        "target": w.target, "current_balance": w.current_balance,
+        "amount": w.amount, "resulting_balance": w.resulting_balance,
+    }), 409
+
+
 def _require_amount(data, field="amount"):
     """Parse amount; rejects missing/blank/negative values. Zero is allowed only for balances, not here."""
     if field not in data or data[field] is None:
@@ -762,6 +774,8 @@ def process_sale_return_api():
     try:
         with db.db_session() as conn:
             return jsonify(db.process_sale_return(conn, user_id, data)), 201
+    except db.NegativeBalanceWarning as w:
+        return _negative_balance_response(w)
     except ValueError as e:
         return jsonify({"error": str(e)}), 400
 
@@ -952,6 +966,8 @@ def create_phone():
                 return jsonify(phones), 201
             phone = db.create_phone(conn, user_id, data)
             return jsonify(phone), 201
+    except db.NegativeBalanceWarning as w:
+        return _negative_balance_response(w)
     except ValueError as exc:
         return jsonify({"error": str(exc)}), 400
 
@@ -973,6 +989,8 @@ def update_phone(phone_id):
             if not phone:
                 return jsonify({"error": "Phone not found"}), 404
             return jsonify(phone)
+    except db.NegativeBalanceWarning as w:
+        return _negative_balance_response(w)
     except ValueError as exc:
         return jsonify({"error": str(exc)}), 400
 
@@ -1035,6 +1053,8 @@ def add_phone_expense(phone_id):
     with db.db_session() as conn:
         try:
             expense = db.add_phone_expense(conn, user_id, phone_id, data)
+        except db.NegativeBalanceWarning as w:
+            return _negative_balance_response(w)
         except ValueError as exc:
             return jsonify({"error": str(exc)}), 400
         if not expense:
@@ -1054,6 +1074,8 @@ def update_phone_expense(phone_id, expense_id):
     with db.db_session() as conn:
         try:
             expense = db.update_phone_expense(conn, user_id, phone_id, expense_id, data)
+        except db.NegativeBalanceWarning as w:
+            return _negative_balance_response(w)
         except ValueError as exc:
             return jsonify({"error": str(exc)}), 400
         if not expense:
@@ -1382,8 +1404,13 @@ def create_fixed_expense_api():
     if err:
         return jsonify({"error": err}), 400
     data["amount"] = amount
-    with db.db_session() as conn:
-        return jsonify(db.create_fixed_expense(conn, user_id, data)), 201
+    try:
+        with db.db_session() as conn:
+            return jsonify(db.create_fixed_expense(conn, user_id, data)), 201
+    except db.NegativeBalanceWarning as w:
+        return _negative_balance_response(w)
+    except ValueError as exc:
+        return jsonify({"error": str(exc)}), 400
 
 
 @app.route("/api/fixed-expenses/<int:expense_id>", methods=["DELETE"])
@@ -1461,13 +1488,19 @@ def create_bank_transaction_api(bank_id):
     data["amount"] = amount
     if data.get("transaction_type") not in db.BANK_TX_TYPES:
         return jsonify({"error": "Transaction type must be credit or debit"}), 400
-    with db.db_session() as conn:
-        if not db.get_bank(conn, user_id, bank_id):
-            return jsonify({"error": "Bank not found"}), 404
-        entry = db.create_bank_transaction(
-            conn, bank_id, data, user_id=user_id, mirror_cash_book=True,
-        )
-        return jsonify(entry), 201
+    force = bool(data.get("force"))
+    try:
+        with db.db_session() as conn:
+            if not db.get_bank(conn, user_id, bank_id):
+                return jsonify({"error": "Bank not found"}), 404
+            entry = db.create_bank_transaction(
+                conn, bank_id, data, user_id=user_id, mirror_cash_book=True, force=force,
+            )
+            return jsonify(entry), 201
+    except db.NegativeBalanceWarning as w:
+        return _negative_balance_response(w)
+    except ValueError as exc:
+        return jsonify({"error": str(exc)}), 400
 
 
 def _get_owned_bank_transaction(conn, user_id, bank_id, tx_id):
@@ -1540,6 +1573,8 @@ def create_cash_book_entry_api():
     try:
         with db.db_session() as conn:
             return jsonify(db.create_cash_book_entry(conn, user_id, data)), 201
+    except db.NegativeBalanceWarning as w:
+        return _negative_balance_response(w)
     except ValueError as exc:
         return jsonify({"error": str(exc)}), 400
 
@@ -1703,6 +1738,8 @@ def create_entry_api(account_id):
                 return jsonify({"error": "Account not found"}), 404
             entry = db.create_entry(conn, account_id, data, user_id=user_id)
             return jsonify(entry), 201
+    except db.NegativeBalanceWarning as w:
+        return _negative_balance_response(w)
     except ValueError as exc:
         return jsonify({"error": str(exc)}), 400
 
