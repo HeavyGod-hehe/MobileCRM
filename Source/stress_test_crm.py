@@ -560,6 +560,73 @@ def main():
             assert result["refund_amount"] == 55000
 
     run_test("Sale return refund is capped at what the customer actually paid", test_sale_return_refund_capped)
+
+    # --- Gap coverage: UTC vs local-midnight date mismatch (bug #13) ---
+    def test_utc_vs_local_midnight_report_alignment():
+        # created_at is stored in UTC (see _init_schema); a purchase recorded
+        # just after LOCAL midnight has a created_at that's still on the
+        # PREVIOUS day in UTC (PKT is UTC+5) -- reports that compared
+        # date(created_at) directly against date('now','localtime') used to
+        # put that purchase in "yesterday" instead of "today". Only runs the
+        # TZ-dependent part on platforms with time.tzset (POSIX); skips it
+        # gracefully on Windows, where this stress suite isn't run anyway.
+        if not hasattr(time, "tzset"):
+            return
+        original_tz = os.environ.get("TZ")
+        os.environ["TZ"] = "Asia/Karachi"
+        time.tzset()
+        try:
+            with db.db_session() as conn:
+                u = db.register_user(conn, "tz_midnight_user", "pass1234", "", "TZ Midnight Shop")
+                tz_uid = u["user_id"]
+
+                today_local = conn.execute("SELECT date('now', 'localtime')").fetchone()[0]
+                # "00:05 local" expressed as its UTC equivalent (PKT is
+                # UTC+5, so subtract 5 hours) -- computed via SQLite itself,
+                # the same mechanism the app's own local-time conversions use.
+                created_at_utc = conn.execute(
+                    "SELECT datetime(? || ' 00:05:00', '-5 hours')", (today_local,)
+                ).fetchone()[0]
+
+                cursor = conn.execute(
+                    """
+                    INSERT INTO phones (
+                        model, condition, type, purchase_price, status,
+                        purchase_date, user_id, created_at
+                    ) VALUES (?, '', 'PTA', ?, 'Bought', '', ?, ?)
+                    """,
+                    ("TZ Midnight Phone", 12345, tz_uid, created_at_utc),
+                )
+                phone_id = cursor.lastrowid
+
+                summary = db.compute_today_summary(conn, tz_uid)
+                bought_ids = [p["id"] for p in summary["bought_phones"]]
+                assert phone_id in bought_ids, (
+                    f"A phone bought at 00:05 local today (created_at={created_at_utc} UTC) "
+                    "should appear in today's bought list, keyed by local date not raw UTC date"
+                )
+
+                # Same check for the fixed-expense date used in expense_summary.
+                exp_cursor = conn.execute(
+                    "INSERT INTO fixed_expenses (purpose, amount, user_id, created_at) VALUES (?, ?, ?, ?)",
+                    ("TZ Midnight Expense", 500, tz_uid, created_at_utc),
+                )
+                exp_id = exp_cursor.lastrowid
+                summary_exp = db.expense_summary(conn, tz_uid, start_date=today_local, end_date=today_local)
+                fixed_dates = [e["expense_date"] for e in summary_exp["entries"] if e["id"] == exp_id]
+                assert fixed_dates == [today_local], (
+                    f"Fixed expense created at 00:05 local today should be dated {today_local} "
+                    f"(local), not its raw UTC created_at -- got {fixed_dates}"
+                )
+        finally:
+            if original_tz is None:
+                os.environ.pop("TZ", None)
+            else:
+                os.environ["TZ"] = original_tz
+            time.tzset()
+
+    run_test("Purchases/expenses just after local midnight land in today's reports, not UTC-yesterday's",
+              test_utc_vs_local_midnight_report_alignment)
     run_test("Today summary includes sold-as-bought", test_today_bought_includes_sold)
     run_test("Update phone investments (bug fix)", test_update_investments)
     run_test("Udhar dashboard no double-count", test_udhar_no_double_count)

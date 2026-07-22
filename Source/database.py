@@ -2939,8 +2939,14 @@ def update_phone_expense(conn, user_id, phone_id, expense_id, data):
 
     amount = float(data.get("amount", row["amount"]))
     description = data.get("description", row["description"])
+    # row["created_at"] is stored in UTC (see _init_schema); a bare string
+    # slice of it would misclassify expenses recorded near local midnight
+    # onto the wrong calendar day, so localize it before falling back to it.
+    created_at_local = conn.execute(
+        "SELECT date(?, 'localtime')", (row["created_at"],)
+    ).fetchone()[0]
     expense_date = _normalize_datetime(
-        data.get("expense_date") or row["expense_date"] or row["created_at"],
+        data.get("expense_date") or row["expense_date"] or created_at_local,
         conn,
         date_only=True,
     )
@@ -3332,7 +3338,7 @@ def expense_summary(conn, user_id, start_date=None, end_date=None):
     phone_rows = conn.execute(
         """
         SELECT pe.id, pe.amount, pe.description,
-               COALESCE(NULLIF(pe.expense_date, ''), pe.created_at) AS expense_date,
+               COALESCE(NULLIF(pe.expense_date, ''), date(pe.created_at, 'localtime')) AS expense_date,
                p.model AS phone_model, p.id AS phone_id
         FROM phone_expenses pe
         JOIN phones p ON p.id = pe.phone_id
@@ -3343,7 +3349,7 @@ def expense_summary(conn, user_id, start_date=None, end_date=None):
     ).fetchall()
     fixed_rows = conn.execute(
         """
-        SELECT id, amount, purpose AS description, created_at AS expense_date
+        SELECT id, amount, purpose AS description, date(created_at, 'localtime') AS expense_date
         FROM fixed_expenses
         WHERE user_id = ?
         ORDER BY created_at DESC
@@ -4597,8 +4603,8 @@ def compute_today_summary(conn, user_id):
         WHERE user_id = ?
           AND status IN ('Bought', 'In Repair', 'Sold')
           AND (
-            date(COALESCE(NULLIF(TRIM(purchase_date), ''), created_at)) = date('now', 'localtime')
-            OR date(created_at) = date('now', 'localtime')
+            date(COALESCE(NULLIF(TRIM(purchase_date), ''), date(created_at, 'localtime'))) = date('now', 'localtime')
+            OR date(created_at, 'localtime') = date('now', 'localtime')
           )
         ORDER BY created_at DESC
         """,
