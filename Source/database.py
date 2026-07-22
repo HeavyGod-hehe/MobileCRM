@@ -113,7 +113,6 @@ DEFAULT_SETTINGS = {
     "shop_phones": "[]",
     "shop_logo": "",
     "local_backup_path": "",
-    "google_drive_sync_enabled": "false",
     "last_backup_at": "",
     "auto_backup_enabled": "true",
     "shop_whatsapp": "",
@@ -1620,7 +1619,6 @@ def get_storage_settings(conn, user_id):
     return {
         "database_path": str(DB_PATH.resolve()),
         "local_backup_path": backup_path,
-        "google_drive_sync_enabled": settings.get("google_drive_sync_enabled", "false") == "true",
         "auto_backup_enabled": settings.get("auto_backup_enabled", "true") == "true",
         "last_backup_at": settings.get("last_backup_at", ""),
         "auto_backup_interval_hours": 1,
@@ -1628,12 +1626,18 @@ def get_storage_settings(conn, user_id):
 
 
 def update_storage_settings(conn, user_id, data):
-    """Persist backup path and Google Drive sync toggle (sync logic is placeholder)."""
+    """Persist backup path and auto-backup toggle.
+
+    Bug #17: this used to also carry a "Google Drive sync" setting that had
+    no real sync logic behind it anywhere and no UI to toggle it either --
+    a dead placeholder promising something that didn't exist. Removed
+    entirely rather than left half-wired. If real cloud sync is ever built,
+    see the backlog (Changes To Be Done.txt / artifacts/AI_HANDOFF_NOTES.md)
+    for the "Google Drive sync is a dead placeholder" note and design it properly
+    then, rather than resurrecting this toggle."""
     payload = {}
     if "local_backup_path" in data:
         payload["local_backup_path"] = str(data.get("local_backup_path") or "").strip()
-    if "google_drive_sync_enabled" in data:
-        payload["google_drive_sync_enabled"] = "true" if data.get("google_drive_sync_enabled") else "false"
     if "auto_backup_enabled" in data:
         payload["auto_backup_enabled"] = "true" if data.get("auto_backup_enabled") else "false"
     if payload:
@@ -1645,7 +1649,7 @@ def update_user_settings(conn, user_id, data):
     allowed = {
         "partner1_name", "partner1_capital", "partner2_name", "partner2_capital",
         "cash_in_hand", "theme", "shop_name", "shop_address", "shop_phones", "shop_logo",
-        "local_backup_path", "google_drive_sync_enabled",
+        "local_backup_path",
         "last_backup_at", "auto_backup_enabled",
         "shop_whatsapp", "vendor_whatsapp", "vendor_support_note",
         "gmail_smtp_user", "gmail_smtp_app_password", "invoice_counter",
