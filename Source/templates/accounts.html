@@ -223,6 +223,11 @@
         <label class="block text-xs font-medium text-slate-400 mb-1.5">Contact</label>
         <input type="text" id="acct-contact" class="input-field">
       </div>
+      <label class="flex items-center gap-2 text-sm text-slate-300">
+        <input type="checkbox" id="acct-expense-category" class="rounded border-white/20">
+        Mark as Expense Category
+      </label>
+      <p class="text-xs text-slate-600 -mt-3">For overhead-type accounts (e.g. Food, Utilities) — entries recorded against this account show up in the Expense Summary report.</p>
       <div id="acct-opening-wrap">
         <label class="block text-xs font-medium text-slate-400 mb-1.5">Opening Balance</label>
         <div class="flex gap-2">
@@ -752,6 +757,7 @@
     document.getElementById('acct-id').value = account ? account.id : '';
     document.getElementById('acct-name').value = account ? account.name : '';
     document.getElementById('acct-contact').value = account ? account.contact : '';
+    document.getElementById('acct-expense-category').checked = Boolean(account && account.is_expense_category);
     // Opening balance only makes sense once, when the account is first
     // created — editing an existing account (which may already have real
     // transaction history) shouldn't silently inject another balance entry.
@@ -787,7 +793,11 @@
     const id = document.getElementById('acct-id').value;
     const name = document.getElementById('acct-name').value.trim();
     if (!name) { toast('Enter an account name', 'error'); return; }
-    const payload = { name, contact: document.getElementById('acct-contact').value };
+    const payload = {
+      name,
+      contact: document.getElementById('acct-contact').value,
+      is_expense_category: document.getElementById('acct-expense-category').checked,
+    };
     if (!id) {
       const openingAmount = Number(document.getElementById('acct-opening-amount').value) || 0;
       if (openingAmount > 0) {

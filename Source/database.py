@@ -371,6 +371,7 @@ def _init_schema(conn) -> None:
     _migrate_more_fixes(conn)
     _migrate_ledger_sync(conn)
     _migrate_fixed_expense_ledger(conn)
+    _migrate_expense_category_column(conn)
 
     for key, value in DEFAULT_SETTINGS.items():
         conn.execute(
@@ -692,6 +693,25 @@ def _migrate_fixed_expense_ledger(conn):
     if not _column_exists(conn, "fixed_expenses", "cash_book_entry_id"):
         conn.execute(
             "ALTER TABLE fixed_expenses ADD COLUMN cash_book_entry_id INTEGER REFERENCES cash_book_entries(id)"
+        )
+
+
+def _migrate_expense_category_column(conn):
+    """Bug #23: "expense category" account used to be a hidden, undocumented
+    trick -- it only worked if the Contact field was typed EXACTLY as
+    "expense category", with no real UI checkbox anywhere. Adds a real
+    boolean column and backfills it to 1 for any account that already
+    relied on the Contact-field trick, so existing customer data keeps
+    working without the shopkeeper needing to redo anything."""
+    if not _column_exists(conn, "accounts", "is_expense_category"):
+        conn.execute(
+            "ALTER TABLE accounts ADD COLUMN is_expense_category INTEGER NOT NULL DEFAULT 0"
+        )
+        conn.execute(
+            """
+            UPDATE accounts SET is_expense_category = 1
+            WHERE TRIM(LOWER(COALESCE(contact, ''))) = 'expense category'
+            """
         )
 
 
@@ -3439,7 +3459,20 @@ def list_fixed_expenses(conn, user_id):
 
 
 def expense_summary(conn, user_id, start_date=None, end_date=None):
-    """Combined view of per-phone expenses and fixed (overhead) expenses."""
+    """Combined view of per-phone expenses, fixed (overhead) expenses, and
+    (bug #23) credit entries against accounts marked as an expense category
+    -- the third way to record an expense, which used to be invisible here
+    even though the money left correctly through the Cash Book and that
+    account's own statement.
+
+    Only entry_type='credit' rows on an is_expense_category account count
+    as an expense here -- a 'debit' against such an account is always
+    created as the mirrored SIDE of a phone_expense that already has its
+    own account_id linked (see add_phone_expense/_create_cash_book_synced,
+    account_entry_type='debit' whenever an account_id is given), so
+    filtering to 'credit' only is what keeps this from double-counting
+    those phone expenses a second time here.
+    """
     phone_rows = conn.execute(
         """
         SELECT pe.id, pe.amount, pe.description,
@@ -3461,6 +3494,18 @@ def expense_summary(conn, user_id, start_date=None, end_date=None):
         """,
         (user_id,),
     ).fetchall()
+    account_rows = conn.execute(
+        """
+        SELECT ae.id, ae.amount, ae.note AS description,
+               date(ae.created_at, 'localtime') AS expense_date,
+               a.name AS account_name, a.id AS account_id
+        FROM account_entries ae
+        JOIN accounts a ON a.id = ae.account_id
+        WHERE a.user_id = ? AND a.is_expense_category = 1 AND ae.entry_type = 'credit'
+        ORDER BY ae.created_at DESC
+        """,
+        (user_id,),
+    ).fetchall()
 
     def _in_range(date_str):
         if not (start_date and end_date):
@@ -3473,14 +3518,22 @@ def expense_summary(conn, user_id, start_date=None, end_date=None):
     fixed_expenses = [
         {**dict(r), "category": "Fixed Expense"} for r in fixed_rows if _in_range(r["expense_date"])
     ]
-    combined = sorted(phone_expenses + fixed_expenses, key=lambda x: x["expense_date"] or "", reverse=True)
+    account_expenses = [
+        {**dict(r), "category": "Account Expense"} for r in account_rows if _in_range(r["expense_date"])
+    ]
+    combined = sorted(
+        phone_expenses + fixed_expenses + account_expenses,
+        key=lambda x: x["expense_date"] or "", reverse=True,
+    )
     total_phone = round(sum(r["amount"] for r in phone_expenses), 2)
     total_fixed = round(sum(r["amount"] for r in fixed_expenses), 2)
+    total_account = round(sum(r["amount"] for r in account_expenses), 2)
     return {
         "entries": combined,
         "total_phone_expenses": total_phone,
         "total_fixed_expenses": total_fixed,
-        "total_expenses": round(total_phone + total_fixed, 2),
+        "total_account_expenses": total_account,
+        "total_expenses": round(total_phone + total_fixed + total_account, 2),
     }
 
 
@@ -4133,14 +4186,15 @@ def _account_balance(conn, account_id):
 
 
 def is_expense_category_account(conn, account_id):
+    """Bug #23: reads the real is_expense_category column now, not the old
+    Contact-field-typed-exactly-as-"expense category" trick. Existing
+    accounts that relied on that trick were backfilled to this column by
+    _migrate_expense_category_column, so this is a strict improvement, not
+    a behavior change for them."""
     row = conn.execute(
-        "SELECT name, contact FROM accounts WHERE id = ?", (account_id,)
+        "SELECT is_expense_category FROM accounts WHERE id = ?", (account_id,)
     ).fetchone()
-    if not row:
-        return False
-    if (row["contact"] or "").strip().lower() == "expense category":
-        return True
-    return row["name"] in EXPENSE_CATEGORY_NAMES
+    return bool(row and row["is_expense_category"])
 
 
 def account_to_dict(conn, row):
@@ -4181,9 +4235,10 @@ def create_account(conn, user_id, data):
     ).fetchone()
     if existing:
         raise ValueError(f'An account named "{name}" already exists — use that one instead of creating a duplicate.')
+    is_expense_category = 1 if data.get("is_expense_category") else 0
     cursor = conn.execute(
-        "INSERT INTO accounts (name, contact, user_id) VALUES (?, ?, ?)",
-        (name, data.get("contact", ""), user_id),
+        "INSERT INTO accounts (name, contact, user_id, is_expense_category) VALUES (?, ?, ?, ?)",
+        (name, data.get("contact", ""), user_id, is_expense_category),
     )
     account_id = cursor.lastrowid
 
@@ -4214,6 +4269,9 @@ def update_account(conn, user_id, account_id, data):
         if field in data:
             fields.append(f"{field} = ?")
             values.append(data[field])
+    if "is_expense_category" in data:
+        fields.append("is_expense_category = ?")
+        values.append(1 if data.get("is_expense_category") else 0)
     if fields:
         values.extend([account_id, user_id])
         conn.execute(
@@ -4512,9 +4570,6 @@ def customer_recovery_analysis(conn, user_id):
         })
     results.sort(key=lambda r: r["total_outstanding"], reverse=True)
     return results
-
-
-EXPENSE_CATEGORY_NAMES = ()
 
 
 def seed_expense_accounts(conn, user_id):

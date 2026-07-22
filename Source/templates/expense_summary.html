@@ -23,7 +23,7 @@
   </div>
 </section>
 
-<section class="grid grid-cols-1 sm:grid-cols-3 gap-4 mb-6">
+<section class="grid grid-cols-1 sm:grid-cols-4 gap-4 mb-6">
   <div class="glass-card rounded-xl p-5">
     <p class="text-xs font-semibold uppercase tracking-wider text-slate-500 mb-1">Phone Expenses</p>
     <p id="es-total-phone" class="text-xl font-bold text-white">—</p>
@@ -31,6 +31,10 @@
   <div class="glass-card rounded-xl p-5">
     <p class="text-xs font-semibold uppercase tracking-wider text-slate-500 mb-1">Fixed Expenses</p>
     <p id="es-total-fixed" class="text-xl font-bold text-white">—</p>
+  </div>
+  <div class="glass-card rounded-xl p-5">
+    <p class="text-xs font-semibold uppercase tracking-wider text-slate-500 mb-1">Account Expenses</p>
+    <p id="es-total-account" class="text-xl font-bold text-white">—</p>
   </div>
   <div class="glass-card rounded-xl p-5">
     <p class="text-xs font-semibold uppercase tracking-wider text-slate-500 mb-1">Total</p>
@@ -65,6 +69,7 @@
     const data = await apiFetch(`/api/reports/expense-summary${qs}`);
     document.getElementById('es-total-phone').textContent = fmt(data.total_phone_expenses);
     document.getElementById('es-total-fixed').textContent = fmt(data.total_fixed_expenses);
+    document.getElementById('es-total-account').textContent = fmt(data.total_account_expenses);
     document.getElementById('es-total-all').textContent = fmt(data.total_expenses);
 
     const tbody = document.getElementById('es-list');
@@ -78,7 +83,7 @@
     tbody.innerHTML = data.entries.map(e => `
       <tr class="table-row">
         <td class="px-3 py-2.5 text-slate-400">${e.expense_date ? esc(e.expense_date.slice(0, 10)) : '—'}</td>
-        <td class="px-3 py-2.5 text-slate-300">${esc(e.category)}${e.phone_model ? ' — ' + esc(e.phone_model) : ''}</td>
+        <td class="px-3 py-2.5 text-slate-300">${esc(e.category)}${e.phone_model ? ' — ' + esc(e.phone_model) : ''}${e.account_name ? ' — ' + esc(e.account_name) : ''}</td>
         <td class="px-3 py-2.5 text-slate-400">${esc(e.description) || '—'}</td>
         <td class="px-3 py-2.5 text-right font-semibold text-red-300">${fmt(e.amount)}</td>
       </tr>`).join('');

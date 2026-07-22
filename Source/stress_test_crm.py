@@ -150,7 +150,9 @@ def main():
         db.create_partner(conn, user_id, {"name": "Partner B", "capital": 300000})
         supplier = db.create_account(conn, user_id, {"name": "Supplier Khan", "contact": "0300"})
         buyer = db.create_account(conn, user_id, {"name": "Customer Ali", "contact": "0311"})
-        food = db.create_account(conn, user_id, {"name": "Food", "contact": "expense category"})
+        food = db.create_account(conn, user_id, {
+            "name": "Food", "contact": "expense category", "is_expense_category": True,
+        })
         food_id = food["id"]
         supplier_id, buyer_id = supplier["id"], buyer["id"]
         bank = db.create_bank(conn, user_id, {"name": "HBL Stress", "initial_balance": 1000000})
@@ -653,6 +655,108 @@ def main():
     run_test("Signup backup runs in the background and still actually completes",
               test_signup_backup_runs_in_background_not_blocking)
 
+    # --- Gap coverage: Expense Summary includes all three expense types (bug #23) ---
+    def test_expense_summary_includes_all_three_expense_types():
+        with db.db_session() as conn:
+            u = db.register_user(conn, "expense_summary_user", "pass1234", "", "Expense Summary Shop")
+            es_uid = u["user_id"]
+
+            # Type 1: per-phone expense
+            p = db.create_phone(conn, es_uid, {
+                "model": "Expense Test Phone", "type": "PTA", "purchase_price": 30000,
+                "status": "Bought", "purchase_payment_method": "cash", "force": True,
+                "imei": "888800000011111",
+            })
+            db.add_phone_expense(conn, es_uid, p["id"], {
+                "amount": 1000, "description": "Screen repair",
+                "payment_source": "cash", "force": True,
+            })
+
+            # Type 2: fixed (overhead) expense
+            db.create_fixed_expense(conn, es_uid, {
+                "purpose": "Rent", "amount": 5000, "payment_source": "cash", "force": True,
+            })
+
+            # Type 3: credit entry against an account marked as an expense
+            # category -- the one that used to be invisible here, and used
+            # to only work via the hidden Contact-field-typed-exactly-right
+            # trick. Uses the real checkbox-backed field now.
+            food = db.create_account(conn, es_uid, {"name": "Food", "is_expense_category": True})
+            assert food["is_expense_category"] is True
+            db.create_entry(conn, food["id"], {
+                "entry_type": "credit", "amount": 750, "note": "Lunch",
+                "payment_source": "cash", "force": True,
+            }, user_id=es_uid)
+
+            summary = db.expense_summary(conn, es_uid)
+            assert summary["total_phone_expenses"] == 1000
+            assert summary["total_fixed_expenses"] == 5000
+            assert summary["total_account_expenses"] == 750
+            assert summary["total_expenses"] == 6750, (
+                f"Expected total 6750 (1000+5000+750), got {summary['total_expenses']}"
+            )
+
+            categories = {e["category"] for e in summary["entries"]}
+            assert categories == {"Phone Expense", "Fixed Expense", "Account Expense"}, (
+                f"Expected all three expense types in the breakdown, got {categories}"
+            )
+
+            # A debit against the same expense-category account (e.g. a
+            # phone_expense's own mirrored account entry) must NOT also be
+            # counted here -- only 'credit' entries represent an expense.
+            db.create_entry(conn, food["id"], {
+                "entry_type": "debit", "amount": 200, "note": "Refund",
+                "payment_source": "cash",
+            }, user_id=es_uid)
+            summary_after_debit = db.expense_summary(conn, es_uid)
+            assert summary_after_debit["total_account_expenses"] == 750, (
+                "A debit entry on an expense-category account must not be counted as an expense"
+            )
+
+    run_test("Expense Summary includes phone, fixed, AND account-based expenses",
+              test_expense_summary_includes_all_three_expense_types)
+
+    def test_expense_category_migration_backfills_legacy_contact_trick_accounts():
+        with db.db_session() as conn:
+            u = db.register_user(conn, "expense_migration_user", "pass1234", "", "Migration Expense Shop")
+            m_uid = u["user_id"]
+
+            # Simulate a pre-fix database: no is_expense_category column at
+            # all, and an account that only ever worked via the hidden
+            # Contact-field-typed-exactly-right trick (extra whitespace and
+            # mixed case on purpose, since the migration must be
+            # case/whitespace-insensitive the same way the old runtime
+            # check was).
+            conn.execute("ALTER TABLE accounts DROP COLUMN is_expense_category")
+            legacy_cursor = conn.execute(
+                "INSERT INTO accounts (name, contact, user_id) VALUES (?, ?, ?)",
+                ("Legacy Utilities", "  Expense Category  ", m_uid),
+            )
+            legacy_id = legacy_cursor.lastrowid
+            normal_cursor = conn.execute(
+                "INSERT INTO accounts (name, contact, user_id) VALUES (?, ?, ?)",
+                ("Legacy Normal Supplier", "0300-1234567", m_uid),
+            )
+            normal_id = normal_cursor.lastrowid
+
+            db._migrate_expense_category_column(conn)
+
+            legacy_row = conn.execute(
+                "SELECT is_expense_category FROM accounts WHERE id=?", (legacy_id,)
+            ).fetchone()
+            normal_row = conn.execute(
+                "SELECT is_expense_category FROM accounts WHERE id=?", (normal_id,)
+            ).fetchone()
+            assert legacy_row["is_expense_category"] == 1, (
+                "Legacy Contact-field-trick account should be backfilled to is_expense_category=1"
+            )
+            assert normal_row["is_expense_category"] == 0, (
+                "A normal (non-expense-category) account must not be marked as one"
+            )
+
+    run_test("Expense category migration backfills existing Contact-trick accounts",
+              test_expense_category_migration_backfills_legacy_contact_trick_accounts)
+
     run_test("Delete account entry cascades cash book", test_delete_account_entry_cascade)
     run_test("Journal voucher create/delete", test_journal_voucher)
     run_test("Purchase return flow", test_purchase_return)
@@ -845,7 +949,9 @@ def main():
             r_bank_id = r_bank["id"]
             r_supplier = db.create_account(conn, r_uid, {"name": "Recon Supplier"})
             r_buyer = db.create_account(conn, r_uid, {"name": "Recon Buyer"})
-            r_util = db.create_account(conn, r_uid, {"name": "Recon Utilities", "contact": "expense category"})
+            r_util = db.create_account(conn, r_uid, {
+                "name": "Recon Utilities", "contact": "expense category", "is_expense_category": True,
+            })
             r_supplier_id, r_buyer_id, r_util_id = r_supplier["id"], r_buyer["id"], r_util["id"]
             db.update_user_settings(conn, r_uid, {"cash_in_hand": "500000000"})
             cash_open = db.cash_in_hand_balance(conn, r_uid)
