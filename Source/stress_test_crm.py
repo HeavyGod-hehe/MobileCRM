@@ -514,6 +514,52 @@ def main():
     run_test("Journal voucher create/delete", test_journal_voucher)
     run_test("Purchase return flow", test_purchase_return)
     run_test("Sale return flow", test_sale_return)
+
+    # --- Gap coverage: returns can't refund more than was actually paid (bug #12) ---
+    def test_purchase_return_refund_capped():
+        with db.db_session() as conn:
+            p = db.create_phone(conn, user_id, {
+                "model": "Refund Cap Purchase Phone", "type": "PTA", "purchase_price": 40000,
+                "status": "Bought", "purchase_payment_method": "cash",
+                "imei": "888800000005555",
+            })
+            try:
+                db.process_purchase_return(conn, user_id, {
+                    "phone_id": p["id"], "refund_amount": 41000,
+                })
+                raise AssertionError("Expected a refund exceeding the amount paid to be rejected")
+            except ValueError as e:
+                assert "maximum refundable" in str(e).lower()
+
+        with db.db_session() as conn:
+            # The default (no refund_amount given) still refunds exactly what
+            # was paid, and an explicit refund at or under that cap succeeds.
+            result = db.process_purchase_return(conn, user_id, {"phone_id": p["id"]})
+            assert result["refund_amount"] == 40000
+
+    run_test("Purchase return refund is capped at what was actually paid", test_purchase_return_refund_capped)
+
+    def test_sale_return_refund_capped():
+        with db.db_session() as conn:
+            p = db.create_phone(conn, user_id, {
+                "model": "Refund Cap Sale Phone", "type": "PTA", "purchase_price": 40000,
+                "status": "Sold", "sale_price": 55000,
+                "purchase_payment_method": "cash", "sale_payment_method": "cash",
+                "imei": "888800000006666",
+            })
+            try:
+                db.process_sale_return(conn, user_id, {
+                    "phone_id": p["id"], "refund_amount": 56000,
+                })
+                raise AssertionError("Expected a refund exceeding what the customer paid to be rejected")
+            except ValueError as e:
+                assert "maximum refundable" in str(e).lower()
+
+        with db.db_session() as conn:
+            result = db.process_sale_return(conn, user_id, {"phone_id": p["id"]})
+            assert result["refund_amount"] == 55000
+
+    run_test("Sale return refund is capped at what the customer actually paid", test_sale_return_refund_capped)
     run_test("Today summary includes sold-as-bought", test_today_bought_includes_sold)
     run_test("Update phone investments (bug fix)", test_update_investments)
     run_test("Udhar dashboard no double-count", test_udhar_no_double_count)

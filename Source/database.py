@@ -3108,13 +3108,23 @@ def process_purchase_return(conn, user_id, data):
         raise ValueError("Only Bought or In Repair items can be returned to supplier")
 
     paid_now = max(0.0, float(phone.get("purchase_price") or 0) - float(phone.get("payable_amount") or 0))
+    already_refunded = conn.execute(
+        "SELECT COALESCE(SUM(refund_amount), 0) AS s FROM return_logs WHERE phone_id = ? AND return_type = 'purchase'",
+        (phone["id"],),
+    ).fetchone()["s"]
+    max_refundable = round(paid_now - already_refunded, 2)
     refund = float(
         data.get("refund_amount")
         if data.get("refund_amount") not in (None, "")
-        else paid_now
+        else max_refundable
     )
     if refund < 0:
         raise ValueError("Refund amount cannot be negative")
+    if refund > max_refundable + 0.01:
+        raise ValueError(
+            f"Refund cannot exceed what was actually paid to the supplier — "
+            f"maximum refundable is {max_refundable:,.2f}"
+        )
     account_id = data.get("account_id") or phone.get("supplier_account_id")
     if account_id in (None, "", 0):
         account_id = None
@@ -3213,13 +3223,23 @@ def process_sale_return(conn, user_id, data):
         raise ValueError("Only sold items can be processed as sale returns")
 
     received_now = max(0.0, float(phone.get("sale_price") or 0) - float(phone.get("receivable_amount") or 0))
+    already_refunded = conn.execute(
+        "SELECT COALESCE(SUM(refund_amount), 0) AS s FROM return_logs WHERE phone_id = ? AND return_type = 'sale'",
+        (phone["id"],),
+    ).fetchone()["s"]
+    max_refundable = round(received_now - already_refunded, 2)
     refund = float(
         data.get("refund_amount")
         if data.get("refund_amount") not in (None, "")
-        else received_now
+        else max_refundable
     )
     if refund < 0:
         raise ValueError("Refund amount cannot be negative")
+    if refund > max_refundable + 0.01:
+        raise ValueError(
+            f"Refund cannot exceed what the customer actually paid — "
+            f"maximum refundable is {max_refundable:,.2f}"
+        )
     account_id = data.get("account_id")
     if account_id in (None, "", 0):
         account_id = None
