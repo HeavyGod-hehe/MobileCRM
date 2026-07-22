@@ -1446,8 +1446,11 @@ def create_bank_api():
     data = request.get_json(force=True)
     if not data.get("name"):
         return jsonify({"error": "Bank name is required"}), 400
-    with db.db_session() as conn:
-        return jsonify(db.create_bank(conn, user_id, data)), 201
+    try:
+        with db.db_session() as conn:
+            return jsonify(db.create_bank(conn, user_id, data)), 201
+    except ValueError as exc:
+        return jsonify({"error": str(exc)}), 400
 
 
 @app.route("/api/banks/<int:bank_id>", methods=["PUT"])

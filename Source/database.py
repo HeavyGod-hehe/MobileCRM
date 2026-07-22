@@ -3566,13 +3566,18 @@ def get_bank(conn, user_id, bank_id):
 
 
 def create_bank(conn, user_id, data):
+    initial = None
+    if "initial_balance" in data and data["initial_balance"] is not None and str(data["initial_balance"]).strip() != "":
+        initial = float(data["initial_balance"])
+        if initial < 0:
+            raise ValueError("Opening balance cannot be negative")
+
     cursor = conn.execute(
         "INSERT INTO bank_accounts (name, user_id) VALUES (?, ?)",
         (data["name"], user_id),
     )
     bank_id = cursor.lastrowid
-    if "initial_balance" in data and data["initial_balance"] is not None and str(data["initial_balance"]).strip() != "":
-        initial = float(data["initial_balance"])
+    if initial is not None:
         if initial != 0:
             conn.execute(
                 """

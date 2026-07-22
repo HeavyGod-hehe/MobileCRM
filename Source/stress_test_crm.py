@@ -601,6 +601,32 @@ def main():
 
     run_test("Bulk delete skips phones blocked by invoices instead of aborting the whole batch",
               test_bulk_delete_phones_reports_blocked_ones_without_aborting_the_batch)
+
+    # --- Gap coverage: bank opening balance can't be negative (bug #19) ---
+    def test_bank_negative_initial_balance_rejected():
+        with db.db_session() as conn:
+            try:
+                db.create_bank(conn, user_id, {
+                    "name": "Should Not Exist Bank", "initial_balance": -500,
+                })
+                raise AssertionError("Expected a negative opening balance to be rejected")
+            except ValueError as e:
+                assert "negative" in str(e).lower()
+
+            still_there = conn.execute(
+                "SELECT 1 FROM bank_accounts WHERE user_id=? AND name=?",
+                (user_id, "Should Not Exist Bank"),
+            ).fetchone()
+            assert still_there is None, "A rejected negative-opening-balance bank must not be created at all"
+
+            # Zero and positive openings still work exactly as before.
+            zero_bank = db.create_bank(conn, user_id, {"name": "Zero Opening Test Bank", "initial_balance": 0})
+            assert zero_bank["balance"] == 0
+            positive_bank = db.create_bank(conn, user_id, {"name": "Positive Opening Test Bank", "initial_balance": 12345})
+            assert positive_bank["balance"] == 12345
+
+    run_test("Bank opening balance rejects negative values", test_bank_negative_initial_balance_rejected)
+
     run_test("Delete account entry cascades cash book", test_delete_account_entry_cascade)
     run_test("Journal voucher create/delete", test_journal_voucher)
     run_test("Purchase return flow", test_purchase_return)
