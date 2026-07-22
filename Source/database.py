@@ -4574,7 +4574,7 @@ def customer_recovery_analysis(conn, user_id):
             SELECT
                 COALESCE(SUM(CASE WHEN entry_type = 'credit' THEN amount ELSE 0 END), 0) AS billed,
                 COALESCE(SUM(CASE WHEN entry_type = 'debit' THEN amount ELSE 0 END), 0) AS collected,
-                MIN(CASE WHEN entry_type = 'credit' THEN created_at END) AS oldest_credit
+                MIN(CASE WHEN entry_type = 'credit' THEN date(created_at, 'localtime') END) AS oldest_credit
             FROM account_entries
             WHERE account_id = ?
             """,

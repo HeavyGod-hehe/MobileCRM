@@ -973,6 +973,51 @@ def main():
     run_test("Purchases/expenses just after local midnight land in today's reports, not UTC-yesterday's",
               test_utc_vs_local_midnight_report_alignment)
 
+    # --- Gap coverage: customer_recovery_analysis()'s oldest_outstanding_date (same UTC pattern as bug #13) ---
+    def test_customer_recovery_oldest_date_is_localized():
+        if not hasattr(time, "tzset"):
+            return
+        original_tz = os.environ.get("TZ")
+        os.environ["TZ"] = "Asia/Karachi"
+        time.tzset()
+        try:
+            with db.db_session() as conn:
+                u = db.register_user(conn, "recovery_tz_user", "pass1234", "", "Recovery TZ Shop")
+                r_uid = u["user_id"]
+                acct = db.create_account(conn, r_uid, {"name": "Recovery TZ Customer"})
+
+                today_local = conn.execute("SELECT date('now', 'localtime')").fetchone()[0]
+                created_at_utc = conn.execute(
+                    "SELECT datetime(? || ' 00:05:00', '-5 hours')", (today_local,)
+                ).fetchone()[0]
+
+                # Insert a credit (billed) entry directly with an explicit
+                # created_at representing 00:05 LOCAL today, same technique
+                # as the bug #13 test -- its raw UTC value falls on the
+                # previous UTC calendar day.
+                conn.execute(
+                    "INSERT INTO account_entries (account_id, entry_type, amount, note, created_at) "
+                    "VALUES (?, 'credit', ?, ?, ?)",
+                    (acct["id"], 5000, "Recovery TZ probe", created_at_utc),
+                )
+
+                results = db.customer_recovery_analysis(conn, r_uid)
+                row = next((r for r in results if r["account_id"] == acct["id"]), None)
+                assert row is not None, "Expected the test account to appear (it has an outstanding balance)"
+                assert row["oldest_outstanding_date"] == today_local, (
+                    f"Expected oldest_outstanding_date={today_local} (local), "
+                    f"got {row['oldest_outstanding_date']!r} -- looks like it's still raw UTC"
+                )
+        finally:
+            if original_tz is None:
+                os.environ.pop("TZ", None)
+            else:
+                os.environ["TZ"] = original_tz
+            time.tzset()
+
+    run_test("customer_recovery_analysis() oldest_outstanding_date is local, not raw UTC",
+              test_customer_recovery_oldest_date_is_localized)
+
     # --- Gap coverage: purchase_invoice_counter allow-list + loud unknown keys (bug #14) ---
     def test_purchase_invoice_counter_setting_persists_and_unknown_keys_are_loud():
         with db.db_session() as conn:
