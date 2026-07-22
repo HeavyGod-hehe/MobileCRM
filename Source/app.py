@@ -108,6 +108,15 @@ def _load_or_create_secret_key() -> str:
 
 app.secret_key = _load_or_create_secret_key()
 
+# Bug #22: no CSRF protection anywhere in this app (no token on forms/API
+# writes). Accepted as-is because the server only ever binds to
+# 127.0.0.1/localhost by default (see CRM_HOST below) -- a page on another
+# origin can't reach a service that isn't reachable from the network in
+# the first place. This stops being true the moment CRM_HOST is set to a
+# non-loopback address (see the warning logged for that case below); if
+# LAN/remote access is ever supported as a real feature, CSRF tokens need
+# to be added before that ships, not left as a known gap.
+
 APP_VERSION = (Path(__file__).parent / "VERSION").read_text(encoding="utf-8").strip() if not getattr(sys, "frozen", False) else ""
 if getattr(sys, "frozen", False):
     _ver_path = Path(sys._MEIPASS) / "VERSION"
