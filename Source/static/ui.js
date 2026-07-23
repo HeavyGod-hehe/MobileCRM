@@ -6,10 +6,10 @@ Plain JavaScript (no framework/build step) that every CRM page shares:
 
   - toast / openModal / closeModal / wireModal / bumpBadge — small generic
     helpers used all over the app (notifications, popup forms).
-  - UI_DESIGNS + applyTheme + renderThemeGrid/Dropdown + initThemePicker —
-    the theme switcher (Settings -> Appearance). Themes are just CSS classes
-    swapped on <body> (see static/app.css) plus a value saved to
-    localStorage (THEME_KEY) so it persists across page loads.
+  - applyTheme / toggleTheme — the light/dark switcher (top bar + Settings
+    -> Appearance). "Theme" is just the data-theme attribute on <html>
+    (see static/app.css) plus a value saved to localStorage (THEME_KEY) so
+    it persists across page loads.
   - initSettingsPage (the biggest function here) — wires up every control
     on the Settings page: shop details, backup folder picker, email/SMTP
     config, license info, and the update-checker UI below.
@@ -25,27 +25,19 @@ Plain JavaScript (no framework/build step) that every CRM page shares:
 
 const THEME_KEY = 'crm-theme';
 
-const UI_DESIGNS = [
-  { id: 'default-dark', name: 'Glass Dark', desc: 'Frosted glass morphism (original)', colors: ['#030712', '#10b981', '#0f172a'], category: 'colorscheme' },
-  { id: 'light', name: 'Clean Minimal', desc: 'Flat light professional', colors: ['#f1f5f9', '#059669', '#ffffff'], category: 'colorscheme' },
-  { id: 'cyberpunk', name: 'Cyber Neon', desc: 'Neon grid futuristic', colors: ['#0a0014', '#ff0080', '#00ffff'], category: 'colorscheme' },
-  { id: 'emerald', name: 'Finance Classic', desc: 'Emerald banking style', colors: ['#022c22', '#34d399', '#064e3b'], category: 'colorscheme' },
-  { id: 'midnight-pro', name: 'Midnight Pro', desc: 'Dense corporate dashboard', colors: ['#0c1222', '#3b82f6', '#1e293b'], category: 'colorscheme' },
-  { id: 'sunset-warm', name: 'Sunset Warm', desc: 'Cozy gradient cards', colors: ['#1a0a0a', '#f97316', '#7c2d12'], category: 'colorscheme' },
-  { id: 'terminal', name: 'Terminal Hacker', desc: 'Monospace command line', colors: ['#0a0f0a', '#22c55e', '#14532d'], category: 'colorscheme' },
-  { id: 'luxury', name: 'Luxury Gold', desc: 'Dark elegant gold accents', colors: ['#0d0d0d', '#d4af37', '#1a1a1a'], category: 'colorscheme' },
-  { id: 'neumorph', name: 'Soft Neumorph', desc: 'Soft shadows & pills', colors: ['#e0e5ec', '#6366f1', '#f0f3f8'], category: 'colorscheme' },
-  { id: 'brutalist', name: 'Brutalist Bold', desc: 'Hard edges bold type', colors: ['#fafafa', '#000000', '#ffff00'], category: 'colorscheme' },
-  { id: 'academy-light', name: 'Academy Light', desc: 'Sidebar + pastel KPI cards', colors: ['#f8fafc', '#059669', '#ecfdf5'], layout: 'sidebar', category: 'colorscheme' },
-  { id: 'minimal-admin', name: 'Minimal Admin', desc: 'Sidebar + icon-circle cards, light/dark toggle', colors: ['#fafafa', '#18181b', '#ffffff'], layout: 'sidebar', hasModeToggle: true, category: 'colorscheme' },
-  { id: 'saas-dark-pro', name: 'SaaS Dark Pro', desc: 'Sidebar + dense stats, neon accents', colors: ['#080b14', '#22d3ee', '#0ea5e9'], layout: 'sidebar', category: 'layout' },
-  { id: 'saas-sidebar-pro', name: 'SaaS Sidebar Pro', desc: 'Dark sidebar, bright data-table workspace', colors: ['#040D14', '#00A3FF', '#FFFFFF'], layout: 'sidebar', category: 'layout' },
-];
+// The app now ships a single design (Retailer-POS-inspired light look) with
+// an optional dark mode — the old 14-skin picker is gone. Existing accounts
+// may still have an old theme id (e.g. "default-dark", "cyberpunk") saved
+// server-side; normalizeTheme maps anything that isn't literally "dark" to
+// the new default "light" look.
+function normalizeTheme(theme) {
+  return theme === 'dark' ? 'dark' : 'light';
+}
 
-const THEME_CATEGORY_LABELS = { colorscheme: 'Colorschemes', layout: 'Layout' };
-const THEME_CATEGORY_ORDER = ['colorscheme', 'layout'];
-
-/** All modals: [overlayId, wrapId] — used for Escape-to-close. */
+/** All modals: [overlayId, wrapId] — used for Escape-to-close.
+ * Bug #25: 6 modals opened via openModal() were missing here, so Escape
+ * silently did nothing on them (backdrop click / X / Cancel still worked).
+ * Any new openModal(overlayId, wrapId) call must add its pair here too. */
 const MODAL_REGISTRY = [
   ['modal-overlay', 'phone-modal'],
   ['detail-overlay', 'detail-modal'],
@@ -57,6 +49,14 @@ const MODAL_REGISTRY = [
   ['ps-overlay', 'ps-modal'],
   ['stock-overlay', 'stock-modal'],
   ['welcome-overlay', 'welcome-modal'],
+  ['payment-pick-overlay', 'payment-pick-modal'],
+  ['inv-acct-overlay', 'inv-acct-modal'],
+  ['bulk-sold-overlay', 'bulk-sold-modal'],
+  ['jv-acct-overlay', 'jv-acct-modal'],
+  ['reinvest-overlay', 'reinvest-modal'],
+  ['side-inv-overlay', 'side-inv-modal'],
+  ['imei-scanner-overlay', 'imei-scanner-modal'],
+  ['pi-scanner-overlay', 'pi-scanner-modal'],
 ];
 
 function toast(message, type = 'success', duration = 2800) {
@@ -135,112 +135,146 @@ function animateValue(el, end, formatter, duration = 600) {
   requestAnimationFrame(step);
 }
 
-const MODE_KEY = 'crm-theme-mode';
+// Small dependency-free canvas bar chart — no charting library, no build
+// step, matches the rest of this file's plain-JS approach. `items` is
+// [{label, value}]; only ever fed real numbers already fetched from an
+// API, never invented data.
+function renderBarChart(canvas, items, opts = {}) {
+  if (!canvas) return;
+  const ctx = canvas.getContext('2d');
+  const dpr = window.devicePixelRatio || 1;
+  const cssWidth = canvas.clientWidth || canvas.parentElement?.clientWidth || 300;
+  const cssHeight = opts.height || 180;
+  canvas.width = cssWidth * dpr;
+  canvas.height = cssHeight * dpr;
+  canvas.style.height = cssHeight + 'px';
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  ctx.clearRect(0, 0, cssWidth, cssHeight);
+  if (!items.length) return;
 
-// Switch to `theme`: sets data-theme/data-layout attributes on <html>
-// (app.css keys off these to apply the right colors/layout) and remembers
-// the choice in localStorage so it survives a page reload. A few themes
-// also support a separate light/dark "mode" toggle on top of the theme
-// itself (data-mode) — that's the hasModeToggle branch below.
-function applyTheme(theme, opts) {
-  opts = opts || {};
-  const design = UI_DESIGNS.find(t => t.id === theme);
-  document.documentElement.setAttribute('data-theme', theme);
-  document.documentElement.setAttribute('data-layout', design && design.layout ? design.layout : 'original');
-  localStorage.setItem(THEME_KEY, theme);
+  const color = opts.color || '#2563eb';
+  const max = Math.max(...items.map(i => i.value), 1);
+  const padTop = 26, padBottom = 28, padX = 8;
+  const chartH = cssHeight - padTop - padBottom;
+  const gap = 12;
+  const n = items.length;
+  const barW = Math.max(10, Math.min(52, (cssWidth - padX * 2 - gap * (n + 1)) / n));
+  const totalW = barW * n + gap * (n - 1);
+  let x = (cssWidth - totalW) / 2;
 
-  const modeBtn = document.getElementById('btn-mode-toggle');
-  if (design && design.hasModeToggle) {
-    const mode = opts.keepMode ? (localStorage.getItem(MODE_KEY) || 'light') : 'light';
-    document.documentElement.setAttribute('data-mode', mode);
-    localStorage.setItem(MODE_KEY, mode);
-    modeBtn?.classList.remove('hidden');
-  } else {
-    document.documentElement.removeAttribute('data-mode');
-    modeBtn?.classList.add('hidden');
-  }
+  // Soft baseline
+  ctx.strokeStyle = 'rgba(148, 163, 184, 0.25)';
+  ctx.lineWidth = 1;
+  ctx.beginPath();
+  ctx.moveTo(padX, padTop + chartH);
+  ctx.lineTo(cssWidth - padX, padTop + chartH);
+  ctx.stroke();
 
-  document.querySelectorAll('.theme-option').forEach(el => {
-    el.classList.toggle('active', el.dataset.theme === theme);
+  items.forEach(item => {
+    const h = Math.max(4, (item.value / max) * chartH);
+    const y = padTop + (chartH - h);
+    const r = Math.min(8, barW / 2);
+
+    const grad = ctx.createLinearGradient(x, y, x, y + h);
+    grad.addColorStop(0, color);
+    grad.addColorStop(1, opts.colorEnd || '#60a5fa');
+    ctx.fillStyle = grad;
+
+    ctx.beginPath();
+    ctx.moveTo(x, y + h);
+    ctx.lineTo(x, y + r);
+    ctx.arcTo(x, y, x + r, y, r);
+    ctx.lineTo(x + barW - r, y);
+    ctx.arcTo(x + barW, y, x + barW, y + r, r);
+    ctx.lineTo(x + barW, y + h);
+    ctx.closePath();
+    ctx.fill();
+
+    ctx.textAlign = 'center';
+    ctx.fillStyle = opts.labelColor || '#475569';
+    ctx.font = '600 10px -apple-system, BlinkMacSystemFont, "SF Pro Text", system-ui, sans-serif';
+    const valueText = opts.formatValue ? opts.formatValue(item.value) : String(item.value);
+    ctx.fillText(valueText, x + barW / 2, Math.max(12, y - 8));
+
+    ctx.fillStyle = opts.axisColor || '#94a3b8';
+    ctx.font = '500 9px -apple-system, BlinkMacSystemFont, "SF Pro Text", system-ui, sans-serif';
+    const label = (item.label || '').length > 9 ? item.label.slice(0, 8) + '…' : (item.label || '');
+    ctx.fillText(label, x + barW / 2, cssHeight - 10);
+
+    x += barW + gap;
+  });
+}
+window.renderBarChart = renderBarChart;
+
+// Switch to `theme` ('light' or 'dark'): sets data-theme on <html> (app.css
+// keys off it) and remembers the choice in localStorage so it survives a
+// page reload.
+function applyTheme(theme) {
+  const mode = normalizeTheme(theme);
+  document.documentElement.setAttribute('data-theme', mode);
+  document.documentElement.setAttribute('data-layout', 'sidebar');
+  localStorage.setItem(THEME_KEY, mode);
+
+  document.querySelectorAll('.theme-mode-option').forEach(el => {
+    el.classList.toggle('active', el.dataset.theme === mode);
   });
 
-  // Sidebar layout only makes sense expanded on desktop; always start closed
-  // on mobile widths so it doesn't cover the page.
-  const sidebar = document.getElementById('app-sidebar');
-  if (sidebar && window.innerWidth <= 900) sidebar.classList.remove('open');
+  // Sidebar only makes sense expanded on desktop; always start closed on
+  // mobile widths so it doesn't cover the page.
+  if (window.innerWidth < 1024) setSidebarOpen(false);
 }
 
-function toggleThemeMode() {
-  const current = document.documentElement.getAttribute('data-mode') || 'light';
+/** Bug #26: the mobile sidebar drawer had no backdrop and no outside-tap/
+ * Escape dismiss — the hamburger button was the only way to close it.
+ * This keeps the backdrop's open state in sync with the sidebar's. */
+function setSidebarOpen(open) {
+  document.getElementById('app-sidebar')?.classList.toggle('open', open);
+  document.getElementById('sidebar-backdrop')?.classList.toggle('open', open);
+}
+
+function toggleTheme() {
+  const current = normalizeTheme(document.documentElement.getAttribute('data-theme'));
   const next = current === 'light' ? 'dark' : 'light';
-  document.documentElement.setAttribute('data-mode', next);
-  localStorage.setItem(MODE_KEY, next);
+  applyTheme(next);
+  apiFetch('/api/settings', {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ theme: next }),
+  }).catch(() => {});
 }
 
-function renderThemeGrid(container, onPicked) {
+// Renders the light/dark toggle used on the Settings page's Appearance
+// section (the top-bar sun/moon icon is the same toggle, just icon-only).
+function renderThemeGrid(container) {
   if (!container) return;
-  const current = localStorage.getItem(THEME_KEY) || 'default-dark';
-  const groups = {};
-  UI_DESIGNS.forEach(t => {
-    const cat = t.category || 'colorscheme';
-    (groups[cat] = groups[cat] || []).push(t);
-  });
-  const themeButton = (t) => `
-    <button type="button" class="theme-option${t.id === current ? ' active' : ''}" data-theme="${t.id}">
-      <div class="theme-preview">
-        <span style="background:${t.colors[0]}"></span>
-        <span style="background:${t.colors[1]}"></span>
-        <span style="background:${t.colors[2]}"></span>
-      </div>
-      <div class="theme-option-text">
-        <p class="theme-option-name">${t.name}</p>
-        <p class="theme-option-desc">${t.desc}</p>
-      </div>
-    </button>`;
-  container.innerHTML = THEME_CATEGORY_ORDER
-    .filter(cat => groups[cat] && groups[cat].length)
-    .map(cat => `
-      <p class="theme-group-label">${THEME_CATEGORY_LABELS[cat] || cat}</p>
-      <div class="theme-group">${groups[cat].map(themeButton).join('')}</div>`)
-    .join('');
-  container.querySelectorAll('.theme-option').forEach(btn => {
+  const current = normalizeTheme(localStorage.getItem(THEME_KEY));
+  container.innerHTML = ['light', 'dark'].map(id => `
+    <button type="button" class="filter-tab theme-mode-option${id === current ? ' active' : ''}" data-theme="${id}">
+      ${id === 'light' ? 'Light' : 'Dark'}
+    </button>`).join('');
+  container.querySelectorAll('.theme-mode-option').forEach(btn => {
     btn.addEventListener('click', () => {
       applyTheme(btn.dataset.theme);
-      apiFetch('/api/settings', {
-        method: 'PUT',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ theme: btn.dataset.theme }),
-      }).catch(() => {});
-      toast(`Design: ${UI_DESIGNS.find(x => x.id === btn.dataset.theme)?.name}`);
-      if (onPicked) onPicked();
+      toast(`Appearance: ${btn.dataset.theme === 'dark' ? 'Dark' : 'Light'}`);
     });
   });
 }
 
-function renderThemeDropdown() {
-  renderThemeGrid(document.getElementById('theme-options'), () => {
-    document.getElementById('theme-dropdown')?.classList.add('hidden');
-  });
-}
-
-function initThemePicker() {
-  const btn = document.getElementById('theme-picker-btn');
-  const dropdown = document.getElementById('theme-dropdown');
-  if (!btn || !dropdown) return;
-  renderThemeDropdown();
-  btn.addEventListener('click', (e) => {
-    e.stopPropagation();
-    dropdown.classList.toggle('hidden');
-  });
-  document.addEventListener('click', (e) => {
-    if (!document.getElementById('theme-picker-wrap')?.contains(e.target)) {
-      dropdown.classList.add('hidden');
-    }
-  });
-
-  document.getElementById('btn-mode-toggle')?.addEventListener('click', toggleThemeMode);
+function initTopBarControls() {
+  document.getElementById('btn-mode-toggle')?.addEventListener('click', toggleTheme);
   document.getElementById('btn-sidebar-toggle')?.addEventListener('click', () => {
-    document.getElementById('app-sidebar')?.classList.toggle('open');
+    const isOpen = document.getElementById('app-sidebar')?.classList.contains('open');
+    setSidebarOpen(!isOpen);
+  });
+  document.getElementById('sidebar-backdrop')?.addEventListener('click', () => setSidebarOpen(false));
+
+  // Global search: jumps to Inventory with the query pre-filled — it reuses
+  // Inventory's own existing client-side search rather than pretending to
+  // search everything (no cross-page search API exists).
+  document.getElementById('nav-search-form')?.addEventListener('submit', (e) => {
+    e.preventDefault();
+    const q = document.getElementById('nav-search-input')?.value.trim();
+    window.location.href = q ? `/inventory?q=${encodeURIComponent(q)}` : '/inventory';
   });
 }
 
@@ -824,11 +858,13 @@ async function loadAppBranding() {
         logoDefault.classList.remove('hidden');
       }
     }
+    // This browser's own last choice wins over the server-stored value —
+    // otherwise a toggle click gets silently reverted on the next page
+    // load if the /api/settings PUT hasn't landed yet (or for any other
+    // reason lags behind). Server value is only the fallback for a
+    // browser that has never set a local preference.
     const saved = localStorage.getItem(THEME_KEY);
-    // Always apply (not just on mismatch) so data-layout/data-mode get
-    // computed by the real applyTheme() logic on every load — the inline
-    // pre-paint script in base.html only sets data-theme, not layout/mode.
-    applyTheme(auth.theme || saved || 'default-dark', { keepMode: true });
+    applyTheme(saved || auth.theme || 'light');
     return auth;
   } catch (_) {
     return null;
@@ -859,7 +895,9 @@ function initModalEscapeHandler() {
         closeModal(overlayId, wrapId);
       }
     });
-    document.getElementById('theme-dropdown')?.classList.add('hidden');
+    if (document.getElementById('app-sidebar')?.classList.contains('open')) {
+      setSidebarOpen(false);
+    }
   });
 }
 
@@ -886,7 +924,7 @@ function initPageTransitions() {
 async function initApp() {
   initModalEscapeHandler();
   initWelcome();
-  initThemePicker();
+  initTopBarControls();
   initSettingsNav();
   initPageTransitions();
   checkForUpdates({ banner: true });
@@ -1043,7 +1081,6 @@ document.addEventListener('DOMContentLoaded', () => {
   if (document.getElementById('shop-name-display')) {
     initApp();
   } else {
-    const saved = localStorage.getItem(THEME_KEY) || 'default-dark';
-    applyTheme(saved);
+    applyTheme(localStorage.getItem(THEME_KEY));
   }
 });

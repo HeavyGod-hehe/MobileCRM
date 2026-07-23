@@ -1962,4 +1962,11 @@ if __name__ == "__main__":
     backup_service.run_startup_backups()
     backup_service.start_auto_backup_thread()
     threading.Thread(target=_open_browser, args=(_HOST, port), daemon=True).start()
-    app.run(host=_HOST, port=port, debug=False, use_reloader=False)
+    # Bug #27: missing threaded=True here (launch_crm.py's equivalent
+    # app.run() call already had it) meant `python app.py` served one
+    # request at a time — every other tab/page blocked until whatever was
+    # in flight finished. A slow request (e.g. signup's backup) made
+    # concurrent pages fail with a generic browser fetch error, not a
+    # clean message, and made transient DB-busy retries pile up. See the
+    # threading comment on ensure_db() above, which already assumed this.
+    app.run(host=_HOST, port=port, debug=False, use_reloader=False, threaded=True)

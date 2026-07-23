@@ -171,33 +171,41 @@
 
   window.deleteJv = async (id) => {
     if (!confirm('Delete this journal voucher? Both account entries will also be removed.')) return;
-    await apiFetch(`/api/journal-vouchers/${id}`, { method: 'DELETE' });
-    toast('Voucher deleted');
-    loadJournalVouchers();
+    try {
+      await apiFetch(`/api/journal-vouchers/${id}`, { method: 'DELETE' });
+      toast('Voucher deleted');
+      loadJournalVouchers();
+    } catch (err) {
+      toast(err.message, 'error');
+    }
   };
 
   document.getElementById('jv-form').addEventListener('submit', async (e) => {
     e.preventDefault();
     if (!jvDebitPicker.requireSelection('Select a debit account from the list')) return;
     if (!jvCreditPicker.requireSelection('Select a credit account from the list')) return;
-    await apiFetch('/api/journal-vouchers', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        voucher_date: document.getElementById('jv-date').value,
-        reference: document.getElementById('jv-ref').value.trim(),
-        narration: document.getElementById('jv-narration').value.trim(),
-        debit_account_id: jvDebitPicker.getValue(),
-        credit_account_id: jvCreditPicker.getValue(),
-        amount: document.getElementById('jv-amount').value,
-      }),
-    });
-    document.getElementById('jv-form').reset();
-    document.getElementById('jv-date').value = new Date().toISOString().slice(0, 10);
-    jvDebitPicker.reset();
-    jvCreditPicker.reset();
-    toast('Journal voucher posted');
-    loadJournalVouchers();
+    try {
+      await apiFetch('/api/journal-vouchers', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          voucher_date: document.getElementById('jv-date').value,
+          reference: document.getElementById('jv-ref').value.trim(),
+          narration: document.getElementById('jv-narration').value.trim(),
+          debit_account_id: jvDebitPicker.getValue(),
+          credit_account_id: jvCreditPicker.getValue(),
+          amount: document.getElementById('jv-amount').value,
+        }),
+      });
+      document.getElementById('jv-form').reset();
+      document.getElementById('jv-date').value = new Date().toISOString().slice(0, 10);
+      jvDebitPicker.reset();
+      jvCreditPicker.reset();
+      toast('Journal voucher posted');
+      loadJournalVouchers();
+    } catch (err) {
+      toast(err.message, 'error');
+    }
   });
 
   document.getElementById('jv-date').value = new Date().toISOString().slice(0, 10);

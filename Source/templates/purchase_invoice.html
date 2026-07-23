@@ -94,8 +94,8 @@
   </div>
 </section>
 
-<div id="pi-scanner-overlay" class="modal-overlay hidden"></div>
-<div id="pi-scanner-modal" class="modal-wrap hidden">
+<div id="pi-scanner-overlay" class="modal-overlay"></div>
+<div id="pi-scanner-modal" class="modal-wrap">
   <div class="modal-panel modal-panel-sm">
     <div class="modal-header">
       <h3 class="text-lg font-semibold text-white">Scan IMEI</h3>
@@ -285,8 +285,7 @@
       toast('Scanner library not loaded', 'error');
       return;
     }
-    document.getElementById('pi-scanner-overlay').classList.remove('hidden');
-    document.getElementById('pi-scanner-modal').classList.remove('hidden');
+    openModal('pi-scanner-overlay', 'pi-scanner-modal');
     piHtml5QrCode = new Html5Qrcode('pi-qr-reader');
     try {
       await piHtml5QrCode.start(
@@ -308,8 +307,7 @@
   }
 
   async function closePiImeiScanner() {
-    document.getElementById('pi-scanner-overlay').classList.add('hidden');
-    document.getElementById('pi-scanner-modal').classList.add('hidden');
+    closeModal('pi-scanner-overlay', 'pi-scanner-modal');
     if (piHtml5QrCode) {
       try { await piHtml5QrCode.stop(); } catch (_) {}
       piHtml5QrCode.clear();

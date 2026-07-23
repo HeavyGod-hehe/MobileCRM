@@ -3,9 +3,9 @@
 {% block title %}Overview — Welcome, {{ current_username }}{% endblock %}
 
 {% block content %}
-<div class="mb-8 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
+<div class="mb-6 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
   <div>
-    <h1 class="text-2xl font-bold text-white tracking-tight">Overview</h1>
+    <h1 class="text-2xl font-bold tracking-tight">Overview</h1>
     <p class="text-slate-400 text-sm mt-1">Financial reconciliation &amp; monthly performance</p>
   </div>
   <div class="flex gap-2">
@@ -30,31 +30,27 @@
   </div>
 
   <!-- Bank vs Cash Split -->
-  <div class="grid grid-cols-1 sm:grid-cols-2 gap-4 mb-4">
-    <div class="hero-card rounded-2xl p-6">
-      <p class="text-emerald-400/90 text-sm font-medium mb-2 flex items-center gap-2">
-        <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 10h18M7 15h1m4 0h1m-7 4h12a3 3 0 003-3V8a3 3 0 00-3-3H6a3 3 0 00-3 3v8a3 3 0 003 3z"/></svg>
-        Total in Bank
-      </p>
-      <p id="total-in-bank" class="text-3xl font-bold text-white num-animate" data-value="0">—</p>
+  <div class="kpi-grid mb-4" style="grid-template-columns: repeat(2, minmax(0, 1fr));">
+    <div class="kpi-card">
+      <p class="kpi-label">Total in Bank</p>
+      <p id="total-in-bank" class="kpi-value num-animate" data-value="0">—</p>
     </div>
-    <div class="hero-card rounded-2xl p-6" style="border-color: rgba(251,191,36,0.25); box-shadow: 0 0 40px -8px rgba(251,191,36,0.2);">
-      <p class="text-amber-400/90 text-sm font-medium mb-2 flex items-center gap-2">
-        <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M17 9V7a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2m2 4h10a2 2 0 002-2v-6a2 2 0 00-2-2H9a2 2 0 00-2 2v6a2 2 0 002 2zm7-5a2 2 0 11-4 0 2 2 0 014 0z"/></svg>
-        Total in Cash
-      </p>
-      <p id="total-in-cash" class="text-3xl font-bold text-white num-animate" data-value="0">—</p>
+    <div class="kpi-card">
+      <p class="kpi-label">Total in Cash</p>
+      <p id="total-in-cash" class="kpi-value num-animate" data-value="0">—</p>
     </div>
   </div>
 
-  <div class="hero-card rounded-2xl p-7 mb-4">
-    <p class="text-emerald-400/90 text-sm font-medium mb-2 flex items-center gap-2">
-      <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 10h18M7 15h1m4 0h1m-7 4h12a3 3 0 003-3V8a3 3 0 00-3-3H6a3 3 0 00-3 3v8a3 3 0 003 3z"/></svg>
-      Expected Bank Balance
-    </p>
-    <p id="expected-balance" class="text-4xl sm:text-5xl font-bold text-white tracking-tight num-animate" data-value="0">—</p>
-    <p class="text-slate-400/80 text-xs mt-3">Investment + Profit − Udhar − Stock + Payables − Cash (synced with Accounts)</p>
-    <p class="text-slate-500/80 text-xs mt-1">Actual bank total shown separately above — khata payments do not change it</p>
+  <div class="kpi-card mb-4">
+    <p class="kpi-label">Expected Bank Balance</p>
+    <p id="expected-balance" class="kpi-value num-animate" style="font-size:2.25rem" data-value="0">—</p>
+    <p class="panel-sub mb-0 mt-2">Investment + Profit − Udhar − Stock + Payables − Cash</p>
+  </div>
+
+  <div class="panel-card mb-4">
+    <h2 class="panel-title">Money Snapshot</h2>
+    <p class="panel-sub">Bank, cash, udhar &amp; stock at a glance</p>
+    <canvas id="overview-money-chart" class="w-full block"></canvas>
   </div>
 
   <div class="grid grid-cols-2 lg:grid-cols-5 gap-3">
@@ -139,7 +135,7 @@
 
 <!-- Partner Settings Modal -->
 <div id="ps-overlay" class="modal-overlay"></div>
-<div id="ps-modal" class="modal-wrap">
+<div id="ps-modal" class="modal-wrap modal-wrap-scroll">
   <div class="modal-panel">
     <div class="p-6 border-b border-white/8 flex items-center justify-between">
       <h3 class="text-lg font-semibold text-white">Partner Customization</h3>
@@ -147,7 +143,7 @@
         <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/></svg>
       </button>
     </div>
-    <div id="ps-partners-list" class="p-6 space-y-3 max-h-[60vh] overflow-y-auto"></div>
+    <div id="ps-partners-list" class="p-6 space-y-3"></div>
   </div>
 </div>
 
@@ -224,7 +220,7 @@
 
 <!-- Active Stock Modal -->
 <div id="stock-overlay" class="modal-overlay"></div>
-<div id="stock-modal" class="modal-wrap">
+<div id="stock-modal" class="modal-wrap modal-wrap-scroll">
   <div class="modal-panel modal-panel-wide">
     <div class="p-6 border-b border-white/8 flex items-center justify-between">
       <h3 class="text-lg font-semibold text-white">Active Stock &amp; Receivables</h3>
@@ -235,11 +231,11 @@
     <div class="p-6 split-view">
       <div>
         <h4 class="text-sm font-semibold text-blue-300 mb-3">Physical Inventory</h4>
-        <div id="stock-inventory-list" class="space-y-2 max-h-[50vh] overflow-y-auto"></div>
+        <div id="stock-inventory-list" class="space-y-2"></div>
       </div>
       <div>
         <h4 class="text-sm font-semibold text-amber-300 mb-3">Payment Receivables</h4>
-        <div id="stock-receivables-list" class="space-y-2 max-h-[50vh] overflow-y-auto"></div>
+        <div id="stock-receivables-list" class="space-y-2"></div>
       </div>
     </div>
   </div>
@@ -273,6 +269,21 @@
     animateValue(document.getElementById('monthly-profit'), m.total_profit, fmt);
     document.getElementById('profit-margin').textContent = m.profit_margin + '%';
     document.getElementById('top-model').textContent = m.top_model;
+
+    const moneyChart = document.getElementById('overview-money-chart');
+    if (moneyChart && typeof renderBarChart === 'function') {
+      renderBarChart(moneyChart, [
+        { label: 'Bank', value: Math.max(0, s.total_in_bank || 0) },
+        { label: 'Cash', value: Math.max(0, s.total_in_cash || 0) },
+        { label: 'Udhar', value: Math.max(0, s.total_udhar || 0) },
+        { label: 'Stock', value: Math.max(0, s.active_stock_worth || 0) },
+      ], {
+        color: '#0ea5e9',
+        colorEnd: '#a5f3fc',
+        height: 180,
+        formatValue: (v) => fmt(v),
+      });
+    }
 
     if (s.theme) applyTheme(s.theme);
   }
@@ -312,13 +323,17 @@
   };
 
   async function updatePartnerCapital(id, capital) {
-    await apiFetch(`/api/partners/${id}`, {
-      method: 'PUT',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ capital }),
-    });
-    toast('Capital updated');
-    loadOverview();
+    try {
+      await apiFetch(`/api/partners/${id}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ capital }),
+      });
+      toast('Capital updated');
+      loadOverview();
+    } catch (err) {
+      toast(err.message, 'error');
+    }
   }
 
   window.showActiveStockModal = () => {
@@ -367,14 +382,18 @@
       name: document.getElementById('partner-name').value,
       capital: document.getElementById('partner-capital').value,
     };
-    await apiFetch(id ? `/api/partners/${id}` : '/api/partners', {
-      method: id ? 'PUT' : 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(payload),
-    });
-    closeModal('partner-overlay', 'partner-modal');
-    toast(id ? 'Partner updated' : 'Partner added');
-    loadOverview();
+    try {
+      await apiFetch(id ? `/api/partners/${id}` : '/api/partners', {
+        method: id ? 'PUT' : 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+      });
+      closeModal('partner-overlay', 'partner-modal');
+      toast(id ? 'Partner updated' : 'Partner added');
+      loadOverview();
+    } catch (err) {
+      toast(err.message, 'error');
+    }
   });
 
   document.getElementById('btn-partner-settings').addEventListener('click', () => {
@@ -391,13 +410,17 @@
 
   window.savePartnerName = async (id) => {
     const name = document.getElementById(`ps-name-${id}`).value;
-    await apiFetch(`/api/partners/${id}`, {
-      method: 'PUT',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ name }),
-    });
-    toast('Partner name updated');
-    loadOverview();
+    try {
+      await apiFetch(`/api/partners/${id}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name }),
+      });
+      toast('Partner name updated');
+      loadOverview();
+    } catch (err) {
+      toast(err.message, 'error');
+    }
   };
 
   function openReinvestModal() {

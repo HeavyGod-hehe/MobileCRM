@@ -9,3 +9,4 @@ issued_keys.log
 license.json
 license.json.tmp
 license_build_secret.txt
+VENDOR_LICENSE_SECRET.txt

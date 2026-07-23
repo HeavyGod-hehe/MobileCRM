@@ -3,9 +3,9 @@
 {% block title %}Today — Welcome, {{ current_username }}{% endblock %}
 
 {% block content %}
-<div class="mb-8 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
+<div class="mb-6 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
   <div>
-    <h1 class="text-2xl font-bold text-white tracking-tight">Today</h1>
+    <h1 class="text-2xl font-bold tracking-tight">Today</h1>
     <p id="today-date-label" class="text-slate-400 text-sm mt-1">Loading…</p>
   </div>
   <div class="flex gap-2 no-print">
@@ -14,86 +14,149 @@
   </div>
 </div>
 
-<section class="grid grid-cols-2 lg:grid-cols-5 gap-4 mb-8 stagger">
-  <div class="hero-card rounded-2xl p-6">
-    <p class="text-emerald-400/90 text-sm font-medium mb-2">Phones Sold</p>
-    <p id="today-sold-count" class="text-3xl font-bold text-white">—</p>
+<section class="kpi-grid stagger mb-6">
+  <div class="kpi-card">
+    <p class="kpi-label">Cash in Hand</p>
+    <p id="today-cash-hand" class="kpi-value">—</p>
   </div>
-  <div class="hero-card rounded-2xl p-6">
-    <p class="text-blue-400/90 text-sm font-medium mb-2">Phones Bought</p>
-    <p id="today-bought-count" class="text-3xl font-bold text-white">—</p>
+  <div class="kpi-card">
+    <p class="kpi-label">Bank Balance</p>
+    <p id="today-bank" class="kpi-value">—</p>
   </div>
-  <div class="hero-card rounded-2xl p-6">
-    <p class="text-blue-400/90 text-sm font-medium mb-2">Sales Revenue</p>
-    <p id="today-revenue" class="text-3xl font-bold text-white">—</p>
+  <div class="kpi-card">
+    <p class="kpi-label">Today Sales</p>
+    <p id="today-revenue" class="kpi-value">—</p>
   </div>
-  <div class="hero-card rounded-2xl p-6">
-    <p class="text-amber-400/90 text-sm font-medium mb-2">Today's Profit</p>
-    <p id="today-profit" class="text-3xl font-bold text-white">—</p>
-  </div>
-  <div class="hero-card rounded-2xl p-6 col-span-2 lg:col-span-1">
-    <p class="text-slate-400 text-sm font-medium mb-2">Cash In / Out</p>
-    <p id="today-cash" class="text-xl font-bold text-white">—</p>
+  <div class="kpi-card">
+    <p class="kpi-label">Today Profit</p>
+    <p id="today-profit" class="kpi-value">—</p>
   </div>
 </section>
 
-<div class="grid grid-cols-1 lg:grid-cols-2 gap-6">
-  <section class="glass-card rounded-xl p-6">
-    <h2 class="text-lg font-semibold text-white mb-4">Sold Today</h2>
-    <div class="overflow-x-auto">
-      <table class="w-full text-sm">
-        <thead>
-          <tr class="text-slate-500 text-left text-xs uppercase tracking-wider">
-            <th class="px-4 py-3 font-medium">Model</th>
-            <th class="px-4 py-3 font-medium">IMEI</th>
-            <th class="px-4 py-3 font-medium">Buyer</th>
-            <th class="px-4 py-3 font-medium text-right">Sale Price</th>
-          </tr>
-        </thead>
-        <tbody id="today-sold-tbody" class="divide-y divide-white/5"></tbody>
-      </table>
-      <div id="today-sold-empty" class="hidden empty-state py-8">No phones sold today yet</div>
-    </div>
-  </section>
+<div class="grid grid-cols-1 xl:grid-cols-[1fr_300px] gap-6 items-start">
+  <div class="space-y-6 min-w-0">
+    <section class="panel-card">
+      <h2 class="panel-title">Today's Sales Breakdown</h2>
+      <p class="panel-sub">Sale price per phone sold today</p>
+      <canvas id="today-sales-chart" class="w-full block"></canvas>
+      <div id="today-chart-empty" class="hidden empty-state py-6">No phones sold today yet</div>
+    </section>
 
-  <section class="glass-card rounded-xl p-6">
-    <h2 class="text-lg font-semibold text-white mb-4">Bought Today</h2>
-    <p id="today-bought-spend" class="text-xs text-slate-500 mb-3"></p>
-    <div class="overflow-x-auto">
-      <table class="w-full text-sm">
-        <thead>
-          <tr class="text-slate-500 text-left text-xs uppercase tracking-wider">
-            <th class="px-4 py-3 font-medium">Model</th>
-            <th class="px-4 py-3 font-medium">IMEI</th>
-            <th class="px-4 py-3 font-medium">Supplier</th>
-            <th class="px-4 py-3 font-medium text-right">Cost</th>
-          </tr>
-        </thead>
-        <tbody id="today-bought-tbody" class="divide-y divide-white/5"></tbody>
-      </table>
-      <div id="today-bought-empty" class="hidden empty-state py-8">No phones bought today yet</div>
+    <div class="grid grid-cols-1 lg:grid-cols-2 gap-6">
+      <section class="panel-card">
+        <h2 class="panel-title mb-4">Sold Today</h2>
+        <div class="overflow-x-auto">
+          <table class="w-full text-sm">
+            <thead>
+              <tr class="text-left text-xs uppercase tracking-wider">
+                <th class="px-3 py-2.5 font-medium">Model</th>
+                <th class="px-3 py-2.5 font-medium">IMEI</th>
+                <th class="px-3 py-2.5 font-medium">Buyer</th>
+                <th class="px-3 py-2.5 font-medium text-right">Sale Price</th>
+              </tr>
+            </thead>
+            <tbody id="today-sold-tbody"></tbody>
+          </table>
+          <div id="today-sold-empty" class="hidden empty-state py-8">No phones sold today yet</div>
+        </div>
+      </section>
+
+      <section class="panel-card">
+        <h2 class="panel-title mb-1">Bought Today</h2>
+        <p id="today-bought-spend" class="panel-sub"></p>
+        <div class="overflow-x-auto">
+          <table class="w-full text-sm">
+            <thead>
+              <tr class="text-left text-xs uppercase tracking-wider">
+                <th class="px-3 py-2.5 font-medium">Model</th>
+                <th class="px-3 py-2.5 font-medium">IMEI</th>
+                <th class="px-3 py-2.5 font-medium">Supplier</th>
+                <th class="px-3 py-2.5 font-medium text-right">Cost</th>
+              </tr>
+            </thead>
+            <tbody id="today-bought-tbody"></tbody>
+          </table>
+          <div id="today-bought-empty" class="hidden empty-state py-8">No phones bought today yet</div>
+        </div>
+      </section>
     </div>
-  </section>
+  </div>
+
+  <aside class="space-y-6 no-print">
+    <section class="panel-card">
+      <h2 class="panel-title mb-3">Shop Insights</h2>
+      <div id="shop-insights-list" class="space-y-2"></div>
+    </section>
+
+    <section class="panel-card">
+      <h2 class="panel-title mb-3">Quick Actions</h2>
+      <div class="space-y-2">
+        <a href="/inventory" class="btn btn-ghost btn-sm w-full justify-start">+ Add Phone</a>
+        <a href="/billing" class="btn btn-ghost btn-sm w-full justify-start">Record Sale</a>
+        <a href="/cashbook" class="btn btn-ghost btn-sm w-full justify-start">Open Cash Book</a>
+        <a href="/find-imei" class="btn btn-ghost btn-sm w-full justify-start">Find IMEI</a>
+      </div>
+    </section>
+  </aside>
 </div>
 {% endblock %}
 
 {% block scripts %}
 <script>
+  function renderInsights(overviewSummary) {
+    const list = document.getElementById('shop-insights-list');
+    const items = [];
+    const repairCount = (overviewSummary.active_inventory || []).filter(p => p.status === 'In Repair').length;
+    if (repairCount > 0) items.push({ tone: 'amber', text: `${repairCount} phone${repairCount === 1 ? '' : 's'} in repair` });
+    if ((overviewSummary.total_udhar || 0) > 0) items.push({ tone: 'blue', text: `${fmt(overviewSummary.total_udhar)} udhar due from customers` });
+    if ((overviewSummary.total_in_cash || 0) < 0) items.push({ tone: 'red', text: `Cash in hand is negative (${fmt(overviewSummary.total_in_cash)})` });
+    if ((overviewSummary.total_in_bank || 0) < 0) items.push({ tone: 'red', text: `Bank balance is negative (${fmt(overviewSummary.total_in_bank)})` });
+    if (!items.length) items.push({ tone: 'emerald', text: 'No alerts — books look steady' });
+
+    list.innerHTML = items.map(item => `
+      <div class="insight-item ${item.tone}">
+        <span class="w-1.5 h-1.5 rounded-full bg-current mt-1.5 shrink-0"></span>
+        <span>${esc(item.text)}</span>
+      </div>`).join('');
+  }
+
   async function loadToday() {
-    const data = await apiFetch('/api/today');
+    const [data, overview] = await Promise.all([
+      apiFetch('/api/today'),
+      apiFetch('/api/overview'),
+    ]);
+    const summary = overview.summary || {};
+
     document.getElementById('today-date-label').textContent = data.date_label || 'Today';
-    document.getElementById('today-sold-count').textContent = data.phones_sold ?? 0;
-    document.getElementById('today-bought-count').textContent = data.phones_bought ?? 0;
+    document.getElementById('today-cash-hand').textContent = fmt(summary.total_in_cash);
+    document.getElementById('today-bank').textContent = fmt(summary.total_in_bank);
     document.getElementById('today-revenue').textContent = fmt(data.sales_revenue);
     document.getElementById('today-profit').textContent = fmt(data.sales_profit);
-    document.getElementById('today-cash').innerHTML =
-      `<span class="text-emerald-400">${fmt(data.cash_in)}</span> / <span class="text-red-400">${fmt(data.cash_out)}</span>`;
     document.getElementById('today-bought-spend').textContent =
       data.phones_bought ? `Total spent today: ${fmt(data.purchase_spend)}` : '';
+
+    renderInsights(summary);
 
     const soldBody = document.getElementById('today-sold-tbody');
     const soldEmpty = document.getElementById('today-sold-empty');
     const sold = data.sold_phones || [];
+
+    const chartCanvas = document.getElementById('today-sales-chart');
+    const chartEmpty = document.getElementById('today-chart-empty');
+    if (!sold.length) {
+      chartCanvas.classList.add('hidden');
+      chartEmpty.classList.remove('hidden');
+    } else {
+      chartCanvas.classList.remove('hidden');
+      chartEmpty.classList.add('hidden');
+      renderBarChart(chartCanvas, sold.map(p => ({ label: p.model, value: p.sale_price || 0 })), {
+        color: '#2563eb',
+        colorEnd: '#93c5fd',
+        height: 200,
+        formatValue: (v) => fmt(v),
+      });
+    }
+
     if (!sold.length) {
       soldBody.innerHTML = '';
       soldEmpty.classList.remove('hidden');
@@ -101,10 +164,10 @@
       soldEmpty.classList.add('hidden');
       soldBody.innerHTML = sold.map(p => `
         <tr class="table-row">
-          <td class="px-4 py-3 font-medium text-white">${esc(p.model)}</td>
-          <td class="px-4 py-3 font-mono text-xs text-slate-400">${esc(p.imei)||'—'}</td>
-          <td class="px-4 py-3 text-slate-400">${esc(p.buyer_name)||'—'}</td>
-          <td class="px-4 py-3 text-right text-emerald-400 font-medium">${fmt(p.sale_price)}</td>
+          <td class="px-3 py-3 font-medium">${esc(p.model)}</td>
+          <td class="px-3 py-3 font-mono text-xs text-slate-400">${esc(p.imei)||'—'}</td>
+          <td class="px-3 py-3 text-slate-500">${esc(p.buyer_name)||'—'}</td>
+          <td class="px-3 py-3 text-right text-emerald-600 font-medium">${fmt(p.sale_price)}</td>
         </tr>`).join('');
     }
 
@@ -118,13 +181,14 @@
       boughtEmpty.classList.add('hidden');
       boughtBody.innerHTML = bought.map(p => `
         <tr class="table-row">
-          <td class="px-4 py-3 font-medium text-white">${esc(p.model)}${p.status === 'Sold' ? ' <span class="text-xs text-emerald-400/80">(Sold)</span>' : ''}</td>
-          <td class="px-4 py-3 font-mono text-xs text-slate-400">${esc(p.imei)||'—'}</td>
-          <td class="px-4 py-3 text-slate-400">${esc(p.supplier_name)||'—'}</td>
-          <td class="px-4 py-3 text-right text-blue-400 font-medium">${fmt(p.purchase_price)}</td>
+          <td class="px-3 py-3 font-medium">${esc(p.model)}${p.status === 'Sold' ? ' <span class="text-xs text-emerald-600">(Sold)</span>' : ''}</td>
+          <td class="px-3 py-3 font-mono text-xs text-slate-400">${esc(p.imei)||'—'}</td>
+          <td class="px-3 py-3 text-slate-500">${esc(p.supplier_name)||'—'}</td>
+          <td class="px-3 py-3 text-right font-medium">${fmt(p.purchase_price)}</td>
         </tr>`).join('');
     }
   }
-  loadToday().catch(err => toast(err.message, 'error'));
+
+  loadToday().catch(err => toast(err.message || 'Failed to load today', 'error'));
 </script>
 {% endblock %}

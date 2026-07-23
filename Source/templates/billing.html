@@ -104,8 +104,8 @@
   </div>
 </section>
 
-<div id="imei-scanner-overlay" class="modal-overlay hidden"></div>
-<div id="imei-scanner-modal" class="modal-wrap hidden">
+<div id="imei-scanner-overlay" class="modal-overlay"></div>
+<div id="imei-scanner-modal" class="modal-wrap">
   <div class="modal-panel modal-panel-sm">
     <div class="modal-header">
       <h3 class="text-lg font-semibold text-white">Scan IMEI</h3>
@@ -311,8 +311,7 @@
       toast('Scanner library not loaded', 'error');
       return;
     }
-    document.getElementById('imei-scanner-overlay').classList.remove('hidden');
-    document.getElementById('imei-scanner-modal').classList.remove('hidden');
+    openModal('imei-scanner-overlay', 'imei-scanner-modal');
     html5QrCode = new Html5Qrcode('imei-qr-reader');
     try {
       await html5QrCode.start(
@@ -334,8 +333,7 @@
   }
 
   async function closeImeiScanner() {
-    document.getElementById('imei-scanner-overlay').classList.add('hidden');
-    document.getElementById('imei-scanner-modal').classList.add('hidden');
+    closeModal('imei-scanner-overlay', 'imei-scanner-modal');
     if (html5QrCode) {
       try { await html5QrCode.stop(); } catch (_) {}
       html5QrCode.clear();

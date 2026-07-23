@@ -578,10 +578,14 @@
 
   window.deleteBankTx = async (id) => {
     if (!confirm('Delete this transaction?')) return;
-    await apiFetch(`/api/banks/${selectedBankId}/transactions/${id}`, { method: 'DELETE' });
-    toast('Transaction deleted');
-    loadBanks();
-    loadAccounts();
+    try {
+      await apiFetch(`/api/banks/${selectedBankId}/transactions/${id}`, { method: 'DELETE' });
+      toast('Transaction deleted');
+      loadBanks();
+      loadAccounts();
+    } catch (err) {
+      toast(err.message, 'error');
+    }
   };
 
   function buildStatementText() {

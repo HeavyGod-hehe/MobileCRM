@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="en" data-theme="default-dark">
+<html lang="en" data-theme="light" data-layout="sidebar">
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
@@ -8,23 +8,20 @@
   <link rel="stylesheet" href="{{ url_for('static', filename='app.css') }}">
   {% block head %}{% endblock %}
 </head>
-<body class="text-slate-100 min-h-screen antialiased">
+<body class="min-h-screen antialiased app-body">
 <script>
-  /* Apply saved theme, layout and shop name before paint to prevent flicker */
+  /* Apply saved theme (light/dark) and shop name before paint to prevent flicker */
   (function () {
     try {
-      var theme = localStorage.getItem('crm-theme') || 'default-dark';
+      var theme = localStorage.getItem('crm-theme') === 'dark' ? 'dark' : 'light';
       document.documentElement.setAttribute('data-theme', theme);
-      var SIDEBAR_THEMES = ['academy-light', 'saas-dark-pro', 'saas-sidebar-pro', 'minimal-admin'];
-      document.documentElement.setAttribute('data-layout', SIDEBAR_THEMES.indexOf(theme) !== -1 ? 'sidebar' : 'original');
-      if (theme === 'minimal-admin') {
-        document.documentElement.setAttribute('data-mode', localStorage.getItem('crm-theme-mode') || 'light');
-      }
+      document.documentElement.setAttribute('data-layout', 'sidebar');
       var cachedShop = localStorage.getItem('crm-shop-name');
       if (cachedShop) {
         document.addEventListener('DOMContentLoaded', function () {
-          var el = document.getElementById('shop-name-display');
-          if (el) el.textContent = cachedShop;
+          document.querySelectorAll('.shop-name-display').forEach(function (el) {
+            el.textContent = cachedShop;
+          });
         });
       }
     } catch (e) {}
@@ -33,60 +30,17 @@
 
   <div class="bg-mesh" aria-hidden="true"></div>
 
-  <nav class="nav-bar sticky top-0 z-30 no-print">
-    <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
-      <div class="flex items-center justify-between h-16 gap-3">
-        <div class="flex items-center gap-2 min-w-0">
-          <button id="btn-sidebar-toggle" class="btn btn-ghost btn-icon sidebar-only" title="Toggle menu" aria-label="Toggle menu">
-            <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.75" d="M4 6h16M4 12h16M4 18h16"/></svg>
-          </button>
-          <a href="/" class="flex items-center gap-2.5 group min-w-0">
-            <div id="nav-logo-wrap" class="w-7 h-7 rounded-lg bg-gradient-to-br from-emerald-500 to-emerald-700 flex items-center justify-center shadow-lg shadow-emerald-900/40 group-hover:scale-105 transition-transform duration-200 shrink-0 overflow-hidden">
-              <img id="nav-logo-img" class="w-full h-full object-cover hidden" alt="">
-              <svg id="nav-logo-default" class="w-3.5 h-3.5 text-white" fill="currentColor" viewBox="0 0 24 24"><path d="M18.71 19.5c-.83 1.24-1.71 2.45-3.05 2.47-1.34.03-1.77-.79-3.29-.79-1.53 0-2 .77-3.27.82-1.31.05-2.3-1.32-3.14-2.53C4.25 17 2.94 12.45 4.7 9.39c.87-1.52 2.43-2.48 4.12-2.51 1.28-.02 2.5.87 3.29.87.78 0 2.26-1.07 3.8-.91.65.03 2.47.26 3.64 1.98-.09.06-2.17 1.28-2.15 3.81.03 3.02 2.65 4.03 2.68 4.04-.03.07-.42 1.44-1.38 2.83M13 3.5c.73-.83 1.94-1.46 2.94-1.5.13 1.17-.34 2.35-1.04 3.19-.69.85-1.83 1.51-2.95 1.42-.15-1.15.41-2.35 1.05-3.11z"/></svg>
-            </div>
-            <span id="shop-name-display" class="font-semibold text-white text-sm sm:text-base tracking-tight truncate">{{ shop_name }}</span>
-          </a>
-        </div>
-        <div class="flex items-center gap-1.5 sm:gap-2 shrink-0">
-          <!-- Light/dark mode toggle (only shown for templates that support it) -->
-          <button id="btn-mode-toggle" class="btn btn-ghost btn-icon no-print hidden" title="Toggle light/dark" aria-label="Toggle light/dark">
-            <svg id="mode-toggle-icon" class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.75" d="M20.354 15.354A9 9 0 018.646 3.646 9.003 9.003 0 1020.354 15.354z"/></svg>
-          </button>
-          <!-- UI Design Picker -->
-          <div class="relative" id="theme-picker-wrap">
-            <button id="theme-picker-btn" class="btn btn-ghost btn-icon no-print" title="Change UI Design" aria-label="Change UI Design">
-              <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.75" d="M7 21a4 4 0 01-4-4V5a2 2 0 012-2h4a2 2 0 012 2v12a4 4 0 01-4 4zm0 0h12a2 2 0 002-2v-4a2 2 0 00-2-2h-2.343M11 7.343l1.657-1.657a2 2 0 012.828 0l2.829 2.829a2 2 0 010 2.828l-8.486 8.485M7 17h.01"/></svg>
-            </button>
-            <div id="theme-dropdown" class="theme-dropdown hidden">
-              <p class="theme-dropdown-title">UI / UX Design</p>
-              <div id="theme-options" class="theme-options-grid"></div>
-            </div>
-          </div>
-          <!-- Settings shortcut -->
-          <button id="btn-settings" class="btn btn-ghost btn-icon no-print" title="Settings" aria-label="Settings">
-            <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.75" d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z"/><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.75" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"/></svg>
-          </button>
-          <div class="flex gap-0.5 sm:gap-1 p-1 rounded-xl bg-slate-900/60 border border-white/5 nav-tabs-wrap overflow-x-auto original-only">
-            <a href="/" class="nav-link px-2.5 sm:px-3.5 py-1.5 rounded-lg text-sm font-medium whitespace-nowrap {% if active == 'today' %}active{% else %}text-slate-400 hover:text-white{% endif %}">Today</a>
-            <a href="/inventory" class="nav-link px-2.5 sm:px-3.5 py-1.5 rounded-lg text-sm font-medium whitespace-nowrap {% if active == 'inventory' %}active{% else %}text-slate-400 hover:text-white{% endif %}">Inventory</a>
-            <a href="/returns" class="nav-link px-2.5 sm:px-3.5 py-1.5 rounded-lg text-sm font-medium whitespace-nowrap {% if active == 'returns' %}active{% else %}text-slate-400 hover:text-white{% endif %}">Returns</a>
-            <a href="/billing" class="nav-link px-2.5 sm:px-3.5 py-1.5 rounded-lg text-sm font-medium whitespace-nowrap {% if active == 'billing' %}active{% else %}text-slate-400 hover:text-white{% endif %}">Billing</a>
-            <a href="/purchase-invoice" class="nav-link px-2.5 sm:px-3.5 py-1.5 rounded-lg text-sm font-medium whitespace-nowrap {% if active == 'purchase_invoice' %}active{% else %}text-slate-400 hover:text-white{% endif %}">Purchase Invoice</a>
-            <a href="/accounts" class="nav-link px-2.5 sm:px-3.5 py-1.5 rounded-lg text-sm font-medium whitespace-nowrap {% if active == 'accounts' %}active{% else %}text-slate-400 hover:text-white{% endif %}">Accounts</a>
-            <a href="/cashbook" class="nav-link px-2.5 sm:px-3.5 py-1.5 rounded-lg text-sm font-medium whitespace-nowrap {% if active == 'cashbook' %}active{% else %}text-slate-400 hover:text-white{% endif %}">Cash Book</a>
-            <a href="/journal" class="nav-link px-2.5 sm:px-3.5 py-1.5 rounded-lg text-sm font-medium whitespace-nowrap {% if active == 'journal' %}active{% else %}text-slate-400 hover:text-white{% endif %}">Baroobaar/Hawala</a>
-            <a href="/overview" class="nav-link px-2.5 sm:px-3.5 py-1.5 rounded-lg text-sm font-medium whitespace-nowrap {% if active == 'overview' %}active{% else %}text-slate-400 hover:text-white{% endif %}">Overview</a>
-            <a href="/help" class="nav-link px-2.5 sm:px-3.5 py-1.5 rounded-lg text-sm font-medium whitespace-nowrap {% if active == 'help' %}active{% else %}text-slate-400 hover:text-white{% endif %}">Help</a>
-            <a href="/settings" class="nav-link px-2.5 sm:px-3.5 py-1.5 rounded-lg text-sm font-medium whitespace-nowrap {% if active == 'settings' %}active{% else %}text-slate-400 hover:text-white{% endif %}">Settings</a>
-          </div>
-        </div>
-      </div>
-    </div>
-  </nav>
-
   <div class="app-shell">
     <aside id="app-sidebar" class="app-sidebar no-print">
+      <div class="app-sidebar-brand">
+        <a href="/" class="flex items-center gap-2.5 min-w-0 px-1">
+          <div id="nav-logo-wrap" class="w-8 h-8 rounded-lg bg-gradient-to-br from-blue-500 to-blue-600 flex items-center justify-center shrink-0 overflow-hidden">
+            <img id="nav-logo-img" class="w-full h-full object-cover hidden" alt="">
+            <svg id="nav-logo-default" class="w-4 h-4 text-white" fill="currentColor" viewBox="0 0 24 24"><path d="M18.71 19.5c-.83 1.24-1.71 2.45-3.05 2.47-1.34.03-1.77-.79-3.29-.79-1.53 0-2 .77-3.27.82-1.31.05-2.3-1.32-3.14-2.53C4.25 17 2.94 12.45 4.7 9.39c.87-1.52 2.43-2.48 4.12-2.51 1.28-.02 2.5.87 3.29.87.78 0 2.26-1.07 3.8-.91.65.03 2.47.26 3.64 1.98-.09.06-2.17 1.28-2.15 3.81.03 3.02 2.65 4.03 2.68 4.04-.03.07-.42 1.44-1.38 2.83M13 3.5c.73-.83 1.94-1.46 2.94-1.5.13 1.17-.34 2.35-1.04 3.19-.69.85-1.83 1.51-2.95 1.42-.15-1.15.41-2.35 1.05-3.11z"/></svg>
+          </div>
+          <span class="shop-name-display font-semibold text-sm tracking-tight truncate">{{ shop_name }}</span>
+        </a>
+      </div>
       <nav class="app-sidebar-nav">
         <p class="app-sidebar-group-label">Operations</p>
         <a href="/" class="app-sidebar-link {% if active == 'today' %}active{% endif %}">
@@ -156,17 +110,52 @@
           <span>Settings</span>
         </a>
       </nav>
+      <div class="app-sidebar-footer">
+        <div class="app-user-chip" title="{{ current_username }}">
+          <div class="w-8 h-8 rounded-full bg-gradient-to-br from-blue-500 to-blue-600 flex items-center justify-center text-white text-xs font-bold shrink-0">
+            {{ (current_username or '?')[0]|upper }}
+          </div>
+          <div class="min-w-0">
+            <p class="text-sm font-medium truncate">{{ current_username }}</p>
+            <p class="text-xs text-slate-400 truncate shop-name-display">{{ shop_name }}</p>
+          </div>
+        </div>
+      </div>
     </aside>
 
-    <main class="app-main max-w-7xl mx-auto px-4 py-6 sm:px-6 lg:px-8 page-enter">
-      <div id="update-banner" class="update-banner hidden mb-4 no-print" role="status">
-        <svg class="w-5 h-5 shrink-0 mt-0.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
-        <p id="update-banner-text" class="flex-1"></p>
-        <button type="button" id="update-banner-install" class="btn btn-primary btn-sm hidden shrink-0">Install update</button>
-      </div>
-      {% block content %}{% endblock %}
-    </main>
+    <div class="app-content">
+      <header class="app-topbar no-print">
+        <button id="btn-sidebar-toggle" class="btn btn-ghost btn-icon lg:hidden" title="Toggle menu" aria-label="Toggle menu">
+          <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.75" d="M4 6h16M4 12h16M4 18h16"/></svg>
+        </button>
+        <form id="nav-search-form" class="app-topbar-search" role="search">
+          <div class="relative w-full">
+            <svg class="w-4 h-4 absolute left-3 top-1/2 -translate-y-1/2 text-slate-400 pointer-events-none" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.75" d="M21 21l-4.35-4.35M11 19a8 8 0 100-16 8 8 0 000 16z"/></svg>
+            <input type="search" id="nav-search-input" class="input-field text-sm" placeholder="Ask or search IMEI, model…" autocomplete="off">
+          </div>
+        </form>
+        <div class="flex items-center gap-1.5 shrink-0 ml-auto">
+          <button id="btn-mode-toggle" class="btn btn-ghost btn-icon" title="Toggle light/dark" aria-label="Toggle light/dark">
+            <svg id="mode-toggle-icon" class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.75" d="M20.354 15.354A9 9 0 018.646 3.646 9.003 9.003 0 1020.354 15.354z"/></svg>
+          </button>
+          <button id="btn-settings" class="btn btn-ghost btn-icon" title="Settings" aria-label="Settings">
+            <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.75" d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z"/><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.75" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"/></svg>
+          </button>
+        </div>
+      </header>
+
+      <main class="app-main page-enter">
+        <div id="update-banner" class="update-banner hidden mb-4 no-print" role="status">
+          <svg class="w-5 h-5 shrink-0 mt-0.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
+          <p id="update-banner-text" class="flex-1"></p>
+          <button type="button" id="update-banner-install" class="btn btn-primary btn-sm hidden shrink-0">Install update</button>
+        </div>
+        {% block content %}{% endblock %}
+      </main>
+    </div>
   </div>
+
+  <div id="sidebar-backdrop" class="sidebar-backdrop no-print"></div>
 
   <div id="toast-root"></div>
 
@@ -180,7 +169,7 @@
         </button>
       </div>
       <div class="p-8 pt-2">
-        <div class="w-16 h-16 rounded-2xl bg-gradient-to-br from-emerald-500 to-emerald-700 flex items-center justify-center mx-auto mb-5 shadow-lg welcome-icon">
+        <div class="w-16 h-16 rounded-2xl bg-gradient-to-br from-blue-500 to-blue-700 flex items-center justify-center mx-auto mb-5 shadow-lg welcome-icon">
           <svg class="w-8 h-8 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"/></svg>
         </div>
         <h2 id="welcome-title" class="text-2xl font-bold text-white mb-2">Welcome</h2>

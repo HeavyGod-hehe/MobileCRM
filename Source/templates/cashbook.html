@@ -186,9 +186,13 @@
 
   window.deleteCashEntry = async (id) => {
     if (!confirm('Delete this cash book entry? Linked account and bank entries will also be removed.')) return;
-    await apiFetch(`/api/cash-book/${id}`, { method: 'DELETE' });
-    toast('Entry deleted');
-    loadCashBook();
+    try {
+      await apiFetch(`/api/cash-book/${id}`, { method: 'DELETE' });
+      toast('Entry deleted');
+      loadCashBook();
+    } catch (err) {
+      toast(err.message, 'error');
+    }
   };
 
   document.getElementById('cash-book-form').addEventListener('submit', async (e) => {
@@ -207,15 +211,19 @@
     }
     const acctId = cbAccountPicker?.getValue();
     if (acctId) payload.account_id = acctId;
-    await apiFetch('/api/cash-book', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(payload),
-    });
-    document.getElementById('cash-book-form').reset();
-    document.getElementById('cb-date').value = new Date().toISOString().slice(0, 10);
-    toast('Entry added');
-    loadCashBook();
+    try {
+      await apiFetch('/api/cash-book', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+      });
+      document.getElementById('cash-book-form').reset();
+      document.getElementById('cb-date').value = new Date().toISOString().slice(0, 10);
+      toast('Entry added');
+      loadCashBook();
+    } catch (err) {
+      toast(err.message, 'error');
+    }
   });
 
   loadCbAccounts();
