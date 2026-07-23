@@ -11,3 +11,10 @@ license.json.tmp
 license_build_secret.txt
 VENDOR_LICENSE_SECRET.txt
 secret_key
+
+# Installer build output (releases/HOSTING.md and version.json.example are
+# tracked; the compiled Setup.exe/checksum/logs from build_installer.py are
+# rebuildable artifacts, not source)
+releases/*.exe
+releases/*.sha256
+releases/install_log*.txt
