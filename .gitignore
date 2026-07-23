@@ -12,10 +12,13 @@ Source/dist/
 Source/Phone Reseller CRM.app/
 Source/crm.db
 
-# Note: Customer Copy folders are intentionally tracked (requested)
-Customer Copy/Data/
-Customer Copy Apple Silicon/Data/
-Customer Copy Intel Mac/Data/
-Customer Windows Copy/Data/
-
-Customer Copy Universal Mac/Data/
+# Built customer copies are no longer tracked in git - build fresh from
+# Source/ instead of keeping built binaries (and their runtime Data/,
+# including license.json/crm.db) in the repo. Previously ~145MB / 1600
+# files of committed build output removed in the phase 4 cleanup pass.
+Customer Copy/
+Customer Copy Apple Silicon/
+Customer Copy Intel Mac/
+Customer Copy Universal Mac/
+Customer Windows Copy/
+Customer Windows Copy - Built/
