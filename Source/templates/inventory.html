@@ -211,12 +211,14 @@
           <select id="f-acquisition-type" class="input-field">
             <option value="purchase">Purchase</option>
             <option value="borrow">Borrowed from another shopkeeper</option>
+            <option value="opening">Already owned (opening stock)</option>
           </select>
         </div>
         <div id="f-payable-wrap">
           <label class="block text-xs font-medium text-slate-400 mb-1.5">Purchase Udhar (payable)</label>
           <input type="number" id="f-payable-amount" min="0" step="1" value="0" class="input-field" placeholder="Amount still owed">
           <p id="borrow-hint" class="hidden text-xs text-amber-400/90 mt-1">This phone belongs to another shopkeeper until sold — the full price is recorded as what you owe them below (no cash paid out now). Settle it any time, same day or a few days later.</p>
+          <p id="opening-hint" class="hidden text-xs text-amber-400/90 mt-1">Already owned before you started using this CRM — its cost was spent long ago, so no cash/bank entry is posted now.</p>
         </div>
         <div>
           <label class="block text-xs font-medium text-slate-400 mb-1.5">Purchase Date</label>
@@ -489,6 +491,9 @@
   const acquisitionBadge = (p) => {
     if ((p.acquisition_type || 'purchase') === 'borrow') {
       return '<span class="badge-count bg-violet-500/20 text-violet-300 border border-violet-500/20 ml-1">Borrowed</span>';
+    }
+    if (p.acquisition_type === 'opening') {
+      return '<span class="badge-count bg-slate-500/20 text-slate-300 border border-slate-500/20 ml-1">Opening Stock</span>';
     }
     return '';
   };
@@ -811,18 +816,23 @@
   });
 
   function toggleAcquisitionFields() {
-    const isBorrow = document.getElementById('f-acquisition-type').value === 'borrow';
+    const acqType = document.getElementById('f-acquisition-type').value;
+    const isBorrow = acqType === 'borrow';
+    const isOpening = acqType === 'opening';
     const isSold = document.getElementById('f-status').value === 'Sold';
     const paySection = document.getElementById('purchase-payment-section');
     const bankWrap = document.getElementById('f-purchase-bank-wrap');
     const paySel = document.getElementById('f-purchase-payment');
     const payableWrap = document.getElementById('f-payable-wrap');
     const borrowHint = document.getElementById('borrow-hint');
+    const openingHint = document.getElementById('opening-hint');
     const supplierLabel = document.getElementById('f-supplier-account-label');
-    paySection.classList.toggle('hidden', isBorrow);
-    bankWrap.classList.toggle('hidden', isBorrow || !paySel.value.startsWith('bank:'));
-    paySel.required = !isBorrow && !isSold;
+    paySection.classList.toggle('hidden', isBorrow || isOpening);
+    bankWrap.classList.toggle('hidden', isBorrow || isOpening || !paySel.value.startsWith('bank:'));
+    paySel.required = !isBorrow && !isOpening && !isSold;
     borrowHint.classList.toggle('hidden', !isBorrow);
+    openingHint.classList.toggle('hidden', !isOpening);
+    payableWrap.classList.toggle('hidden', isOpening);
     if (supplierLabel) {
       supplierLabel.textContent = isBorrow ? "Which shopkeeper's phone is this? *" : 'Supplier / Shopkeeper Account';
       supplierLabel.classList.toggle('text-amber-300', isBorrow);
@@ -830,6 +840,8 @@
     if (isBorrow) {
       const price = parseFloat(document.getElementById('f-purchase-price').value) || 0;
       document.getElementById('f-payable-amount').value = price;
+    } else if (isOpening) {
+      document.getElementById('f-payable-amount').value = 0;
     }
   }
 
@@ -1097,7 +1109,7 @@
         <div><span class="text-slate-500">Battery</span><p class="text-white">${esc(p.battery_health)||'—'}</p></div>
         <div><span class="text-slate-500">Variant</span><p class="text-white">${esc(p.variant)||'—'}</p></div>
         <div><span class="text-slate-500">Type</span><p>${typeBadge(p.type)}</p></div>
-        <div><span class="text-slate-500">Acquired</span><p class="text-white">${(p.acquisition_type || 'purchase') === 'borrow' ? 'Borrowed from shopkeeper' : 'Purchase'}</p></div>
+        <div><span class="text-slate-500">Acquired</span><p class="text-white">${(p.acquisition_type || 'purchase') === 'borrow' ? 'Borrowed from shopkeeper' : (p.acquisition_type === 'opening' ? 'Already owned (opening stock)' : 'Purchase')}</p></div>
         <div><span class="text-slate-500">Payable</span><p class="text-white">${fmt(p.payable_amount || 0)}</p></div>
       </div>
       <div class="border-t border-white/8 pt-4">

@@ -2883,6 +2883,100 @@ def main():
     run_test("Selling an opening-stock phone posts the sale ledger only, profit computes normally",
               test_selling_opening_stock_posts_sale_ledger_only)
 
+    def test_reclassifying_opening_stock_on_edit_creates_liquidity_gap():
+        # Pins a real-world bug: the Inventory edit form always resends
+        # acquisition_type on save (it's a full-form submit, not a partial
+        # patch), and its dropdown used to offer only "purchase"/"borrow" -
+        # never "opening". So saving any edit on an opening-stock phone
+        # (even just marking it Sold) silently downgraded acquisition_type
+        # to "purchase", defeated the still_opening guard below, and posted
+        # a brand-new real purchase payment for stock whose cost was
+        # already sunk before the CRM - double-charging the phone's price
+        # against the bank. Numbers below mirror the reported incident
+        # exactly: 150000 bank + 123000 khata + 77000 opening-stock phone =
+        # 350000 suggested capital, then a 77000 gap after the mis-edit.
+        with db.db_session() as conn:
+            u = db.register_user(conn, "gap_bug_user", "pass1234", "", "Gap Bug Shop")
+            uid = u["user_id"]
+
+            phone = db.add_opening_stock(conn, uid, [
+                {"model": "iPhone 14 JV", "type": "PTA", "purchase_price": 77000,
+                 "imei": "65765757"},
+            ])[0]
+            bank = db.create_bank(conn, uid, {"name": "UBL", "initial_balance": 150000})
+            db.create_account(conn, uid, {
+                "name": "Zaid", "opening_balance": 123000, "opening_balance_type": "credit",
+            })
+
+            suggested = db.setup_status(conn, uid)["suggested_partner_capital"]
+            assert suggested == 350000, f"Expected suggested capital 350000, got {suggested}"
+            db.create_partner(conn, uid, {"name": "Owner", "capital": suggested})
+            db.complete_setup(conn, uid)
+
+            gap_before = db.compute_dashboard(conn, uid)["liquidity_gap"]
+            assert abs(gap_before) < 0.01, f"Expected ~0 gap right after setup, got {gap_before}"
+
+            # Simulate the pre-fix Edit-Phone form: it always resends
+            # acquisition_type, and its dropdown could never produce
+            # "opening", so this is exactly what it would have submitted
+            # when the user marked the phone Sold.
+            db.update_phone(conn, uid, phone["id"], {
+                "status": "Sold", "sale_price": 80000, "sale_payment_method": "bank",
+                "sale_bank_id": bank["id"],
+                "acquisition_type": "purchase",
+                "purchase_payment_method": "bank", "purchase_bank_id": bank["id"],
+            })
+
+            gap_after = db.compute_dashboard(conn, uid)["liquidity_gap"]
+            assert abs(gap_after - 77000) < 0.01, (
+                f"Expected the reported 77000 liquidity gap, got {gap_after}"
+            )
+
+    run_test("Reclassifying an opening-stock phone away from 'opening' on edit "
+              "reproduces the reported 77k liquidity gap",
+              test_reclassifying_opening_stock_on_edit_creates_liquidity_gap)
+
+    def test_editing_opening_stock_keeps_acquisition_type_gap_stays_zero():
+        # The fix: the Edit-Phone dropdown now has a real "opening" option,
+        # so a save that doesn't change how the phone was acquired resends
+        # acquisition_type="opening" unchanged, still_opening stays True,
+        # and no purchase-ledger entry gets posted - Expected and Actual
+        # Liquid stay in agreement after the sale. Same numbers as the bug
+        # test above, contrasted so the fix is pinned as clearly as the bug.
+        with db.db_session() as conn:
+            u = db.register_user(conn, "gap_fixed_user", "pass1234", "", "Gap Fixed Shop")
+            uid = u["user_id"]
+
+            phone = db.add_opening_stock(conn, uid, [
+                {"model": "iPhone 14 JV", "type": "PTA", "purchase_price": 77000,
+                 "imei": "65765758"},
+            ])[0]
+            bank = db.create_bank(conn, uid, {"name": "UBL", "initial_balance": 150000})
+            db.create_account(conn, uid, {
+                "name": "Zaid", "opening_balance": 123000, "opening_balance_type": "credit",
+            })
+
+            suggested = db.setup_status(conn, uid)["suggested_partner_capital"]
+            db.create_partner(conn, uid, {"name": "Owner", "capital": suggested})
+            db.complete_setup(conn, uid)
+
+            sold = db.update_phone(conn, uid, phone["id"], {
+                "status": "Sold", "sale_price": 80000, "sale_payment_method": "bank",
+                "sale_bank_id": bank["id"],
+                "acquisition_type": "opening",
+            })
+            assert sold["purchase_cash_book_entry_id"] is None, (
+                "An opening-stock phone must never get a purchase-ledger entry, "
+                "even after being edited/sold"
+            )
+
+            gap_after = db.compute_dashboard(conn, uid)["liquidity_gap"]
+            assert abs(gap_after) < 0.01, f"Expected liquidity_gap to stay ~0, got {gap_after}"
+
+    run_test("Editing an opening-stock phone while keeping acquisition_type='opening' "
+              "keeps liquidity_gap at 0",
+              test_editing_opening_stock_keeps_acquisition_type_gap_stays_zero)
+
     def test_legacy_users_never_forced_into_wizard():
         with db.db_session() as conn:
             u = db.register_user(conn, "legacy_grandfather_user", "pass1234", "", "Legacy Shop")
