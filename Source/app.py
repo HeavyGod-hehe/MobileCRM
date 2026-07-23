@@ -543,6 +543,11 @@ def setup_page():
     return render_template("setup.html")
 
 
+@app.route("/personal-assets")
+def personal_assets_page():
+    return render_template("personal_assets.html")
+
+
 @app.route("/cashbook")
 def cashbook_page():
     return render_template("cashbook.html")
@@ -1439,6 +1444,59 @@ def side_investment_api():
             return jsonify(result)
     except ValueError as exc:
         return jsonify({"error": str(exc)}), 400
+
+
+@app.route("/api/partners/side-investments", methods=["GET"])
+def list_side_investments_api():
+    user_id = _current_user_id()
+    with db.db_session() as conn:
+        return jsonify(db.list_side_investments(conn, user_id))
+
+
+# --- Personal Assets ---
+# Plots, commodities, gold, or anything else the shop owner wants to note
+# the value of for their own reference. Deliberately NOT part of the money
+# model - see database.py's _migrate_personal_assets docstring for why.
+
+@app.route("/api/personal-assets", methods=["GET"])
+def list_personal_assets_api():
+    user_id = _current_user_id()
+    with db.db_session() as conn:
+        return jsonify(db.list_personal_assets(conn, user_id))
+
+
+@app.route("/api/personal-assets", methods=["POST"])
+def create_personal_asset_api():
+    user_id = _current_user_id()
+    data = request.get_json(force=True)
+    try:
+        with db.db_session() as conn:
+            return jsonify(db.create_personal_asset(conn, user_id, data)), 201
+    except ValueError as exc:
+        return jsonify({"error": str(exc)}), 400
+
+
+@app.route("/api/personal-assets/<int:asset_id>", methods=["PUT"])
+def update_personal_asset_api(asset_id):
+    user_id = _current_user_id()
+    data = request.get_json(force=True)
+    try:
+        with db.db_session() as conn:
+            result = db.update_personal_asset(conn, user_id, asset_id, data)
+            if not result:
+                return jsonify({"error": "Asset not found"}), 404
+            return jsonify(result)
+    except ValueError as exc:
+        return jsonify({"error": str(exc)}), 400
+
+
+@app.route("/api/personal-assets/<int:asset_id>", methods=["DELETE"])
+def delete_personal_asset_api(asset_id):
+    user_id = _current_user_id()
+    with db.db_session() as conn:
+        if not db.delete_personal_asset(conn, user_id, asset_id):
+            return jsonify({"error": "Asset not found"}), 404
+        return jsonify({"ok": True})
 
 
 # --- Fixed Expenses ---

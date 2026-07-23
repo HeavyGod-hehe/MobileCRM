@@ -21,12 +21,19 @@
   <div class="glass-card rounded-xl p-5 mb-4">
     <div class="flex items-center justify-between mb-4">
       <p class="text-xs font-semibold uppercase tracking-wider text-slate-500">Business Partners</p>
-      <div class="flex gap-2">
-        <button id="btn-side-investment" class="btn btn-ghost btn-sm">+ Side Investment</button>
-        <button id="btn-add-partner" class="btn btn-primary btn-sm">+ Add Partner</button>
-      </div>
+      <button id="btn-add-partner" class="btn btn-primary btn-sm">+ Add Partner</button>
     </div>
     <div id="partners-list" class="space-y-2"></div>
+  </div>
+
+  <!-- Side Investments (history) -->
+  <div class="glass-card rounded-xl p-5 mb-4">
+    <div class="flex items-center justify-between mb-4">
+      <p class="text-xs font-semibold uppercase tracking-wider text-slate-500">Side Investments</p>
+      <button id="btn-side-investment" class="btn btn-ghost btn-sm">+ Add</button>
+    </div>
+    <div id="side-investments-list" class="space-y-2"></div>
+    <div id="side-investments-empty" class="hidden empty-state">No side investments recorded yet</div>
   </div>
 
   <!-- Cash / Bank split -->
@@ -339,6 +346,21 @@
       </div>`).join('');
   }
 
+  async function loadSideInvestments() {
+    const rows = await apiFetch('/api/partners/side-investments');
+    const el = document.getElementById('side-investments-list');
+    const empty = document.getElementById('side-investments-empty');
+    empty.classList.toggle('hidden', rows.length > 0);
+    el.innerHTML = rows.map(r => `
+      <div class="list-item-row">
+        <div>
+          <p class="font-semibold text-white">${esc(r.partner_name)}</p>
+          <p class="text-xs text-slate-500">${esc(r.investment_date)}${r.note ? ' — ' + esc(r.note) : ''}</p>
+        </div>
+        <p class="font-semibold text-emerald-400">${fmt(r.amount)}</p>
+      </div>`).join('');
+  }
+
   window.deletePartner = async (id) => {
     const p = partners.find(x => x.id === id);
     if (!confirm(`Delete partner "${p?.name || 'this partner'}"?`)) return;
@@ -544,6 +566,7 @@
       closeModal('side-inv-overlay', 'side-inv-modal');
       toast('Side investment recorded');
       loadOverview();
+      loadSideInvestments();
     } catch (err) {
       toast(err.message, 'error');
     }
@@ -551,5 +574,6 @@
 
   loadSideInvBanks();
   loadOverview();
+  loadSideInvestments();
 </script>
 {% endblock %}

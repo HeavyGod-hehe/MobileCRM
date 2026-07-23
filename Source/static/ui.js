@@ -57,6 +57,7 @@ const MODAL_REGISTRY = [
   ['side-inv-overlay', 'side-inv-modal'],
   ['imei-scanner-overlay', 'imei-scanner-modal'],
   ['pi-scanner-overlay', 'pi-scanner-modal'],
+  ['asset-overlay', 'asset-modal'],
 ];
 
 function toast(message, type = 'success', duration = 2800) {

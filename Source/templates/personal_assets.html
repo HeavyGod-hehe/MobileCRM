@@ -1,0 +1,174 @@
+{% extends "base.html" %}
+{% set active = 'personal_assets' %}
+{% block title %}Personal Assets — Welcome, {{ current_username }}{% endblock %}
+
+{% block content %}
+<div class="mb-6 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
+  <div>
+    <h1 class="text-2xl font-bold tracking-tight">Personal Assets</h1>
+    <p class="text-slate-400 text-sm mt-1">Plots, commodities, gold, or anything else you want to keep track of.</p>
+  </div>
+  <button id="btn-add-asset" class="btn btn-primary btn-sm no-print shrink-0">+ Add Asset</button>
+</div>
+
+<div class="insight-item blue mb-6">
+  <span class="w-1.5 h-1.5 rounded-full bg-current mt-1.5 shrink-0"></span>
+  <span>This is a reference list only — nothing here touches Cash in Hand, Bank Balance, Expected Liquid, the Gap, or partner capital. It's for your own tracking.</span>
+</div>
+
+<div class="kpi-card mb-6" style="max-width: 320px;">
+  <p class="kpi-label">Total Tracked Value</p>
+  <p id="assets-total-value" class="kpi-value num-animate" style="font-size:2rem" data-value="0">—</p>
+</div>
+
+<div id="assets-grid" class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3 stagger"></div>
+<div id="assets-empty" class="hidden empty-state">No personal assets tracked yet — add one to get started</div>
+
+<!-- Asset Modal -->
+<div id="asset-overlay" class="modal-overlay"></div>
+<div id="asset-modal" class="modal-wrap">
+  <div class="modal-panel">
+    <div class="p-6 border-b border-white/8 flex items-center justify-between">
+      <h3 id="asset-modal-title" class="text-lg font-semibold text-white">Add Asset</h3>
+      <button type="button" id="asset-cancel-x" class="btn btn-ghost btn-icon text-slate-400">
+        <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/></svg>
+      </button>
+    </div>
+    <form id="asset-form" class="p-6 space-y-4">
+      <input type="hidden" id="asset-id">
+      <div>
+        <label class="block text-xs font-medium text-slate-400 mb-1.5">Name *</label>
+        <input type="text" id="asset-name" required class="input-field" placeholder="e.g. Plot in DHA Phase 6">
+      </div>
+      <div>
+        <label class="block text-xs font-medium text-slate-400 mb-1.5">Category</label>
+        <select id="asset-category" class="input-field">
+          <option value="Plot">Plot</option>
+          <option value="Commodity">Commodity</option>
+          <option value="Gold">Gold</option>
+          <option value="Vehicle">Vehicle</option>
+          <option value="Other" selected>Other</option>
+        </select>
+      </div>
+      <div>
+        <label class="block text-xs font-medium text-slate-400 mb-1.5">Value (Rs) *</label>
+        <input type="number" id="asset-value" required min="0" step="1" class="input-field" placeholder="0">
+      </div>
+      <div>
+        <label class="block text-xs font-medium text-slate-400 mb-1.5">Acquired Date</label>
+        <input type="date" id="asset-date" class="input-field">
+      </div>
+      <div>
+        <label class="block text-xs font-medium text-slate-400 mb-1.5">Note</label>
+        <input type="text" id="asset-note" class="input-field" placeholder="Optional details">
+      </div>
+      <div class="flex gap-3 pt-1">
+        <button type="submit" class="btn btn-primary flex-1">Save</button>
+        <button type="button" id="asset-cancel" class="btn btn-ghost">Cancel</button>
+      </div>
+    </form>
+  </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+  let assets = [];
+
+  function renderAssets() {
+    const grid = document.getElementById('assets-grid');
+    const empty = document.getElementById('assets-empty');
+    empty.classList.toggle('hidden', assets.length > 0);
+    grid.innerHTML = assets.map(a => `
+      <div class="stat-card p-4">
+        <div class="flex items-start justify-between gap-2 mb-2">
+          <div>
+            <p class="font-semibold text-white">${esc(a.name)}</p>
+            <span class="inline-block mt-1 text-xs px-2 py-0.5 rounded-full bg-slate-800 text-slate-300">${esc(a.category)}</span>
+          </div>
+          <div class="flex gap-1 shrink-0">
+            <button class="action-pill edit" onclick="editAsset(${a.id})">Edit</button>
+            <button class="action-pill delete" onclick="deleteAsset(${a.id})">Delete</button>
+          </div>
+        </div>
+        <p class="text-xl font-bold text-blue-400 mt-2">${fmt(a.value)}</p>
+        <p class="text-xs text-slate-500 mt-1">${esc(a.acquired_date || '')}</p>
+        ${a.note ? `<p class="text-xs text-slate-500 mt-2">${esc(a.note)}</p>` : ''}
+      </div>`).join('');
+
+    const total = assets.reduce((sum, a) => sum + (Number(a.value) || 0), 0);
+    animateValue(document.getElementById('assets-total-value'), total, fmt, 600);
+  }
+
+  async function loadAssets() {
+    assets = await apiFetch('/api/personal-assets');
+    renderAssets();
+  }
+
+  function openAssetModal(asset) {
+    document.getElementById('asset-modal-title').textContent = asset ? 'Edit Asset' : 'Add Asset';
+    document.getElementById('asset-id').value = asset ? asset.id : '';
+    document.getElementById('asset-name').value = asset ? asset.name : '';
+    document.getElementById('asset-category').value = asset ? asset.category : 'Other';
+    document.getElementById('asset-value').value = asset ? asset.value : '';
+    document.getElementById('asset-date').value = asset ? asset.acquired_date : new Date().toISOString().slice(0, 10);
+    document.getElementById('asset-note').value = asset ? asset.note : '';
+    openModal('asset-overlay', 'asset-modal');
+  }
+
+  window.editAsset = function (id) {
+    const asset = assets.find(a => a.id === id);
+    if (asset) openAssetModal(asset);
+  };
+
+  window.deleteAsset = async function (id) {
+    if (!confirm('Delete this asset?')) return;
+    try {
+      await apiFetch(`/api/personal-assets/${id}`, { method: 'DELETE' });
+      toast('Asset deleted', 'success');
+      loadAssets();
+    } catch (err) {
+      toast(err.message, 'error');
+    }
+  };
+
+  document.getElementById('btn-add-asset').addEventListener('click', () => openAssetModal(null));
+  document.getElementById('asset-cancel').addEventListener('click', () => closeModal('asset-overlay', 'asset-modal'));
+  document.getElementById('asset-cancel-x').addEventListener('click', () => closeModal('asset-overlay', 'asset-modal'));
+  document.getElementById('asset-overlay').addEventListener('click', () => closeModal('asset-overlay', 'asset-modal'));
+
+  document.getElementById('asset-form').addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const id = document.getElementById('asset-id').value;
+    const payload = {
+      name: document.getElementById('asset-name').value.trim(),
+      category: document.getElementById('asset-category').value,
+      value: Number(document.getElementById('asset-value').value) || 0,
+      acquired_date: document.getElementById('asset-date').value,
+      note: document.getElementById('asset-note').value.trim(),
+    };
+    try {
+      if (id) {
+        await apiFetch(`/api/personal-assets/${id}`, {
+          method: 'PUT',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(payload),
+        });
+      } else {
+        await apiFetch('/api/personal-assets', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(payload),
+        });
+      }
+      closeModal('asset-overlay', 'asset-modal');
+      toast('Saved', 'success');
+      loadAssets();
+    } catch (err) {
+      toast(err.message, 'error');
+    }
+  });
+
+  loadAssets();
+</script>
+{% endblock %}

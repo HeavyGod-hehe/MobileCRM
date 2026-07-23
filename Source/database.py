@@ -372,6 +372,7 @@ def _init_schema(conn) -> None:
     _migrate_cash_book_account(conn)
     _migrate_journal_vouchers(conn)
     _migrate_side_investments(conn)
+    _migrate_personal_assets(conn)
     _migrate_cursor_panga(conn)
     _migrate_payment_methods(conn)
     _migrate_account_entry_payments(conn)
@@ -1353,6 +1354,32 @@ def _migrate_side_investments(conn):
     )
 
 
+def _migrate_personal_assets(conn):
+    """Personal Assets tracker: plots, commodities, gold, or anything else
+    the shop owner wants to note the value of for their own reference.
+    Deliberately NOT part of the money model - compute_dashboard() never
+    reads this table, and nothing here posts to cash_book/accounts/
+    ledger_links. A plot's value isn't liquid and counting it toward
+    Expected Liquid would reintroduce exactly the untracked-value problem
+    the opening setup wizard exists to fix (see setup_status's docstring).
+    Purely informational, own isolated table, own page."""
+    conn.executescript(
+        """
+        CREATE TABLE IF NOT EXISTS personal_assets (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id INTEGER NOT NULL REFERENCES users(id),
+            name TEXT NOT NULL,
+            category TEXT NOT NULL DEFAULT 'Other',
+            value REAL NOT NULL DEFAULT 0,
+            note TEXT NOT NULL DEFAULT '',
+            acquired_date TEXT NOT NULL DEFAULT (date('now')),
+            created_at TEXT NOT NULL DEFAULT (datetime('now'))
+        );
+        CREATE INDEX IF NOT EXISTS idx_personal_assets_user_id ON personal_assets(user_id);
+        """
+    )
+
+
 def _migrate_multi_user(conn):
     conn.executescript(
         """
@@ -2266,6 +2293,109 @@ def reverse_side_investment(conn, user_id, investment_id):
             update_partner(conn, user_id, partner_id, {"capital": new_capital})
 
     return {"ok": True, "reversed_amount": round(amount, 2)}
+
+
+def list_side_investments(conn, user_id):
+    """Read-only history of partner capital top-ups (who, how much, when) -
+    for display, e.g. Overview's Side Investments list. Separate from the
+    write side (add_side_investment/reverse_side_investment above)."""
+    rows = conn.execute(
+        """
+        SELECT si.*, p.name AS partner_name
+        FROM side_investments si
+        JOIN partners p ON p.id = si.partner_id
+        WHERE si.user_id = ?
+        ORDER BY si.investment_date DESC, si.id DESC
+        """,
+        (user_id,),
+    ).fetchall()
+    return [dict(r) for r in rows]
+
+
+# --- Personal Assets (plots, commodities, gold, anything) ---
+# Deliberately isolated from the money model - see _migrate_personal_assets's
+# docstring for why. Nothing here ever touches cash_book/accounts/
+# ledger_links, and compute_dashboard() never reads this table - it's a
+# reference list for the shop owner's own wealth tracking, not part of
+# Actual/Expected Liquid or partner capital.
+
+def list_personal_assets(conn, user_id):
+    rows = conn.execute(
+        "SELECT * FROM personal_assets WHERE user_id = ? ORDER BY acquired_date DESC, id DESC",
+        (user_id,),
+    ).fetchall()
+    return [dict(r) for r in rows]
+
+
+def get_personal_asset(conn, user_id, asset_id):
+    row = conn.execute(
+        "SELECT * FROM personal_assets WHERE id = ? AND user_id = ?",
+        (asset_id, user_id),
+    ).fetchone()
+    return dict(row) if row else None
+
+
+def create_personal_asset(conn, user_id, data):
+    name = (data.get("name") or "").strip()
+    if not name:
+        raise ValueError("Name is required")
+    value = float(data.get("value") or 0)
+    if value < 0:
+        raise ValueError("Value cannot be negative")
+    acquired = (
+        _normalize_datetime(data["acquired_date"], conn, date_only=True)
+        if data.get("acquired_date") else _local_date(conn)
+    )
+    cursor = conn.execute(
+        """
+        INSERT INTO personal_assets (user_id, name, category, value, note, acquired_date)
+        VALUES (?, ?, ?, ?, ?, ?)
+        """,
+        (user_id, name, (data.get("category") or "Other").strip() or "Other",
+         value, data.get("note", ""), acquired),
+    )
+    return get_personal_asset(conn, user_id, cursor.lastrowid)
+
+
+def update_personal_asset(conn, user_id, asset_id, data):
+    if not get_personal_asset(conn, user_id, asset_id):
+        return None
+    fields, values = [], []
+    if "name" in data:
+        name = (data["name"] or "").strip()
+        if not name:
+            raise ValueError("Name is required")
+        fields.append("name = ?")
+        values.append(name)
+    if "category" in data:
+        fields.append("category = ?")
+        values.append((data["category"] or "Other").strip() or "Other")
+    if "value" in data:
+        value = float(data["value"] or 0)
+        if value < 0:
+            raise ValueError("Value cannot be negative")
+        fields.append("value = ?")
+        values.append(value)
+    if "note" in data:
+        fields.append("note = ?")
+        values.append(data["note"] or "")
+    if data.get("acquired_date"):
+        fields.append("acquired_date = ?")
+        values.append(_normalize_datetime(data["acquired_date"], conn, date_only=True))
+    if fields:
+        values.extend([asset_id, user_id])
+        conn.execute(
+            f"UPDATE personal_assets SET {', '.join(fields)} WHERE id = ? AND user_id = ?",
+            values,
+        )
+    return get_personal_asset(conn, user_id, asset_id)
+
+
+def delete_personal_asset(conn, user_id, asset_id):
+    if not get_personal_asset(conn, user_id, asset_id):
+        return False
+    conn.execute("DELETE FROM personal_assets WHERE id = ? AND user_id = ?", (asset_id, user_id))
+    return True
 
 
 # --- Phones ---
