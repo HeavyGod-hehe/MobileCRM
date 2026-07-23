@@ -4120,6 +4120,18 @@ def compute_dashboard(conn, user_id):
     )
     expected_bank_balance = round(formula_expected - total_in_cash, 2)
 
+    # Actual vs Expected Liquid (money-model phase 2): the old
+    # expected_cash_balance/formula_expected_balance pair below subtracted
+    # cash out of the formula because it was estimating BANK alone - that's
+    # what let a wizard-free signup post nothing anywhere and still show a
+    # "balanced" number. Actual Liquid and Expected Liquid are the real
+    # reconciliation: money that's physically in the drawer/bank vs. what
+    # the books say should be there. A non-zero gap means either data entry
+    # is missing (e.g. unrecorded opening stock) or a mistake happened.
+    actual_liquid = round(total_in_cash + total_in_bank, 2)
+    expected_liquid = round(formula_expected, 2)
+    liquidity_gap = round(expected_liquid - actual_liquid, 2)
+
     active_inventory = [dict(r) for r in inventory]
     active_receivables = [
         {
@@ -4152,6 +4164,9 @@ def compute_dashboard(conn, user_id):
         "active_stock_worth": round(active_stock_worth, 2),
         "expected_cash_balance": expected_bank_balance,
         "formula_expected_balance": round(formula_expected, 2),
+        "actual_liquid": actual_liquid,
+        "expected_liquid": expected_liquid,
+        "liquidity_gap": liquidity_gap,
         "profit_reinvested": round(profit_reinvested, 2),
         "available_profit": available_profit,
         "total_in_bank": total_in_bank,

@@ -111,6 +111,8 @@
     if ((overviewSummary.total_udhar || 0) > 0) items.push({ tone: 'blue', text: `${fmt(overviewSummary.total_udhar)} udhar due from customers` });
     if ((overviewSummary.total_in_cash || 0) < 0) items.push({ tone: 'red', text: `Cash in hand is negative (${fmt(overviewSummary.total_in_cash)})` });
     if ((overviewSummary.total_in_bank || 0) < 0) items.push({ tone: 'red', text: `Bank balance is negative (${fmt(overviewSummary.total_in_bank)})` });
+    const gap = overviewSummary.liquidity_gap || 0;
+    if (Math.abs(gap) > 1) items.push({ tone: 'amber', text: `Books vs. actual money gap: ${fmt(gap)} — see Overview` });
     if (!items.length) items.push({ tone: 'emerald', text: 'No alerts — books look steady' });
 
     list.innerHTML = items.map(item => `

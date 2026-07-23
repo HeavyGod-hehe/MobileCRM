@@ -29,22 +29,36 @@
     <div id="partners-list" class="space-y-2"></div>
   </div>
 
-  <!-- Bank vs Cash Split -->
+  <!-- Cash / Bank split -->
   <div class="kpi-grid mb-4" style="grid-template-columns: repeat(2, minmax(0, 1fr));">
     <div class="kpi-card">
-      <p class="kpi-label">Total in Bank</p>
-      <p id="total-in-bank" class="kpi-value num-animate" data-value="0">—</p>
+      <p class="kpi-label">Cash in Hand</p>
+      <p id="total-in-cash" class="kpi-value num-animate" data-value="0">—</p>
     </div>
     <div class="kpi-card">
-      <p class="kpi-label">Total in Cash</p>
-      <p id="total-in-cash" class="kpi-value num-animate" data-value="0">—</p>
+      <p class="kpi-label">Bank Balance</p>
+      <p id="total-in-bank" class="kpi-value num-animate" data-value="0">—</p>
     </div>
   </div>
 
-  <div class="kpi-card mb-4">
-    <p class="kpi-label">Expected Bank Balance</p>
-    <p id="expected-balance" class="kpi-value num-animate" style="font-size:2.25rem" data-value="0">—</p>
-    <p class="panel-sub mb-0 mt-2">Investment + Profit − Udhar − Stock + Payables − Cash</p>
+  <!-- Actual vs Expected Liquid reconciliation -->
+  <div class="kpi-grid mb-4" style="grid-template-columns: repeat(2, minmax(0, 1fr));">
+    <div class="kpi-card">
+      <p class="kpi-label">Actual Liquid</p>
+      <p id="actual-liquid" class="kpi-value num-animate" data-value="0">—</p>
+      <p class="panel-sub mb-0 mt-2">Cash + Bank — what's really there</p>
+    </div>
+    <div class="kpi-card">
+      <p class="kpi-label">Expected Liquid</p>
+      <p id="expected-liquid" class="kpi-value num-animate" data-value="0">—</p>
+      <p class="panel-sub mb-0 mt-2">Investment + Profit − Udhar − Stock + Payables</p>
+    </div>
+  </div>
+
+  <div id="liquidity-gap-card" class="kpi-card mb-4">
+    <p class="kpi-label">Gap (Expected − Actual)</p>
+    <p id="liquidity-gap" class="kpi-value num-animate" style="font-size:2.25rem" data-value="0">—</p>
+    <p id="liquidity-gap-note" class="panel-sub mb-0 mt-2">Books and drawer/bank agree</p>
   </div>
 
   <div class="panel-card mb-4">
@@ -256,7 +270,23 @@
     renderPartners();
     animateValue(document.getElementById('total-in-bank'), s.total_in_bank, fmt, 800);
     animateValue(document.getElementById('total-in-cash'), s.total_in_cash, fmt, 800);
-    animateValue(document.getElementById('expected-balance'), s.expected_cash_balance, fmt, 800);
+    animateValue(document.getElementById('actual-liquid'), s.actual_liquid, fmt, 800);
+    animateValue(document.getElementById('expected-liquid'), s.expected_liquid, fmt, 800);
+    animateValue(document.getElementById('liquidity-gap'), s.liquidity_gap, fmt, 800);
+    const gapCard = document.getElementById('liquidity-gap-card');
+    const gapNote = document.getElementById('liquidity-gap-note');
+    const gapValueEl = document.getElementById('liquidity-gap');
+    const gap = s.liquidity_gap || 0;
+    const gapIsSignificant = Math.abs(gap) > 1;
+    gapCard.classList.toggle('kpi-card-warn', gapIsSignificant);
+    gapValueEl.classList.toggle('text-amber-500', gapIsSignificant);
+    if (gapIsSignificant) {
+      gapNote.textContent = gap > 0
+        ? 'Books expect more than the drawer/bank actually have — check for unrecorded opening stock or cash.'
+        : 'Drawer/bank have more than the books expect — check for unrecorded income.';
+    } else {
+      gapNote.textContent = "Books and drawer/bank agree";
+    }
     animateValue(document.getElementById('total-investment'), s.total_investment, fmt);
     animateValue(document.getElementById('total-profit'), s.total_net_profit, fmt);
     document.getElementById('available-profit').textContent = fmt(s.available_profit);
