@@ -8,6 +8,15 @@
   <link rel="stylesheet" href="{{ url_for('static', filename='app.css') }}">
 </head>
 <body class="text-slate-100 min-h-screen antialiased flex items-center justify-center p-4">
+<script>
+  /* Apply saved theme before paint to prevent color flicker */
+  (function () {
+    try {
+      var theme = localStorage.getItem('crm-theme') === 'dark' ? 'dark' : 'light';
+      document.documentElement.setAttribute('data-theme', theme);
+    } catch (e) {}
+  })();
+</script>
   <div class="bg-mesh" aria-hidden="true"></div>
   <div class="glass-card rounded-2xl p-8 w-full max-w-lg relative z-10">
     <div class="w-14 h-14 rounded-2xl bg-gradient-to-br from-amber-500 to-orange-600 flex items-center justify-center mx-auto mb-5 shadow-lg">
