@@ -8,16 +8,12 @@ import sys
 
 def pick_folder_macos() -> str | None:
     """Native macOS folder dialog via AppleScript (works from Flask subprocess)."""
-    import subprocess
-
     script = 'POSIX path of (choose folder with prompt "Select backup folder")'
     return _run_osascript_choose(script)
 
 
 def pick_file_macos() -> str | None:
     """Native macOS file dialog for .db backup restore."""
-    import subprocess
-
     script = 'POSIX path of (choose file with prompt "Select CRM backup file" of type {"db","public.database"})'
     return _run_osascript_choose(script)
 

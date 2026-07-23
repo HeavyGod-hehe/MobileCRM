@@ -4632,28 +4632,6 @@ def delete_account(conn, user_id, account_id):
     )
 
 
-def list_entries(conn, account_id):
-    rows = conn.execute(
-        """
-        SELECT * FROM account_entries
-        WHERE account_id = ?
-        ORDER BY created_at ASC, id ASC
-        """,
-        (account_id,),
-    ).fetchall()
-    balance = 0.0
-    entries = []
-    for row in rows:
-        d = dict(row)
-        if d["entry_type"] == "credit":
-            balance += d["amount"]
-        else:
-            balance -= d["amount"]
-        d["balance"] = round(balance, 2)
-        entries.append(d)
-    return list(reversed(entries))
-
-
 def build_statement(conn, user_id, account_id):
     account = get_account(conn, user_id, account_id)
     if not account:

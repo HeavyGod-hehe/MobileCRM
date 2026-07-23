@@ -783,7 +783,7 @@ def main():
                 "debit_account_id": supplier["id"], "credit_account_id": buyer["id"],
                 "amount": 500, "narration": "Export JV test",
             })
-            result = db.add_side_investment(conn, e_uid, {
+            db.add_side_investment(conn, e_uid, {
                 "partner_id": partner["id"], "amount": 5000, "payment_method": "cash",
             })
             p2 = db.create_phone(conn, e_uid, {
@@ -1572,10 +1572,6 @@ def main():
         with db.db_session() as conn:
             gone = conn.execute("SELECT id FROM phones WHERE id=?", (phone_id6,)).fetchone()
             cash_after = db.cash_in_hand_balance(conn, c_uid)
-            links = conn.execute(
-                "SELECT COUNT(*) c FROM ledger_links WHERE user_id=? AND source_type LIKE 'phone_%' AND source_id=?",
-                (c_uid, phone_id6),
-            ).fetchone()["c"]
         assert gone is None, "Phone still exists after two concurrent deletes"
         assert cash_after == cash_before_purchase, (
             f"Cash in Hand should net back to its pre-purchase value ({cash_before_purchase}) after "
@@ -2206,7 +2202,7 @@ def main():
             db.update_storage_settings(conn, user_a, {"local_backup_path": str(Path(tempfile.gettempdir()) / "crm_restore_test_backups")})
             db.update_storage_settings(conn, user_b, {"local_backup_path": str(Path(tempfile.gettempdir()) / "crm_restore_test_backups")})
             acct_a = db.create_account(conn, user_a, {"name": "A Original Account", "contact": "0300"})
-            acct_b = db.create_account(conn, user_b, {"name": "B Untouched Account", "contact": "0311"})
+            db.create_account(conn, user_b, {"name": "B Untouched Account", "contact": "0311"})
 
         # Snapshot user B's full state before anything else happens, to prove
         # it is byte-for-byte unaffected by user A's restore later.
@@ -3185,8 +3181,8 @@ def render_markdown(r: StressReport) -> str:
         "",
         "## Summary",
         "",
-        f"| Metric | Value |",
-        f"|--------|-------|",
+        "| Metric | Value |",
+        "|--------|-------|",
         f"| Tests passed | **{passed}** |",
         f"| Tests failed | **{failed}** |",
         f"| Warnings | {len(r.warnings)} |",

@@ -52,7 +52,6 @@ import sqlite3
 import subprocess
 import sys
 import threading
-import urllib.request
 from pathlib import Path
 
 from flask import Flask, jsonify, redirect, render_template, request, session, url_for
@@ -2024,9 +2023,7 @@ def handle_database_error(exc):
 
 
 if __name__ == "__main__":
-    import os
     import socket
-    import threading
     import time
     import webbrowser
 
