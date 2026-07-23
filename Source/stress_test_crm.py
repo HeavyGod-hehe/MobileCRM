@@ -212,6 +212,7 @@ def main():
                 "receivable_amount": 30000,
                 "buyer_account_id": buyer_id,
                 "sale_payment_method": "cash",
+                "imei": "600060006000600",  # now required before Sold
             })
             sold_ids.append(pid)
             recv = conn.execute(
@@ -323,6 +324,7 @@ def main():
                 "sale_price": 95000,
                 "purchase_payment_method": "cash",
                 "sale_payment_method": "cash",
+                "imei": "888800000021111",
             })
             db.process_sale_return(conn, user_id, {"phone_id": p["id"], "refund_amount": 95000})
             row = conn.execute("SELECT status FROM phones WHERE id=?", (p["id"],)).fetchone()
@@ -340,6 +342,7 @@ def main():
                 "purchase_date": today,
                 "purchase_payment_method": "cash",
                 "sale_payment_method": "cash",
+                "imei": "888800000022222",
             })
             summary = db.compute_today_summary(conn, user_id)
             ids = [x["id"] for x in summary["bought_phones"]]
@@ -373,6 +376,7 @@ def main():
                 "buyer_account_id": buyer_id,
                 "purchase_payment_method": "cash",
                 "sale_payment_method": "cash",
+                "imei": "888800000023333",
             })
             dash = db.compute_dashboard(conn, user_id)
             acct = db.accounts_summary(conn, user_id)
@@ -419,6 +423,7 @@ def main():
                 "sale_price": 100000,
                 "purchase_payment_method": "cash",
                 "sale_payment_method": "cash",
+                "imei": "888800000024444",
             })
             cash_before = db.cash_in_hand_balance(conn, user_id)
             db.update_phone(conn, user_id, p["id"], {"sale_price": 110000})
@@ -433,6 +438,7 @@ def main():
                 "purchase_price": 60000,
                 "status": "Bought",
                 "purchase_payment_method": "cash",
+                "imei": "888800000025555",
             })
             try:
                 db.bulk_mark_sold(conn, user_id, [{
@@ -2571,6 +2577,219 @@ def main():
 
     run_test("Updater resolves real Windows and Mac install paths (no phantom one-level-too-deep path)",
               test_update_target_resolution_windows_and_mac)
+
+    # --- Money model: opening setup wizard (phase 2) ---
+
+    def test_opening_stock_posts_zero_ledger_rows():
+        with db.db_session() as conn:
+            u = db.register_user(conn, "opening_stock_user", "pass1234", "", "Opening Stock Shop")
+            os_uid = u["user_id"]
+
+            cb_before = conn.execute(
+                "SELECT COUNT(*) c FROM cash_book_entries WHERE user_id=?", (os_uid,)
+            ).fetchone()["c"]
+            acct_before = conn.execute(
+                "SELECT COUNT(*) c FROM account_entries ae "
+                "JOIN accounts a ON a.id = ae.account_id WHERE a.user_id=?", (os_uid,)
+            ).fetchone()["c"]
+
+            created = db.add_opening_stock(conn, os_uid, [
+                {"model": "Opening iPhone 12", "condition": "10/9", "type": "PTA",
+                 "purchase_price": 60000, "imei": "111122223333444"},
+                {"model": "Opening Samsung S21", "condition": "10/8", "type": "NON-PTA",
+                 "purchase_price": 45000},  # no IMEI - must be allowed
+            ])
+            assert len(created) == 2
+            for p in created:
+                assert p["acquisition_type"] == "opening"
+                assert p["status"] == "Bought"
+                assert (p["payable_amount"] or 0) == 0
+                assert p["purchase_cash_book_entry_id"] is None
+                assert p["purchase_account_entry_id"] is None
+
+            cb_after = conn.execute(
+                "SELECT COUNT(*) c FROM cash_book_entries WHERE user_id=?", (os_uid,)
+            ).fetchone()["c"]
+            acct_after = conn.execute(
+                "SELECT COUNT(*) c FROM account_entries ae "
+                "JOIN accounts a ON a.id = ae.account_id WHERE a.user_id=?", (os_uid,)
+            ).fetchone()["c"]
+            bank_tx = conn.execute(
+                "SELECT COUNT(*) c FROM bank_transactions bt "
+                "JOIN bank_accounts b ON b.id = bt.bank_account_id WHERE b.user_id=?", (os_uid,)
+            ).fetchone()["c"]
+            links = conn.execute(
+                "SELECT COUNT(*) c FROM ledger_links WHERE user_id=? AND source_type IN "
+                "('phone_purchase', 'phone_payable', 'phone_borrow')", (os_uid,)
+            ).fetchone()["c"]
+
+            assert cb_after == cb_before, "Opening stock must not create any cash book entries"
+            assert acct_after == acct_before, "Opening stock must not create any account entries"
+            assert bank_tx == 0, "Opening stock must not create any bank transactions"
+            assert links == 0, "Opening stock must not create any purchase ledger_links rows"
+
+    run_test("Opening-stock phones create ZERO cash/bank ledger rows",
+              test_opening_stock_posts_zero_ledger_rows)
+
+    def test_completed_wizard_gap_is_zero():
+        with db.db_session() as conn:
+            u = db.register_user(conn, "wizard_gap_user", "pass1234", "", "Wizard Gap Shop")
+            w_uid = u["user_id"]
+
+            # Legacy users (registered before this wizard existed) never get
+            # a user_settings row written for them - simulate that by
+            # checking the pre-wizard default first, before this "new"
+            # signup gets its explicit "0" below overwritten by real
+            # progress.
+            db.add_opening_stock(conn, w_uid, [
+                {"model": "Wizard Phone A", "type": "PTA", "purchase_price": 50000,
+                 "imei": "500050005000500"},
+                {"model": "Wizard Phone B", "type": "JV", "purchase_price": 30000},
+            ])
+            db.update_user_settings(conn, w_uid, {"cash_in_hand": "20000"})
+            db.create_bank(conn, w_uid, {"name": "Wizard Bank", "initial_balance": 15000})
+            db.create_account(conn, w_uid, {
+                "name": "Old Customer Udhar", "opening_balance": 8000,
+                "opening_balance_type": "credit",
+            })
+            db.create_account(conn, w_uid, {
+                "name": "Old Supplier Payable", "opening_balance": 5000,
+                "opening_balance_type": "debit",
+            })
+
+            status = db.setup_status(conn, w_uid)
+            assert status["setup_completed"] is False
+            suggested = status["suggested_partner_capital"]
+            # actual_liquid (20000 cash + 15000 bank) + stock (80000) +
+            # udhar (8000) - payables (5000) = 118000
+            assert suggested == 118000, f"Expected suggested capital 118000, got {suggested}"
+
+            db.create_partner(conn, w_uid, {"name": "Owner", "capital": suggested})
+            db.complete_setup(conn, w_uid)
+
+            dash = db.compute_dashboard(conn, w_uid)
+            assert abs(dash["liquidity_gap"]) < 0.01, (
+                f"Expected liquidity_gap ~= 0 right after a completed wizard, got {dash['liquidity_gap']}"
+            )
+            final_status = db.setup_status(conn, w_uid)
+            assert final_status["setup_completed"] is True
+
+    run_test("Completed wizard on a fresh user drives liquidity_gap to ~0",
+              test_completed_wizard_gap_is_zero)
+
+    def test_pay_later_purchase_touches_no_cash_or_bank():
+        with db.db_session() as conn:
+            u = db.register_user(conn, "pay_later_user", "pass1234", "", "Pay Later Shop")
+            pl_uid = u["user_id"]
+            supplier = db.create_account(conn, pl_uid, {"name": "Pay Later Supplier"})
+
+            cb_before = conn.execute(
+                "SELECT COUNT(*) c FROM cash_book_entries WHERE user_id=?", (pl_uid,)
+            ).fetchone()["c"]
+
+            phone = db.create_phone(conn, pl_uid, {
+                "model": "Udhar Purchase Phone", "type": "PTA", "purchase_price": 40000,
+                "status": "Bought", "purchase_payment_method": "cash",
+                "payable_amount": 40000,  # full price on udhar - nothing paid now
+                "supplier_account_id": supplier["id"],
+                "imei": "700070007000700",
+            })
+            assert phone["payable_amount"] == 40000
+
+            cb_after = conn.execute(
+                "SELECT COUNT(*) c FROM cash_book_entries WHERE user_id=?", (pl_uid,)
+            ).fetchone()["c"]
+            assert cb_after == cb_before, "A 100% pay-later purchase must not touch cash/bank at all"
+
+            supplier_after = db.get_account(conn, pl_uid, supplier["id"])
+            assert supplier_after["balance"] == -40000, (
+                "The supplier account should show the full payable as owed, "
+                f"got balance {supplier_after['balance']}"
+            )
+
+            # Now record an actual payment against it - only THIS should move cash.
+            db.create_cash_book_entry(conn, pl_uid, {
+                "entry_type": "out", "amount": 40000, "note": "Pay off supplier",
+                "payment_source": "cash", "account_id": supplier["id"], "force": True,
+            })
+            cb_final = conn.execute(
+                "SELECT COUNT(*) c FROM cash_book_entries WHERE user_id=?", (pl_uid,)
+            ).fetchone()["c"]
+            assert cb_final == cb_before + 1
+
+    run_test("Pay-later purchase leaves cash/bank untouched until a payment is recorded",
+              test_pay_later_purchase_touches_no_cash_or_bank)
+
+    def test_selling_opening_stock_posts_sale_ledger_only():
+        with db.db_session() as conn:
+            u = db.register_user(conn, "sell_opening_user", "pass1234", "", "Sell Opening Shop")
+            so_uid = u["user_id"]
+
+            created = db.add_opening_stock(conn, so_uid, [
+                {"model": "Opening Stock To Sell", "type": "PTA", "purchase_price": 55000},
+            ])
+            phone_id = created[0]["id"]
+
+            # IMEI is required before Sold (see _validate_phone_payments) -
+            # confirm the rule fires for opening stock same as any phone.
+            try:
+                db.update_phone(conn, so_uid, phone_id, {
+                    "status": "Sold", "sale_price": 70000, "sale_payment_method": "cash",
+                })
+                raise AssertionError("Expected marking Sold with no IMEI to be rejected")
+            except ValueError as e:
+                assert "IMEI" in str(e)
+
+            sold = db.update_phone(conn, so_uid, phone_id, {
+                "status": "Sold", "sale_price": 70000, "sale_payment_method": "cash",
+                "imei": "800080008000800",
+            })
+            assert sold["status"] == "Sold"
+            assert sold["net_profit"] == 15000, (
+                f"Expected profit 70000 - 55000 = 15000, got {sold['net_profit']}"
+            )
+            # Purchase side must still be untouched - opening stock never
+            # gets a purchase ledger entry, selling it doesn't retroactively
+            # create one either.
+            assert sold["purchase_cash_book_entry_id"] is None
+            assert sold["purchase_account_entry_id"] is None
+            purchase_links = conn.execute(
+                "SELECT COUNT(*) c FROM ledger_links WHERE user_id=? AND source_id=? "
+                "AND source_type IN ('phone_purchase', 'phone_payable', 'phone_borrow')",
+                (so_uid, phone_id),
+            ).fetchone()["c"]
+            assert purchase_links == 0
+
+            sale_links = conn.execute(
+                "SELECT COUNT(*) c FROM ledger_links WHERE user_id=? AND source_id=? "
+                "AND source_type IN ('phone_sale', 'phone_receivable')",
+                (so_uid, phone_id),
+            ).fetchone()["c"]
+            assert sale_links == 1, "Selling should post exactly one sale-side ledger link"
+
+    run_test("Selling an opening-stock phone posts the sale ledger only, profit computes normally",
+              test_selling_opening_stock_posts_sale_ledger_only)
+
+    def test_legacy_users_never_forced_into_wizard():
+        with db.db_session() as conn:
+            u = db.register_user(conn, "legacy_grandfather_user", "pass1234", "", "Legacy Shop")
+            lg_uid = u["user_id"]
+            # register_user() always writes an explicit "0" for brand-new
+            # signups (so THEY see the wizard) - delete that row to simulate
+            # a real pre-wizard customer, who never had this key written at
+            # all, ever.
+            conn.execute(
+                "DELETE FROM user_settings WHERE user_id=? AND key='setup_completed'",
+                (lg_uid,),
+            )
+            status = db.setup_status(conn, lg_uid)
+            assert status["setup_completed"] is True, (
+                "A user with no setup_completed row must default to already-done, "
+                "never be forced into the wizard"
+            )
+
+    run_test("Existing users with no setup_completed row are grandfathered past the wizard",
+              test_legacy_users_never_forced_into_wizard)
 
     # --- Stress load ---
     STRESS_PHONES = 200

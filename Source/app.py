@@ -538,6 +538,11 @@ def overview_page():
     return render_template("overview.html")
 
 
+@app.route("/setup")
+def setup_page():
+    return render_template("setup.html")
+
+
 @app.route("/cashbook")
 def cashbook_page():
     return render_template("cashbook.html")
@@ -1130,6 +1135,45 @@ def dashboard():
             "monthly": db.compute_monthly_metrics(conn, user_id),
             "phones": db.list_phones(conn, user_id),
         })
+
+
+# --- Opening Setup Wizard ---
+# Lets a new customer with an existing business seed their old books
+# (already-owned phones, real cash/bank balances, existing receivables and
+# payables) before Actual Liquid vs Expected Liquid means anything. Steps
+# B (cash), C (banks) and D (khata openings) reuse the existing /api/settings,
+# /api/banks and /api/accounts endpoints directly from the wizard's own
+# frontend - see database.py's setup_status/add_opening_stock docstrings for
+# why only Step A (opening stock) and completion need dedicated routes here.
+
+@app.route("/api/setup/status")
+def setup_status_api():
+    user_id = _current_user_id()
+    with db.db_session() as conn:
+        return jsonify(db.setup_status(conn, user_id))
+
+
+@app.route("/api/setup/opening-stock", methods=["POST"])
+def setup_opening_stock_api():
+    user_id = _current_user_id()
+    data = request.get_json(force=True)
+    rows = data.get("phones") or []
+    if not rows:
+        return jsonify({"error": "Add at least one phone"}), 400
+    try:
+        with db.db_session() as conn:
+            created = db.add_opening_stock(conn, user_id, rows)
+        return jsonify({"ok": True, "created": created}), 201
+    except ValueError as exc:
+        return jsonify({"error": str(exc)}), 400
+
+
+@app.route("/api/setup/complete", methods=["POST"])
+def setup_complete_api():
+    user_id = _current_user_id()
+    with db.db_session() as conn:
+        db.complete_setup(conn, user_id)
+        return jsonify(db.setup_status(conn, user_id))
 
 
 @app.route("/api/settings", methods=["PUT"])

@@ -1,0 +1,495 @@
+{% extends "base.html" %}
+{% set active = 'setup' %}
+{% block title %}Opening Setup — Welcome, {{ current_username }}{% endblock %}
+
+{% block content %}
+<div class="mb-6 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
+  <div>
+    <h1 class="text-2xl font-bold tracking-tight">Get Your Books Ready</h1>
+    <p class="text-slate-400 text-sm mt-1">Seed your existing business into the CRM so Overview's numbers start accurate — you can skip this and finish it later from the reminder banner.</p>
+  </div>
+  <a href="/overview" class="btn btn-ghost btn-sm no-print shrink-0">Skip for now</a>
+</div>
+
+<!-- Step indicator -->
+<div id="setup-steps-indicator" class="flex items-center gap-2 mb-6 overflow-x-auto pb-1 no-print"></div>
+
+<!-- STEP A — Opening Stock -->
+<section data-step="1" class="panel-card stagger">
+  <h2 class="panel-title">Step 1 — Phones You Already Own</h2>
+  <p class="panel-sub">Add existing inventory as opening stock. These are NOT posted as new purchases — the money for these was already spent before you started using this CRM, so no cash/bank moves. IMEI is optional here; you can add it later, but it's required before a phone can be marked Sold.</p>
+
+  <div id="opening-stock-rows" class="space-y-3 mb-3"></div>
+  <button type="button" id="btn-add-stock-row" class="btn btn-ghost btn-sm mb-4">+ Add Phone</button>
+
+  <div class="flex items-center justify-between border-t border-white/8 pt-4">
+    <p class="text-sm text-slate-400">Opening stock worth: <span id="opening-stock-total" class="font-semibold text-blue-400">Rs 0</span></p>
+    <div class="flex gap-2">
+      <button type="button" class="btn btn-ghost btn-sm" data-skip-step="1">Skip this step</button>
+      <button type="button" class="btn btn-primary btn-sm" data-next-step="1">Save &amp; Continue</button>
+    </div>
+  </div>
+</section>
+
+<!-- STEP B — Cash in Hand -->
+<section data-step="2" class="panel-card stagger hidden">
+  <h2 class="panel-title">Step 2 — Cash in Hand</h2>
+  <p class="panel-sub">How much cash is physically in the drawer right now? This becomes your starting Cash in Hand balance.</p>
+  <div class="max-w-xs">
+    <label class="block text-xs font-medium text-slate-400 mb-1.5">Cash in Hand (Rs)</label>
+    <input type="number" id="setup-cash-in-hand" min="0" step="1" value="0" class="input-field">
+  </div>
+  <div class="flex items-center justify-end gap-2 border-t border-white/8 pt-4 mt-4">
+    <button type="button" class="btn btn-ghost btn-sm" data-back-step="2">Back</button>
+    <button type="button" class="btn btn-primary btn-sm" data-next-step="2">Save &amp; Continue</button>
+  </div>
+</section>
+
+<!-- STEP C — Banks -->
+<section data-step="3" class="panel-card stagger hidden">
+  <h2 class="panel-title">Step 3 — Bank Accounts</h2>
+  <p class="panel-sub">Add your real bank accounts with their current actual balance right now.</p>
+
+  <div id="setup-bank-rows" class="space-y-3 mb-3"></div>
+  <button type="button" id="btn-add-bank-row" class="btn btn-ghost btn-sm mb-4">+ Add Bank</button>
+
+  <div class="flex items-center justify-between border-t border-white/8 pt-4">
+    <p class="text-sm text-slate-400">No banks? That's fine — skip if the shop only deals in cash.</p>
+    <div class="flex gap-2">
+      <button type="button" class="btn btn-ghost btn-sm" data-back-step="3">Back</button>
+      <button type="button" class="btn btn-ghost btn-sm" data-skip-step="3">Skip this step</button>
+      <button type="button" class="btn btn-primary btn-sm" data-next-step="3">Save &amp; Continue</button>
+    </div>
+  </div>
+</section>
+
+<!-- STEP D — Khata Openings -->
+<section data-step="4" class="panel-card stagger hidden">
+  <h2 class="panel-title">Step 4 — Existing Receivables &amp; Payables (Khata)</h2>
+  <p class="panel-sub">Anyone who already owed you money, or you already owed, before this CRM — enter their opening balance here.</p>
+
+  <div id="setup-khata-rows" class="space-y-3 mb-3"></div>
+  <button type="button" id="btn-add-khata-row" class="btn btn-ghost btn-sm mb-4">+ Add Person / Account</button>
+
+  <div class="flex items-center justify-between border-t border-white/8 pt-4">
+    <p class="text-sm text-slate-400">No existing udhar? Skip this step.</p>
+    <div class="flex gap-2">
+      <button type="button" class="btn btn-ghost btn-sm" data-back-step="4">Back</button>
+      <button type="button" class="btn btn-ghost btn-sm" data-skip-step="4">Skip this step</button>
+      <button type="button" class="btn btn-primary btn-sm" data-next-step="4">Save &amp; Continue</button>
+    </div>
+  </div>
+</section>
+
+<!-- STEP E — Partner Capital -->
+<section data-step="5" class="panel-card stagger hidden">
+  <h2 class="panel-title">Step 5 — Partner Capital</h2>
+  <p class="panel-sub">Steps 1–4 already established where the money is (cash, bank, stock, udhar). This step just records who owns it — it does NOT move any more money.</p>
+
+  <div class="kpi-card mb-4">
+    <p class="kpi-label">Suggested Total Capital</p>
+    <p id="setup-suggested-capital" class="kpi-value" style="font-size:2rem">—</p>
+    <p class="panel-sub mb-0 mt-2">Cash + Bank + Stock worth + Receivables − Payables, from what you just entered.</p>
+  </div>
+
+  <div id="setup-partner-rows" class="space-y-3 mb-3"></div>
+  <button type="button" id="btn-add-partner-row" class="btn btn-ghost btn-sm mb-4">+ Add Partner</button>
+
+  <div id="setup-partner-balance-note" class="insight-item amber mb-4"></div>
+
+  <div class="flex items-center justify-end gap-2 border-t border-white/8 pt-4">
+    <button type="button" class="btn btn-ghost btn-sm" data-back-step="5">Back</button>
+    <button type="button" class="btn btn-primary" id="btn-finish-setup">Finish Setup</button>
+  </div>
+</section>
+{% endblock %}
+
+{% block scripts %}
+<script>
+  const SETUP_TOTAL_STEPS = 5;
+  const SETUP_STEP_LABELS = ['Opening Stock', 'Cash', 'Banks', 'Khata', 'Partners'];
+  let setupCurrentStep = 1;
+  let stockRows = [];
+  let bankRows = [];
+  let khataRows = [];
+  let partnerRows = [];
+  let suggestedCapital = 0;
+
+  function renderStepIndicator() {
+    const el = document.getElementById('setup-steps-indicator');
+    el.innerHTML = SETUP_STEP_LABELS.map((label, i) => {
+      const step = i + 1;
+      const state = step === setupCurrentStep ? 'active' : (step < setupCurrentStep ? 'done' : '');
+      const bg = state === 'active' ? 'background:var(--accent, #2563eb); color:#fff;'
+        : state === 'done' ? 'background:rgba(16,185,129,0.18); color:#059669;'
+        : 'background:var(--glass); color:var(--muted);';
+      return `<div class="flex items-center gap-2 shrink-0 px-3 py-1.5 rounded-full text-xs font-semibold" style="${bg} border:1px solid var(--glass-border);">
+        <span>${step}</span><span>${esc(label)}</span>
+      </div>`;
+    }).join('<div class="w-4 h-px bg-white/10 shrink-0"></div>');
+  }
+
+  function goToStep(step) {
+    setupCurrentStep = Math.min(Math.max(step, 1), SETUP_TOTAL_STEPS);
+    document.querySelectorAll('[data-step]').forEach((el) => {
+      el.classList.toggle('hidden', Number(el.dataset.step) !== setupCurrentStep);
+    });
+    renderStepIndicator();
+    if (setupCurrentStep === 5) refreshSuggestedCapital();
+    window.scrollTo({ top: 0, behavior: 'smooth' });
+  }
+
+  // --- Step 1: Opening Stock ---
+  function renderStockRows() {
+    const conditionOptions = CONDITION_OPTIONS.map(c => `<option value="${c}">${c}</option>`).join('');
+    document.getElementById('opening-stock-rows').innerHTML = stockRows.map((row, i) => `
+      <div class="p-3 rounded-lg border border-white/8 bg-slate-900/20">
+        <div class="grid grid-cols-1 sm:grid-cols-5 gap-2 items-end">
+          <div class="sm:col-span-2">
+            <label class="block text-xs text-slate-500 mb-1">Model</label>
+            <input type="text" class="input-field stock-model" data-index="${i}" placeholder="e.g. iPhone 13 Pro 128GB" value="${esc(row.model)}">
+          </div>
+          <div>
+            <label class="block text-xs text-slate-500 mb-1">Condition</label>
+            <select class="input-field stock-condition" data-index="${i}">
+              <option value="">Select</option>
+              ${conditionOptions}
+            </select>
+          </div>
+          <div>
+            <label class="block text-xs text-slate-500 mb-1">Type</label>
+            <select class="input-field stock-type" data-index="${i}">
+              <option value="PTA">PTA</option>
+              <option value="NON-PTA">NON-PTA</option>
+              <option value="JV">JV</option>
+            </select>
+          </div>
+          <div>
+            <label class="block text-xs text-slate-500 mb-1">Purchase Price</label>
+            <input type="number" min="0" step="1" class="input-field stock-price" data-index="${i}" value="${row.purchase_price || ''}" placeholder="0">
+          </div>
+        </div>
+        <div class="grid grid-cols-1 sm:grid-cols-5 gap-2 items-end mt-2">
+          <div class="sm:col-span-2">
+            <label class="block text-xs text-slate-500 mb-1">IMEI (optional)</label>
+            <input type="text" class="input-field stock-imei" data-index="${i}" placeholder="Leave blank if unknown" value="${esc(row.imei || '')}">
+          </div>
+          <div class="sm:col-span-3 flex justify-end">
+            <button type="button" class="btn btn-ghost btn-sm text-red-400 stock-remove" data-index="${i}">Remove</button>
+          </div>
+        </div>
+      </div>`).join('');
+    document.querySelectorAll('.stock-model, .stock-condition, .stock-type, .stock-price, .stock-imei').forEach((input) => {
+      input.addEventListener('input', () => {
+        const i = Number(input.dataset.index);
+        const field = input.className.match(/stock-(\w+)/)[1];
+        const key = field === 'price' ? 'purchase_price' : field;
+        stockRows[i][key] = input.value;
+        if (field === 'price') updateStockTotal();
+      });
+    });
+    document.querySelectorAll('.stock-remove').forEach((btn) => {
+      btn.addEventListener('click', () => {
+        stockRows.splice(Number(btn.dataset.index), 1);
+        renderStockRows();
+        updateStockTotal();
+      });
+    });
+    updateStockTotal();
+  }
+
+  function updateStockTotal() {
+    const total = stockRows.reduce((sum, r) => sum + (Number(r.purchase_price) || 0), 0);
+    document.getElementById('opening-stock-total').textContent = fmt(total);
+  }
+
+  function addStockRow() {
+    stockRows.push({ model: '', condition: '', type: 'PTA', purchase_price: '', imei: '' });
+    renderStockRows();
+  }
+
+  async function submitStockStep() {
+    const rows = stockRows.filter(r => (r.model || '').trim());
+    if (!rows.length) return true;
+    for (const r of rows) {
+      if (!Number(r.purchase_price) && r.purchase_price !== 0) {
+        toast(`Enter a purchase price for ${r.model || 'a phone'}`, 'error');
+        return false;
+      }
+    }
+    try {
+      await apiFetch('/api/setup/opening-stock', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ phones: rows.map(r => ({
+          model: r.model, condition: r.condition, type: r.type,
+          purchase_price: Number(r.purchase_price) || 0, imei: r.imei,
+        })) }),
+      });
+      stockRows = [];
+      renderStockRows();
+      return true;
+    } catch (err) {
+      toast(err.message, 'error');
+      return false;
+    }
+  }
+
+  // --- Step 2: Cash in Hand ---
+  async function submitCashStep() {
+    const value = Number(document.getElementById('setup-cash-in-hand').value) || 0;
+    try {
+      await apiFetch('/api/settings', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ cash_in_hand: String(value) }),
+      });
+      return true;
+    } catch (err) {
+      toast(err.message, 'error');
+      return false;
+    }
+  }
+
+  // --- Step 3: Banks ---
+  function renderBankRows() {
+    document.getElementById('setup-bank-rows').innerHTML = bankRows.map((row, i) => `
+      <div class="grid grid-cols-1 sm:grid-cols-5 gap-2 items-end p-3 rounded-lg border border-white/8 bg-slate-900/20">
+        <div class="sm:col-span-2">
+          <label class="block text-xs text-slate-500 mb-1">Bank Name</label>
+          <input type="text" class="input-field bank-name" data-index="${i}" placeholder="e.g. HBL, Meezan" value="${esc(row.name)}">
+        </div>
+        <div class="sm:col-span-2">
+          <label class="block text-xs text-slate-500 mb-1">Current Balance</label>
+          <input type="number" min="0" step="1" class="input-field bank-balance" data-index="${i}" value="${row.initial_balance || ''}" placeholder="0">
+        </div>
+        <div class="flex justify-end">
+          <button type="button" class="btn btn-ghost btn-sm text-red-400 bank-remove" data-index="${i}">Remove</button>
+        </div>
+      </div>`).join('');
+    document.querySelectorAll('.bank-name, .bank-balance').forEach((input) => {
+      input.addEventListener('input', () => {
+        const i = Number(input.dataset.index);
+        const key = input.className.includes('bank-name') ? 'name' : 'initial_balance';
+        bankRows[i][key] = input.value;
+      });
+    });
+    document.querySelectorAll('.bank-remove').forEach((btn) => {
+      btn.addEventListener('click', () => { bankRows.splice(Number(btn.dataset.index), 1); renderBankRows(); });
+    });
+  }
+
+  function addBankRow() {
+    bankRows.push({ name: '', initial_balance: '' });
+    renderBankRows();
+  }
+
+  async function submitBankStep() {
+    const rows = bankRows.filter(r => (r.name || '').trim());
+    for (const r of rows) {
+      try {
+        await apiFetch('/api/banks', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ name: r.name, initial_balance: Number(r.initial_balance) || 0 }),
+        });
+      } catch (err) {
+        toast(err.message, 'error');
+        return false;
+      }
+    }
+    bankRows = [];
+    renderBankRows();
+    return true;
+  }
+
+  // --- Step 4: Khata Openings ---
+  function renderKhataRows() {
+    document.getElementById('setup-khata-rows').innerHTML = khataRows.map((row, i) => `
+      <div class="grid grid-cols-1 sm:grid-cols-6 gap-2 items-end p-3 rounded-lg border border-white/8 bg-slate-900/20">
+        <div class="sm:col-span-2">
+          <label class="block text-xs text-slate-500 mb-1">Name</label>
+          <input type="text" class="input-field khata-name" data-index="${i}" placeholder="Customer / Supplier name" value="${esc(row.name)}">
+        </div>
+        <div class="sm:col-span-2">
+          <label class="block text-xs text-slate-500 mb-1">Opening Balance</label>
+          <input type="number" min="0" step="1" class="input-field khata-amount" data-index="${i}" value="${row.opening_balance || ''}" placeholder="0">
+        </div>
+        <div>
+          <label class="block text-xs text-slate-500 mb-1">Direction</label>
+          <select class="input-field khata-type" data-index="${i}">
+            <option value="credit">They owe me</option>
+            <option value="debit">I owe them</option>
+          </select>
+        </div>
+        <div class="flex justify-end">
+          <button type="button" class="btn btn-ghost btn-sm text-red-400 khata-remove" data-index="${i}">Remove</button>
+        </div>
+      </div>`).join('');
+    document.querySelectorAll('.khata-name, .khata-amount, .khata-type').forEach((input) => {
+      input.addEventListener('input', () => {
+        const i = Number(input.dataset.index);
+        const key = input.className.includes('khata-name') ? 'name'
+          : input.className.includes('khata-amount') ? 'opening_balance' : 'opening_balance_type';
+        khataRows[i][key] = input.value;
+      });
+      input.addEventListener('change', () => {
+        const i = Number(input.dataset.index);
+        if (input.className.includes('khata-type')) khataRows[i].opening_balance_type = input.value;
+      });
+    });
+    document.querySelectorAll('.khata-remove').forEach((btn) => {
+      btn.addEventListener('click', () => { khataRows.splice(Number(btn.dataset.index), 1); renderKhataRows(); });
+    });
+  }
+
+  function addKhataRow() {
+    khataRows.push({ name: '', opening_balance: '', opening_balance_type: 'credit' });
+    renderKhataRows();
+  }
+
+  async function submitKhataStep() {
+    const rows = khataRows.filter(r => (r.name || '').trim());
+    for (const r of rows) {
+      try {
+        await apiFetch('/api/accounts', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            name: r.name,
+            opening_balance: Number(r.opening_balance) || 0,
+            opening_balance_type: r.opening_balance_type || 'credit',
+          }),
+        });
+      } catch (err) {
+        toast(err.message, 'error');
+        return false;
+      }
+    }
+    khataRows = [];
+    renderKhataRows();
+    return true;
+  }
+
+  // --- Step 5: Partner Capital ---
+  async function refreshSuggestedCapital() {
+    try {
+      const status = await apiFetch('/api/setup/status');
+      suggestedCapital = status.suggested_partner_capital || 0;
+      document.getElementById('setup-suggested-capital').textContent = fmt(suggestedCapital);
+      if (!partnerRows.length) {
+        partnerRows.push({ name: 'Owner', capital: suggestedCapital });
+        renderPartnerRows();
+      } else {
+        updatePartnerBalanceNote();
+      }
+    } catch (_) {}
+  }
+
+  function renderPartnerRows() {
+    document.getElementById('setup-partner-rows').innerHTML = partnerRows.map((row, i) => `
+      <div class="grid grid-cols-1 sm:grid-cols-5 gap-2 items-end p-3 rounded-lg border border-white/8 bg-slate-900/20">
+        <div class="sm:col-span-3">
+          <label class="block text-xs text-slate-500 mb-1">Partner Name</label>
+          <input type="text" class="input-field partner-name" data-index="${i}" placeholder="e.g. Owner, Partner name" value="${esc(row.name)}">
+        </div>
+        <div class="sm:col-span-1">
+          <label class="block text-xs text-slate-500 mb-1">Capital</label>
+          <input type="number" min="0" step="1" class="input-field partner-capital" data-index="${i}" value="${row.capital || ''}" placeholder="0">
+        </div>
+        <div class="flex justify-end">
+          <button type="button" class="btn btn-ghost btn-sm text-red-400 partner-remove" data-index="${i}">Remove</button>
+        </div>
+      </div>`).join('');
+    document.querySelectorAll('.partner-name, .partner-capital').forEach((input) => {
+      input.addEventListener('input', () => {
+        const i = Number(input.dataset.index);
+        const key = input.className.includes('partner-name') ? 'name' : 'capital';
+        partnerRows[i][key] = input.value;
+        updatePartnerBalanceNote();
+      });
+    });
+    document.querySelectorAll('.partner-remove').forEach((btn) => {
+      btn.addEventListener('click', () => {
+        partnerRows.splice(Number(btn.dataset.index), 1);
+        renderPartnerRows();
+      });
+    });
+    updatePartnerBalanceNote();
+  }
+
+  function updatePartnerBalanceNote() {
+    const total = partnerRows.reduce((sum, r) => sum + (Number(r.capital) || 0), 0);
+    const note = document.getElementById('setup-partner-balance-note');
+    const remaining = round2(suggestedCapital - total);
+    if (Math.abs(remaining) < 1) {
+      note.className = 'insight-item emerald mb-4';
+      note.textContent = `Fully allocated — ${fmt(total)} split across ${partnerRows.length} partner(s).`;
+    } else {
+      note.className = 'insight-item amber mb-4';
+      note.textContent = remaining > 0
+        ? `${fmt(remaining)} of the suggested capital is not yet assigned to a partner.`
+        : `Partners' capital adds up to ${fmt(Math.abs(remaining))} more than the suggested total — that's fine if intentional, but double-check it.`;
+    }
+  }
+
+  function round2(n) { return Math.round((n + Number.EPSILON) * 100) / 100; }
+
+  function addPartnerRow() {
+    partnerRows.push({ name: '', capital: '' });
+    renderPartnerRows();
+  }
+
+  async function finishSetup() {
+    const rows = partnerRows.filter(r => (r.name || '').trim());
+    if (!rows.length) {
+      toast('Add at least one partner before finishing', 'error');
+      return;
+    }
+    try {
+      for (const r of rows) {
+        await apiFetch('/api/partners', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ name: r.name, capital: Number(r.capital) || 0 }),
+        });
+      }
+      await apiFetch('/api/setup/complete', { method: 'POST' });
+      toast('Setup complete — welcome aboard!', 'success');
+      setTimeout(() => { window.location.href = '/overview'; }, 600);
+    } catch (err) {
+      toast(err.message, 'error');
+    }
+  }
+
+  document.addEventListener('DOMContentLoaded', () => {
+    renderStepIndicator();
+    addStockRow();
+    document.getElementById('btn-add-stock-row').addEventListener('click', addStockRow);
+    document.getElementById('btn-add-bank-row').addEventListener('click', addBankRow);
+    document.getElementById('btn-add-khata-row').addEventListener('click', addKhataRow);
+    document.getElementById('btn-add-partner-row').addEventListener('click', addPartnerRow);
+    document.getElementById('btn-finish-setup').addEventListener('click', finishSetup);
+
+    document.querySelectorAll('[data-next-step]').forEach((btn) => {
+      btn.addEventListener('click', async () => {
+        const step = Number(btn.dataset.nextStep);
+        btn.disabled = true;
+        let ok = true;
+        if (step === 1) ok = await submitStockStep();
+        else if (step === 2) ok = await submitCashStep();
+        else if (step === 3) ok = await submitBankStep();
+        else if (step === 4) ok = await submitKhataStep();
+        btn.disabled = false;
+        if (ok) goToStep(step + 1);
+      });
+    });
+    document.querySelectorAll('[data-skip-step]').forEach((btn) => {
+      btn.addEventListener('click', () => goToStep(Number(btn.dataset.skipStep) + 1));
+    });
+    document.querySelectorAll('[data-back-step]').forEach((btn) => {
+      btn.addEventListener('click', () => goToStep(Number(btn.dataset.backStep) - 1));
+    });
+  });
+</script>
+{% endblock %}

@@ -932,6 +932,10 @@ async function initApp() {
   if (auth?.show_welcome) {
     showWelcomeModal(auth.session_username || auth.username, auth.shop_name);
   }
+  const setupBanner = document.getElementById('setup-reminder-banner');
+  if (setupBanner && auth && auth.setup_completed === false && window.location.pathname !== '/setup') {
+    setupBanner.classList.remove('hidden');
+  }
 }
 
 async function exportBackup() {

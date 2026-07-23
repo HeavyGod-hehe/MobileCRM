@@ -119,6 +119,13 @@ DEFAULT_SETTINGS = {
     "gmail_smtp_user": "",
     "gmail_smtp_app_password": "",
     "invoice_counter": "1000",
+    # Money-model opening setup wizard (see setup_status/complete_setup below).
+    # Defaults to "1" (already done) so every EXISTING user, who has no
+    # explicit row for this key, is automatically grandfathered past the
+    # wizard - it's only ever forced to "0" for a brand-new signup, in
+    # register_user(). Never backfilled/migrated for old users; the default
+    # itself is what grandfathers them.
+    "setup_completed": "1",
 }
 
 USER_SCOPED_TABLES = (
@@ -1672,6 +1679,7 @@ def update_user_settings(conn, user_id, data):
         "shop_whatsapp", "vendor_whatsapp", "vendor_support_note",
         "gmail_smtp_user", "gmail_smtp_app_password", "invoice_counter",
         "purchase_invoice_counter", "profit_reinvested_total",
+        "setup_completed",
     }
     # Bug #14: this used to silently `continue` past any key not in
     # `allowed` -- which is exactly how purchase_invoice_counter's own save
@@ -1730,11 +1738,13 @@ def get_auth_config(conn, user_id=None):
         user = get_user(conn, user_id)
         if not user:
             return {"configured": auth_is_configured(conn)}
+        settings = get_user_settings(conn, user_id)
         return {
             "configured": True,
             "username": user["username"],
             "shop_name": user["shop_name"],
             "theme": user["theme"],
+            "setup_completed": settings.get("setup_completed", "1") == "1",
             **get_shop_info(conn, user_id),
         }
     return {"configured": auth_is_configured(conn)}
@@ -1800,6 +1810,13 @@ def register_user(conn, username, password, email="", shop_name=""):
         _seed_user_partners(conn, user_id)
     seed_expense_accounts(conn, user_id)
     ensure_user_backup_path(conn, user_id)
+    # Every brand-new signup starts the opening setup wizard - explicitly
+    # override the "1" (already done) default DEFAULT_SETTINGS gives every
+    # user with no row, so only genuinely new accounts see it.
+    conn.execute(
+        "INSERT INTO user_settings (user_id, key, value) VALUES (?, 'setup_completed', '0')",
+        (user_id,),
+    )
     user = get_user(conn, user_id)
     return {
         "user_id": user["id"],
@@ -2617,7 +2634,7 @@ def _validate_phone_payments(conn, user_id, data, status):
         raise ValueError("Receivable amount cannot be negative")
     if status in ("Bought", "In Repair"):
         acquisition = (data.get("acquisition_type") or "purchase").strip().lower()
-        if acquisition == "borrow":
+        if acquisition in ("borrow", "opening"):
             return
         method = data.get("purchase_payment_method") or "cash"
         if method not in ("cash", "bank"):
@@ -2631,6 +2648,14 @@ def _validate_phone_payments(conn, user_id, data, status):
         if payable > purchase_price:
             raise ValueError("Payable amount cannot exceed purchase price")
     if status == "Sold":
+        # Opening stock is allowed to skip IMEI at entry time (the shop owner
+        # is bulk-seeding phones they already own, sometimes without the
+        # IMEI handy) - but once a phone is actually marked Sold, IMEI
+        # becomes load-bearing (find-IMEI lookups, warranty, duplicate-sale
+        # prevention), so it's required from this point on regardless of how
+        # the phone was acquired.
+        if not _normalize_imei(data.get("imei")):
+            raise ValueError("IMEI is required before a phone can be marked Sold")
         method = data.get("sale_payment_method") or "cash"
         if method not in ("cash", "bank"):
             raise ValueError("Sale payment method must be Cash or Bank")
@@ -2687,7 +2712,7 @@ def create_phone(conn, user_id, data):
     else:
         buyer_account_id = None
     acquisition_type = (data.get("acquisition_type") or "purchase").strip().lower()
-    if acquisition_type not in ("purchase", "borrow"):
+    if acquisition_type not in ("purchase", "borrow", "opening"):
         acquisition_type = "purchase"
     cursor = conn.execute(
         """
@@ -2715,10 +2740,19 @@ def create_phone(conn, user_id, data):
     )
     phone_id = cursor.lastrowid
     _save_phone_extras(conn, user_id, phone_id, data)
-    if status in ("Bought", "In Repair"):
-        _post_purchase_ledger(conn, user_id, phone_id, {**data, "supplier_account_id": supplier_account_id})
+    # Opening stock (acquisition_type "opening") is inventory the shop owner
+    # already owned before they started using this CRM - the purchase money
+    # was spent long ago in the real world, not through this app. Posting a
+    # purchase-ledger entry for it now would push cash/bank out for money
+    # that already left the drawer years ago, which is exactly the bug this
+    # money model exists to fix (see the opening setup wizard). So: never
+    # call _post_purchase_ledger for it, no matter the starting status.
+    if acquisition_type != "opening":
+        if status in ("Bought", "In Repair"):
+            _post_purchase_ledger(conn, user_id, phone_id, {**data, "supplier_account_id": supplier_account_id})
+        if status == "Sold":
+            _post_purchase_ledger(conn, user_id, phone_id, {**data, "supplier_account_id": supplier_account_id})
     if status == "Sold":
-        _post_purchase_ledger(conn, user_id, phone_id, {**data, "supplier_account_id": supplier_account_id})
         _post_sale_ledger(conn, user_id, phone_id, {**data, "buyer_account_id": buyer_account_id})
     return get_phone(conn, user_id, phone_id, include_details=True)
 
@@ -2748,6 +2782,37 @@ def create_phones_bulk(conn, user_id, data):
         if quantity > 1 and i > 0:
             phone_data["expenses"] = []
             phone_data["investments"] = []
+        created.append(create_phone(conn, user_id, phone_data))
+    return created
+
+
+def add_opening_stock(conn, user_id, rows):
+    """Opening Setup Wizard, Step A: bulk-seed phones the shop already owned
+    before adopting this CRM. Always created as status='Bought' with
+    acquisition_type='opening', which create_phone() then uses to skip
+    posting any purchase-ledger entry - see the comment in create_phone for
+    why that matters. IMEI is optional here (see _validate_phone_payments -
+    it's only required once a phone is actually marked Sold)."""
+    if not conn.in_transaction:
+        conn.execute("BEGIN IMMEDIATE")
+    created = []
+    for row in rows:
+        model = (row.get("model") or "").strip()
+        if not model:
+            raise ValueError("Every opening-stock row needs a model name")
+        purchase_price = float(row.get("purchase_price") or 0)
+        if purchase_price < 0:
+            raise ValueError(f"{model}: purchase price cannot be negative")
+        phone_data = {
+            "model": model,
+            "condition": row.get("condition") or "",
+            "type": row.get("type") or "PTA",
+            "purchase_price": purchase_price,
+            "imei": row.get("imei") or "",
+            "imei2": row.get("imei2") or "",
+            "status": "Bought",
+            "acquisition_type": "opening",
+        }
         created.append(create_phone(conn, user_id, phone_data))
     return created
 
@@ -2875,7 +2940,17 @@ def update_phone(conn, user_id, phone_id, data):
     # changes, instead of only when status stays within INVENTORY_STATUSES.
     # "Returned to Supplier" phones are settled by process_purchase_return,
     # not this generic edit path, so leave those alone.
-    if "Returned to Supplier" not in (existing["status"], new_status):
+    # Opening-stock phones never had a purchase entry posted in the first
+    # place (see create_phone) - as long as the edit isn't explicitly
+    # reclassifying the phone away from "opening" (an intentional "actually
+    # treat this as a real purchase" decision), skip this reconciliation
+    # entirely so an unrelated field edit (e.g. fixing a typo'd purchase
+    # price) can't accidentally start posting historical money now.
+    still_opening = (
+        existing["acquisition_type"] == "opening"
+        and data.get("acquisition_type", "opening") == "opening"
+    )
+    if "Returned to Supplier" not in (existing["status"], new_status) and not still_opening:
         if any(_field_changed(existing[f], data.get(f, existing[f]), f) for f in PURCHASE_LEDGER_FIELDS if f in data):
             refreshed = conn.execute(
                 "SELECT * FROM phones WHERE id = ? AND user_id = ?",
@@ -4176,6 +4251,56 @@ def compute_dashboard(conn, user_id):
         "active_receivables": active_receivables,
         "theme": settings.get("theme", "default-dark"),
     }
+
+
+# --- Opening Setup Wizard (money model) ---
+# Lets a new customer with an existing business seed their old books
+# (already-owned phones, real cash/bank balances, existing receivables and
+# payables) before Actual Liquid vs Expected Liquid is meaningful. See
+# add_opening_stock() for phones, create_bank/create_account for banks and
+# khata openings (both already support this - nothing new needed there),
+# and create_partner for capital (deliberately NOT add_side_investment -
+# Steps A-D already established the money, so Step E must not also post a
+# cash/bank deposit on top of it).
+
+def setup_status(conn, user_id):
+    """Wizard progress plus the Step E partner-capital suggestion. That
+    suggestion is the exact number that makes Gap = Expected Liquid -
+    Actual Liquid land on zero once partners' total capital is set to it:
+    Cash + Bank + Stock worth + Receivables - Payables, computed from
+    whatever Steps A-D have already put on the books. Uses compute_dashboard
+    rather than re-deriving these numbers, so the suggestion can never
+    silently drift out of agreement with what the dashboard itself shows."""
+    settings = get_user_settings(conn, user_id)
+    dash = compute_dashboard(conn, user_id)
+    suggested_partner_capital = round(
+        dash["actual_liquid"] + dash["active_stock_worth"]
+        + dash["total_udhar"] - dash["total_payables"],
+        2,
+    )
+    opening_stock_count = conn.execute(
+        "SELECT COUNT(*) AS c FROM phones WHERE user_id = ? AND acquisition_type = 'opening'",
+        (user_id,),
+    ).fetchone()["c"]
+    return {
+        "setup_completed": settings.get("setup_completed", "1") == "1",
+        "opening_stock_count": opening_stock_count,
+        "cash_in_hand": dash["cash_in_hand"],
+        "banks": list_banks(conn, user_id),
+        "accounts": list_accounts(conn, user_id),
+        "partners": dash["partners"],
+        "total_investment": dash["total_investment"],
+        "suggested_partner_capital": suggested_partner_capital,
+        "actual_liquid": dash["actual_liquid"],
+        "active_stock_worth": dash["active_stock_worth"],
+        "total_udhar": dash["total_udhar"],
+        "total_payables": dash["total_payables"],
+    }
+
+
+def complete_setup(conn, user_id):
+    update_user_settings(conn, user_id, {"setup_completed": "1"})
+    return {"ok": True}
 
 
 def compute_monthly_metrics(conn, user_id):
