@@ -46,11 +46,11 @@ search for "# ---" to jump between them.
 from __future__ import annotations
 
 import json
+import os
 import random
 import re
 import shutil
 import sqlite3
-import os
 import sys
 import tempfile
 import threading
@@ -61,7 +61,8 @@ from pathlib import Path
 
 from werkzeug.security import check_password_hash, generate_password_hash
 
-from app_paths import customer_data_dir, customer_install_dir, executable_dir, path_is_inside_app_bundle
+from app_paths import (customer_data_dir, customer_install_dir, executable_dir,
+                       path_is_inside_app_bundle)
 
 
 def default_backup_dir() -> Path | None:

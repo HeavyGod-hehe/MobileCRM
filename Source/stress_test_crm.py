@@ -2010,8 +2010,9 @@ def main():
     # suite isn't appropriate. This still exercises send_otp_email's own
     # control flow (including its auth-failure -> clear-ValueError conversion).
     def test_forgot_password_otp_flow():
-        import email_service
         import smtplib
+
+        import email_service
 
         class _FakeSMTP:
             sent = []
@@ -2583,6 +2584,7 @@ def main():
         moves Data\\ forward from the backup into the new app_dir before the
         backup is ever removed, on both the success and rollback paths."""
         import subprocess
+
         import update_service
 
         original_popen = subprocess.Popen
