@@ -2,6 +2,8 @@
 Source/venv/
 **/__pycache__/
 *.pyc
+.pytest_cache/
+**/.pytest_cache/
 
 # macOS
 .DS_Store
