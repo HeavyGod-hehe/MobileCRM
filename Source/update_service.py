@@ -349,7 +349,22 @@ def _spawn_windows_updater(new_app_dir: Path, target: dict[str, Any], parent_pid
     exits (the script polls `tasklist` for parent_pid to know when that's
     safe). The script also keeps a backup and rolls back automatically if
     the new folder turns out to be missing its launcher, so a bad download
-    can't leave the customer with no working app at all."""
+    can't leave the customer with no working app at all.
+
+    Data safety (bug found in the phase 3 distribution pass): customer_data_dir()
+    in app_paths.py puts Data\\ INSIDE app_dir (next to the exe), not next to
+    it at the install_dir level — confirmed against a real installed copy.
+    The swap below (`move app_dir -> backup`, `move new_app_dir -> app_dir`)
+    replaces app_dir wholesale, which would carry the customer's real Data\\
+    into the backup and leave the freshly-swapped app_dir with none (a
+    downloaded release zip never contains one) — then the backup, holding
+    the only copy of their database, gets deleted a few lines later on a
+    successful launch. That would have silently destroyed a live customer's
+    database on their very first successful auto-update. Fixed by moving
+    Data\\ forward from the backup into the new app_dir immediately after
+    the swap, before the backup is ever deleted — on the rollback path
+    (broken download), the backup is restored wholesale instead, so Data\\
+    there is never at risk either way."""
     install = target["install_dir"]
     app_dir = target["app_dir"]
     launcher = target["launcher"]
@@ -378,12 +393,20 @@ if exist "{backup}" rmdir /s /q "{backup}"
 if exist "{app_dir}" move /Y "{app_dir}" "{backup}"
 move /Y "{new_app_dir}" "{app_dir}"
 if exist "{app_dir}\\{launcher_name}" (
+  rem Bring the customer's Data\\ folder forward - it only ever lived
+  rem inside the OLD app_dir, now sitting in {{backup}}, and a downloaded
+  rem release zip never contains one of its own. Must happen BEFORE the
+  rem backup is deleted below, or this is the only copy that existed.
+  if exist "{backup}\\Data" (
+    if exist "{app_dir}\\Data" rmdir /s /q "{app_dir}\\Data"
+    move /Y "{backup}\\Data" "{app_dir}\\Data"
+  )
   start "" "{launcher}"
   timeout /t 3 /nobreak >nul
   if exist "{backup}" rmdir /s /q "{backup}"
 ) else (
   rem The move somehow produced a broken install — restore the backup
-  rem so the customer isn't left with nothing.
+  rem (Data\\ included, untouched) so the customer isn't left with nothing.
   if exist "{app_dir}" rmdir /s /q "{app_dir}"
   if exist "{backup}" move /Y "{backup}" "{app_dir}"
   start "" "{launcher}"

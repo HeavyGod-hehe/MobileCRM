@@ -32,18 +32,37 @@ def _log(message: str) -> None:
         handle.write(f"[{stamp}] {message}\n")
 
 
-def _snapshot_database(source_conn: sqlite3.Connection, dest_path: Path) -> None:
+def _snapshot_database(dest_path: Path) -> None:
     """Write a consistent copy of the live database using SQLite's own backup
     API instead of copying the file — a raw file copy taken while the app is
     mid-write can capture a torn, unusable snapshot. sqlite3's backup() takes
-    a proper read lock and is safe to run alongside concurrent writers."""
+    a proper read lock and is safe to run alongside concurrent writers.
+
+    Phase 3 distribution bug: this used to take the caller's own
+    db.db_session() connection as the backup source. That connection can
+    have an open, not-yet-committed transaction on itself at the moment
+    backup() is called (e.g. ensure_user_backup_path's own settings write,
+    for a brand-new user, happens just before this runs in the same
+    session) - confirmed .backup() then hangs indefinitely (a self-deadlock:
+    it needs a consistent read of a connection that's mid-write on itself),
+    holding that connection's write lock forever and freezing every other
+    write to the database until the whole process was killed. Only
+    reproduces in a frozen build: ensure_user_backup_path's write only runs
+    when customer_data_dir() is set, which is None when running from
+    source - so this was invisible in all dev-server testing and only
+    surfaced installing and signing up through the real Setup.exe. Fixed by
+    always opening a brand new, transaction-free connection to the live db
+    file as the backup source, completely decoupled from whatever
+    transaction state any caller's own connection happens to be in."""
     if dest_path.exists():
         dest_path.unlink()
+    source_conn = sqlite3.connect(str(db.DB_PATH))
     backup_conn = sqlite3.connect(str(dest_path))
     try:
         source_conn.backup(backup_conn)
     finally:
         backup_conn.close()
+        source_conn.close()
 
 BACKUP_INTERVAL_SECONDS = int(
     __import__("os").environ.get("CRM_BACKUP_INTERVAL_SECONDS", "3600")
@@ -66,7 +85,7 @@ def backup_user_data(user_id: int, *, force: bool = False) -> str | None:
         stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
         username = db.backup_username_slug(conn, user_id)
         dest = dest_dir / f"{username}_crm_backup_{stamp}.db"
-        _snapshot_database(conn, dest)
+        _snapshot_database(dest)
 
         db.update_user_settings(conn, user_id, {
             "last_backup_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),

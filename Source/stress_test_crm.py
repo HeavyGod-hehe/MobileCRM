@@ -2578,6 +2578,121 @@ def main():
     run_test("Updater resolves real Windows and Mac install paths (no phantom one-level-too-deep path)",
               test_update_target_resolution_windows_and_mac)
 
+    def test_windows_updater_preserves_data_folder():
+        """Phase 3 distribution bug: customer_data_dir() puts Data\\ INSIDE
+        app_dir, but the old swap script replaced app_dir wholesale (move to
+        backup, move new folder into place, delete backup on success) -
+        which would carry a live customer's database into the backup and
+        then delete it. Confirms the generated .bat script now explicitly
+        moves Data\\ forward from the backup into the new app_dir before the
+        backup is ever removed, on both the success and rollback paths."""
+        import subprocess
+        import update_service
+
+        original_popen = subprocess.Popen
+        subprocess.Popen = lambda *a, **k: None  # never actually launch the script
+        try:
+            with tempfile.TemporaryDirectory(prefix="crm_update_swap_") as tmp:
+                root = Path(tmp).resolve()
+                app_dir = root / "Phone Reseller CRM"
+                (app_dir / "_internal").mkdir(parents=True)
+                (app_dir / "Data").mkdir()
+                (app_dir / "Data" / "crm.db").write_text("stub")
+                launcher = app_dir / "Phone Reseller CRM.exe"
+                launcher.write_text("stub")
+                new_app_dir = root / "staging_new"
+                new_app_dir.mkdir()
+
+                target = {
+                    "kind": "windows_onedir",
+                    "install_dir": root,
+                    "app_dir": app_dir,
+                    "launcher": launcher,
+                }
+                os.environ["CRM_DB_PATH"] = os.environ.get("CRM_DB_PATH", str(Path("/tmp/crm_stress_test.db")))
+                script_path = update_service._spawn_windows_updater(new_app_dir, target, os.getpid())
+                content = script_path.read_text(encoding="utf-8")
+
+                assert 'move /Y "' in content and 'backup\\Data" "' in content, (
+                    "Expected the success path to move Data\\ forward from the backup "
+                    "into the new app_dir before the backup is deleted"
+                )
+                # The Data-preservation move must appear BEFORE the backup gets
+                # deleted (rmdir on {backup}), not after — order matters here,
+                # a fix that deletes the only copy first would defeat the point.
+                move_idx = content.index("backup\\Data")
+                # last rmdir of the plain backup folder (the final cleanup line)
+                cleanup_idx = content.rindex('rmdir /s /q "')
+                assert move_idx < cleanup_idx, (
+                    "Data\\ must be moved out of the backup before the backup is deleted"
+                )
+        finally:
+            subprocess.Popen = original_popen
+
+    run_test("Windows updater preserves the customer's Data folder across a self-update swap",
+              test_windows_updater_preserves_data_folder)
+
+    def test_signup_backup_does_not_deadlock_the_database():
+        """Phase 3 distribution bug, found by actually installing and
+        signing up through a real Setup.exe (never reproduced in dev-server
+        testing): ensure_user_backup_path() writes a brand-new user's
+        default backup path on their very first backup - a real write, left
+        UNCOMMITTED on the same db.db_session() connection that then got
+        passed straight into backup_service._snapshot_database() as the
+        .backup() SOURCE. Confirmed .backup() hangs indefinitely when its
+        source connection has an uncommitted transaction on itself (a
+        self-deadlock) - which held that connection's write lock forever
+        and froze every other write to the database until the whole process
+        was killed. Only triggers when default_backup_dir() returns a real
+        path (i.e. a frozen build - customer_data_dir() is None from
+        source), so this never showed up before an actual installed-copy
+        test. Runs the real backup call on a background thread with a
+        bounded join so a regression fails loudly instead of hanging the
+        whole suite."""
+        import tempfile as _tempfile
+        import threading
+
+        import backup_service
+
+        with db.db_session() as conn:
+            u = db.register_user(conn, "backup_deadlock_user", "pass1234", "", "Backup Deadlock Shop")
+            bd_uid = u["user_id"]
+
+        original_default_backup_dir = db.default_backup_dir
+        scratch = Path(_tempfile.mkdtemp(prefix="crm_backup_deadlock_"))
+        db.default_backup_dir = lambda: scratch
+        result: dict = {}
+
+        def _run():
+            try:
+                result["path"] = backup_service.backup_user_data(bd_uid, force=True)
+            except Exception as e:  # noqa: BLE001
+                result["error"] = e
+
+        try:
+            thread = threading.Thread(target=_run, daemon=True)
+            thread.start()
+            thread.join(timeout=10)
+            assert not thread.is_alive(), (
+                "backup_user_data() did not complete within 10s - the self-"
+                "deadlock regression (an uncommitted-transaction connection "
+                "passed as .backup()'s source) is back"
+            )
+            assert "error" not in result, f"backup_user_data raised: {result.get('error')}"
+            assert result.get("path"), "Expected a backup file path"
+
+            # The real symptom to guard against: after backup_user_data()
+            # returns, an unrelated write must succeed immediately, not hang
+            # waiting on a lock the backup should never have held onto.
+            with db.db_session() as conn:
+                conn.execute("BEGIN IMMEDIATE")
+                conn.rollback()
+        finally:
+            db.default_backup_dir = original_default_backup_dir
+
+    run_test("Signup/auto backup does not deadlock the database (self-.backup() regression)",
+              test_signup_backup_does_not_deadlock_the_database)
+
     # --- Money model: opening setup wizard (phase 2) ---
 
     def test_opening_stock_posts_zero_ledger_rows():

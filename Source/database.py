@@ -221,7 +221,16 @@ def _backup_before_schema_migration(conn, from_version: int, to_version: int) ->
     Reads the file path from `conn` itself (PRAGMA database_list) rather
     than the global DB_PATH, so this also works correctly when migrating a
     scratch copy of a restored backup (see restore_database_from_backup),
-    not just the one live app database."""
+    not just the one live app database.
+
+    Opens its OWN fresh connection to that file as the backup source rather
+    than using `conn` directly - by the time this runs, `conn` has just
+    finished a whole chain of CREATE TABLE/ALTER TABLE/_migrate_* calls in
+    the same not-yet-committed transaction (see _init_schema), and calling
+    .backup() with a connection that has uncommitted pending changes on
+    itself was confirmed (see backup_service._snapshot_database's docstring)
+    to hang indefinitely - a self-deadlock that would hold `conn`'s write
+    lock forever and freeze every other write to the database."""
     db_file = conn.execute("PRAGMA database_list").fetchone()["file"]
     if not db_file or not Path(db_file).is_file():
         return None
@@ -230,11 +239,13 @@ def _backup_before_schema_migration(conn, from_version: int, to_version: int) ->
     backup_dir.mkdir(parents=True, exist_ok=True)
     stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     dest = backup_dir / f"crm_pre_v{from_version}_to_v{to_version}_{stamp}.db"
+    source_conn = sqlite3.connect(str(db_file_path))
     backup_conn = sqlite3.connect(str(dest))
     try:
-        conn.backup(backup_conn)
+        source_conn.backup(backup_conn)
     finally:
         backup_conn.close()
+        source_conn.close()
     return dest
 
 
