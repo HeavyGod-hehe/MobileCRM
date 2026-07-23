@@ -840,9 +840,9 @@ async function loadAppVersion() {
 async function loadAppBranding() {
   try {
     const auth = await apiFetch('/api/auth/status');
-    const shopEl = document.getElementById('shop-name-display');
-    if (shopEl && auth.shop_name) {
-      shopEl.textContent = auth.shop_name;
+    const shopEls = document.querySelectorAll('.shop-name-display');
+    if (shopEls.length && auth.shop_name) {
+      shopEls.forEach((el) => { el.textContent = auth.shop_name; });
       try { localStorage.setItem('crm-shop-name', auth.shop_name); } catch (_) {}
     }
     const logoImg = document.getElementById('nav-logo-img');
@@ -1078,7 +1078,7 @@ const CONDITION_OPTIONS = [
 ];
 
 document.addEventListener('DOMContentLoaded', () => {
-  if (document.getElementById('shop-name-display')) {
+  if (document.querySelector('.shop-name-display')) {
     initApp();
   } else {
     applyTheme(localStorage.getItem(THEME_KEY));

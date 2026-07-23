@@ -10,3 +10,4 @@ license.json
 license.json.tmp
 license_build_secret.txt
 VENDOR_LICENSE_SECRET.txt
+secret_key
