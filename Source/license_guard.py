@@ -235,3 +235,41 @@ def is_licensed() -> bool:
         return False
     hw = get_hardware_id()
     return verify_activation_key(hw, saved.get("activation_key", ""))
+
+
+# --- Vendor-assisted password recovery ---
+#
+# Same HMAC-over-hardware-id idea as activation keys above, but deliberately
+# NOT the same signed value: a "PWRESET:" prefix in the signed message means
+# a password-reset code can never double as (or be confused with) a license
+# activation key, even though both are signed with the same secret tuple.
+# The customer reads their Hardware ID off the login page (same one shown
+# on /activate) and sends it to the vendor over WhatsApp/phone; the vendor
+# runs generate_password_reset_code() in the Serial Key Generator tool and
+# reads back a short code; the customer types that code + their username +
+# a new password into the CRM's own forgot-password page, which verifies it
+# entirely locally (no email, no internet, no shared secret ever leaves the
+# vendor's machine) against THIS machine's own hardware_id.
+def _sign_reset_payload(hardware_id: str, username: str, secret: str) -> str:
+    hw = hardware_id.strip().upper()
+    uname = username.strip().lower()
+    sig = hmac.new(secret.encode(), f"PWRESET:{hw}:{uname}".encode(), hashlib.sha256).hexdigest()
+    return sig[:16].upper()
+
+
+def generate_password_reset_code(hardware_id: str, username: str) -> str:
+    """Vendor-side only (called from the Serial Key Generator tool) — signs
+    with the ACTIVE secret, same as new license keys."""
+    return _sign_reset_payload(hardware_id, username, _LICENSE_SECRETS[0])
+
+
+def verify_password_reset_code(hardware_id: str, username: str, code: str) -> bool:
+    """Customer-side — accepts a code signed under the active secret OR any
+    legacy secret, same rotation guarantee as verify_activation_key()."""
+    if not hardware_id or not username or not code:
+        return False
+    submitted = code.strip().upper()
+    return any(
+        hmac.compare_digest(_sign_reset_payload(hardware_id, username, secret), submitted)
+        for secret in _LICENSE_SECRETS
+    )

@@ -2163,6 +2163,90 @@ def main():
     run_test("OTP verification locks out after too many wrong attempts",
               test_otp_rate_limit_locks_out_after_max_attempts)
 
+    # --- Vendor-assisted Hardware-ID password recovery ---
+    def test_hwid_password_reset_end_to_end():
+        import license_guard
+
+        with db.db_session() as conn:
+            db.register_user(conn, "hwid_reset_user", "originalpass1", "", "HWID Reset Shop")
+
+        hw = license_guard.get_hardware_id()
+
+        # A code for the wrong username must be rejected.
+        wrong_user_code = license_guard.generate_password_reset_code(hw, "somebody_else")
+        with db.db_session() as conn:
+            try:
+                db.reset_password_with_hwid_code(conn, "hwid_reset_user", wrong_user_code, "newpassword1")
+                raise AssertionError("Expected a code signed for a different username to be rejected")
+            except ValueError as e:
+                assert "invalid" in str(e).lower()
+        db._otp_rate_limit_clear("hwid:hwid_reset_user")
+
+        # A garbage code must also be rejected, and must not change the password.
+        with db.db_session() as conn:
+            try:
+                db.reset_password_with_hwid_code(conn, "hwid_reset_user", "NOTAREALCODE1234", "newpassword1")
+                raise AssertionError("Expected a garbage code to be rejected")
+            except ValueError:
+                pass
+        db._otp_rate_limit_clear("hwid:hwid_reset_user")
+
+        with db.db_session() as conn:
+            still_original = db.verify_login(conn, "hwid_reset_user", "originalpass1")
+            assert still_original, "Password must be unchanged after rejected reset attempts"
+
+        # The real code (signed for this exact hardware_id + username) works.
+        code = license_guard.generate_password_reset_code(hw, "hwid_reset_user")
+        with db.db_session() as conn:
+            result = db.reset_password_with_hwid_code(conn, "hwid_reset_user", code, "brandnewpass1")
+            assert result["ok"] is True
+
+        with db.db_session() as conn:
+            assert db.verify_login(conn, "hwid_reset_user", "brandnewpass1"), (
+                "Login must succeed with the new password after a valid reset"
+            )
+            assert not db.verify_login(conn, "hwid_reset_user", "originalpass1"), (
+                "Login must no longer succeed with the old password"
+            )
+
+    run_test("Hardware-ID password reset: wrong code/username rejected, valid code changes password",
+              test_hwid_password_reset_end_to_end)
+
+    def test_hwid_password_reset_rate_limit_locks_out():
+        import license_guard
+
+        rl_username = "hwid_ratelimit_user"
+        db._otp_rate_limit_clear(f"hwid:{rl_username}")
+        with db.db_session() as conn:
+            db.register_user(conn, rl_username, "pass1234", "", "HWID RL Shop")
+
+        try:
+            for attempt in range(db._OTP_MAX_ATTEMPTS):
+                with db.db_session() as conn:
+                    try:
+                        db.reset_password_with_hwid_code(conn, rl_username, "WRONGCODE00000", "irrelevant1")
+                        raise AssertionError("Expected a wrong reset code to be rejected")
+                    except ValueError as e:
+                        assert "too many" not in str(e).lower(), (
+                            f"Should not be locked out yet after only {attempt + 1} attempt(s)"
+                        )
+
+            hw = license_guard.get_hardware_id()
+            real_code = license_guard.generate_password_reset_code(hw, rl_username)
+            with db.db_session() as conn:
+                try:
+                    db.reset_password_with_hwid_code(conn, rl_username, real_code, "irrelevant1")
+                    raise AssertionError(
+                        "Expected lockout to block verification even with the correct reset code"
+                    )
+                except ValueError as e:
+                    assert "too many" in str(e).lower()
+        finally:
+            db._otp_rate_limit_clear(f"hwid:{rl_username}")
+
+    run_test("Hardware-ID password reset locks out after too many wrong codes",
+              test_hwid_password_reset_rate_limit_locks_out)
+
     def test_otp_expires_after_ten_minutes_not_fifteen():
         assert db._OTP_EXPIRY_MINUTES == 10, (
             "OTP expiry should be 10 minutes per bug #16, not the old 15"
@@ -2312,6 +2396,245 @@ def main():
 
     run_test("Restore rejects path traversal and another user's backup file",
               test_restore_rejects_path_traversal_and_other_users_backup)
+
+    # --- Reset CRM (Settings -> Danger Zone) ---
+    def test_reset_wipes_only_requesting_user():
+        with db.db_session() as conn:
+            user_a = db.register_user(conn, "reset_user_a", "pass1234", "", "Reset Shop A")["user_id"]
+            user_b = db.register_user(conn, "reset_user_b", "pass1234", "", "Reset Shop B")["user_id"]
+            db.create_account(conn, user_a, {"name": "A Account", "contact": "0300"})
+            db.create_phone(conn, user_a, {
+                "model": "A Phone", "type": "PTA", "purchase_price": 40000,
+                "status": "Bought", "force": True,
+            })
+            db.create_partner(conn, user_a, {"name": "A Partner", "capital": 10000})
+            db.create_bank(conn, user_a, {"name": "A Bank", "initial_balance": 5000})
+
+            db.create_account(conn, user_b, {"name": "B Account", "contact": "0311"})
+            db.create_phone(conn, user_b, {
+                "model": "B Phone", "type": "PTA", "purchase_price": 20000,
+                "status": "Bought", "force": True,
+            })
+
+        with db.db_session() as conn:
+            b_accounts_before = [dict(r) for r in conn.execute(
+                "SELECT * FROM accounts WHERE user_id=?", (user_b,)
+            ).fetchall()]
+            b_phones_before = [dict(r) for r in conn.execute(
+                "SELECT * FROM phones WHERE user_id=?", (user_b,)
+            ).fetchall()]
+            password_hash_before = conn.execute(
+                "SELECT password_hash FROM users WHERE id=?", (user_a,)
+            ).fetchone()["password_hash"]
+
+        with db.db_session() as conn:
+            safety = db.reset_user_data(conn, user_a)
+        assert safety and Path(safety).is_file(), "Expected a safety snapshot file before the wipe"
+
+        with db.db_session() as conn:
+            a_phones = conn.execute("SELECT COUNT(*) c FROM phones WHERE user_id=?", (user_a,)).fetchone()["c"]
+            a_accounts = conn.execute("SELECT COUNT(*) c FROM accounts WHERE user_id=?", (user_a,)).fetchone()["c"]
+            a_partners = conn.execute("SELECT COUNT(*) c FROM partners WHERE user_id=?", (user_a,)).fetchone()["c"]
+            a_banks = conn.execute("SELECT COUNT(*) c FROM bank_accounts WHERE user_id=?", (user_a,)).fetchone()["c"]
+            assert a_phones == 0 and a_accounts == 0 and a_partners == 0 and a_banks == 0, (
+                "Reset should have wiped every one of user A's business tables"
+            )
+
+            user_row = conn.execute("SELECT * FROM users WHERE id=?", (user_a,)).fetchone()
+            assert user_row is not None, "Reset must never delete the users row itself"
+            assert user_row["password_hash"] == password_hash_before, (
+                "Reset must keep the login/password intact"
+            )
+
+            setup_completed = conn.execute(
+                "SELECT value FROM user_settings WHERE user_id=? AND key='setup_completed'", (user_a,)
+            ).fetchone()
+            assert setup_completed and setup_completed["value"] == "0", (
+                "Reset should force setup_completed back to 0 so the next login re-enters the wizard"
+            )
+
+            b_accounts_after = [dict(r) for r in conn.execute(
+                "SELECT * FROM accounts WHERE user_id=?", (user_b,)
+            ).fetchall()]
+            b_phones_after = [dict(r) for r in conn.execute(
+                "SELECT * FROM phones WHERE user_id=?", (user_b,)
+            ).fetchall()]
+            assert b_accounts_after == b_accounts_before, (
+                "User B's accounts changed as a side effect of user A's reset"
+            )
+            assert b_phones_after == b_phones_before, (
+                "User B's phones changed as a side effect of user A's reset"
+            )
+
+    run_test("Reset CRM wipes only the requesting user's data, keeps login intact, other users untouched",
+              test_reset_wipes_only_requesting_user)
+
+    # --- Gap coverage: Reset CRM used to raise "FOREIGN KEY constraint
+    # failed" on real-shaped data (bug reported live) ---
+    def test_reset_does_not_raise_foreign_key_error_on_linked_data():
+        # Mirrors the real reported scenario: a bank account, a khata
+        # account, and a phone bought AND sold entirely through the bank -
+        # phones.purchase_cash_book_entry_id / sale_cash_book_entry_id both
+        # end up pointing at rows in cash_book_entries, another "direct"
+        # (has its own user_id) table. Both `phones` and `cash_book_entries`
+        # are "direct" tables, so nothing in _resolve_table_ownership_paths
+        # orders deletion between the two of them relative to their own FK
+        # columns - only PRAGMA foreign_keys = OFF prevents a violation, and
+        # that pragma is a documented no-op once a transaction is already
+        # open, which the old code got backwards (see reset_user_data).
+        with db.db_session() as conn:
+            uid = db.register_user(conn, "reset_fk_user", "pass1234", "", "Reset FK Shop")["user_id"]
+            bank = db.create_bank(conn, uid, {"name": "UBL", "initial_balance": 150000})
+            db.create_account(conn, uid, {
+                "name": "Zaid", "opening_balance": 123000, "opening_balance_type": "credit",
+            })
+            db.create_phone(conn, uid, {
+                "model": "iPhone 14 JV", "type": "PTA", "purchase_price": 77000,
+                "sale_price": 80000, "status": "Sold", "imei": "65765757",
+                "purchase_payment_method": "bank", "purchase_bank_id": bank["id"],
+                "sale_payment_method": "bank", "sale_bank_id": bank["id"],
+            })
+
+        with db.db_session() as conn:
+            phone_before = conn.execute(
+                "SELECT purchase_cash_book_entry_id, sale_cash_book_entry_id FROM phones WHERE user_id=?",
+                (uid,),
+            ).fetchone()
+            assert phone_before["purchase_cash_book_entry_id"] is not None, (
+                "Test setup should have linked a purchase cash-book entry"
+            )
+            assert phone_before["sale_cash_book_entry_id"] is not None, (
+                "Test setup should have linked a sale cash-book entry"
+            )
+
+        with db.db_session() as conn:
+            # This used to raise sqlite3.IntegrityError("FOREIGN KEY
+            # constraint failed") before the fix - any exception here fails
+            # the test via run_test's own try/except.
+            db.reset_user_data(conn, uid)
+
+        with db.db_session() as conn:
+            for table in ("phones", "cash_book_entries", "accounts", "bank_accounts"):
+                count = conn.execute(f"SELECT COUNT(*) c FROM {table} WHERE user_id=?", (uid,)).fetchone()["c"]
+                assert count == 0, f"Reset should have wiped {table}, found {count} row(s) left"
+            # bank_transactions has no user_id of its own - owned via bank_account_id.
+            bt_count = conn.execute(
+                "SELECT COUNT(*) c FROM bank_transactions WHERE bank_account_id = ?", (bank["id"],)
+            ).fetchone()["c"]
+            assert bt_count == 0, f"Reset should have wiped bank_transactions, found {bt_count} row(s) left"
+            fk_errors = conn.execute("PRAGMA foreign_key_check").fetchall()
+            assert not fk_errors, f"Live db has foreign key violations after reset: {fk_errors}"
+
+    run_test("Reset CRM succeeds (no FOREIGN KEY constraint failure) on a phone bought+sold through the bank",
+              test_reset_does_not_raise_foreign_key_error_on_linked_data)
+
+    # --- Undo / Redo ---
+    # These call ensure_undo_baseline()/record_undo_checkpoint() directly to
+    # simulate exactly what app.py's before_request/after_request hooks do
+    # around a mutating request - see database.py's "Undo / Redo" section.
+    def test_undo_redo_restores_and_reapplies_a_delete():
+        with db.db_session() as conn:
+            uid = db.register_user(conn, "undo_user", "pass1234", "", "Undo Shop")["user_id"]
+
+        db.ensure_undo_baseline(uid)
+        with db.db_session() as conn:
+            phone = db.create_phone(conn, uid, {
+                "model": "Undo Phone 1", "type": "PTA", "purchase_price": 30000,
+                "status": "Bought", "force": True,
+            })
+        db.record_undo_checkpoint(uid, db.describe_undo_action("POST", "/api/phones"))
+
+        status = db.get_undo_status(uid)
+        assert status["can_undo"] is True
+        assert status["can_redo"] is False
+
+        db.ensure_undo_baseline(uid)  # must be a no-op now - baseline already exists
+        with db.db_session() as conn:
+            db.delete_phone(conn, uid, phone["id"])
+        db.record_undo_checkpoint(uid, db.describe_undo_action("DELETE", "/api/phones"))
+
+        with db.db_session() as conn:
+            count = conn.execute("SELECT COUNT(*) c FROM phones WHERE user_id=?", (uid,)).fetchone()["c"]
+        assert count == 0
+
+        result = db.perform_undo(uid)
+        assert result["ok"] is True
+        with db.db_session() as conn:
+            count = conn.execute("SELECT COUNT(*) c FROM phones WHERE user_id=?", (uid,)).fetchone()["c"]
+        assert count == 1, "Undoing the delete should restore the phone"
+        assert db.get_undo_status(uid)["can_redo"] is True
+
+        db.perform_redo(uid)
+        with db.db_session() as conn:
+            count = conn.execute("SELECT COUNT(*) c FROM phones WHERE user_id=?", (uid,)).fetchone()["c"]
+        assert count == 0, "Redoing the delete should remove the phone again"
+
+        db.perform_undo(uid)  # back to "phone 1 exists"
+        db.perform_undo(uid)  # back to the very first baseline
+        assert db.get_undo_status(uid)["can_undo"] is False, (
+            "Should not be able to undo past the very first recorded baseline"
+        )
+        with db.db_session() as conn:
+            count = conn.execute("SELECT COUNT(*) c FROM phones WHERE user_id=?", (uid,)).fetchone()["c"]
+        assert count == 0
+
+    run_test("Undo/redo restores and reapplies a phone delete correctly",
+              test_undo_redo_restores_and_reapplies_a_delete)
+
+    def test_undo_is_per_user_and_new_action_clears_redo_branch():
+        with db.db_session() as conn:
+            uid_a = db.register_user(conn, "undo_user_a", "pass1234", "", "Undo Shop A")["user_id"]
+            uid_b = db.register_user(conn, "undo_user_b", "pass1234", "", "Undo Shop B")["user_id"]
+
+        db.ensure_undo_baseline(uid_a)
+        db.ensure_undo_baseline(uid_b)
+
+        with db.db_session() as conn:
+            db.create_account(conn, uid_a, {"name": "A1"})
+        db.record_undo_checkpoint(uid_a, "account added")
+
+        with db.db_session() as conn:
+            db.create_account(conn, uid_b, {"name": "B1"})
+        db.record_undo_checkpoint(uid_b, "account added")
+
+        db.perform_undo(uid_a)
+        with db.db_session() as conn:
+            a_accounts = conn.execute("SELECT COUNT(*) c FROM accounts WHERE user_id=?", (uid_a,)).fetchone()["c"]
+            b_accounts = conn.execute("SELECT COUNT(*) c FROM accounts WHERE user_id=?", (uid_b,)).fetchone()["c"]
+        assert a_accounts == 0, "User A's undo should have removed their own account"
+        assert b_accounts == 1, "User B's data must be completely untouched by user A's undo"
+
+        # A fresh action instead of a redo must discard the stale redo branch.
+        with db.db_session() as conn:
+            db.create_account(conn, uid_a, {"name": "A2 (fresh branch)"})
+        db.record_undo_checkpoint(uid_a, "account added")
+        assert db.get_undo_status(uid_a)["can_redo"] is False, (
+            "A new action after an undo must discard the old redo branch, not leave it redoable"
+        )
+
+    run_test("Undo/redo is per-user, and a new action after an undo discards the stale redo branch",
+              test_undo_is_per_user_and_new_action_clears_redo_branch)
+
+    def test_reset_clears_undo_history():
+        with db.db_session() as conn:
+            uid = db.register_user(conn, "undo_reset_user", "pass1234", "", "Undo Reset Shop")["user_id"]
+
+        db.ensure_undo_baseline(uid)
+        with db.db_session() as conn:
+            db.create_account(conn, uid, {"name": "Will be reset away"})
+        db.record_undo_checkpoint(uid, "account added")
+        assert db.get_undo_status(uid)["can_undo"] is True
+
+        with db.db_session() as conn:
+            db.reset_user_data(conn, uid)
+
+        assert db.get_undo_status(uid)["can_undo"] is False, (
+            "Reset should clear undo history so it can't be used to resurrect wiped data, "
+            "keeping the confirmation modal's \"this cannot be undone\" promise honest"
+        )
+
+    run_test("Reset CRM clears the user's undo history so it can't resurrect wiped data",
+              test_reset_clears_undo_history)
 
     # --- Gap coverage: backup/restore across a schema migration ---
     #

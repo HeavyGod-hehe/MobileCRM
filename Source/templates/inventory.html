@@ -183,6 +183,10 @@
           </select>
         </div>
         <div>
+          <label class="block text-xs font-medium text-slate-400 mb-1.5">Color</label>
+          <input type="text" id="f-color" placeholder="e.g. Space Gray" class="input-field">
+        </div>
+        <div>
           <label class="block text-xs font-medium text-slate-400 mb-1.5">Type *</label>
           <select id="f-type" required class="input-field">
             <option value="PTA">PTA</option>
@@ -211,14 +215,14 @@
           <select id="f-acquisition-type" class="input-field">
             <option value="purchase">Purchase</option>
             <option value="borrow">Borrowed from another shopkeeper</option>
-            <option value="opening">Already owned (opening stock)</option>
+            <option value="opening">Already Owned</option>
           </select>
         </div>
         <div id="f-payable-wrap">
           <label class="block text-xs font-medium text-slate-400 mb-1.5">Purchase Udhar (payable)</label>
           <input type="number" id="f-payable-amount" min="0" step="1" value="0" class="input-field" placeholder="Amount still owed">
           <p id="borrow-hint" class="hidden text-xs text-amber-400/90 mt-1">This phone belongs to another shopkeeper until sold — the full price is recorded as what you owe them below (no cash paid out now). Settle it any time, same day or a few days later.</p>
-          <p id="opening-hint" class="hidden text-xs text-amber-400/90 mt-1">Already owned before you started using this CRM — its cost was spent long ago, so no cash/bank entry is posted now.</p>
+          <p id="opening-hint" class="hidden text-xs text-amber-400/90 mt-1">Already owned before you started using this CRM — no cash/bank entry is posted for it.</p>
         </div>
         <div>
           <label class="block text-xs font-medium text-slate-400 mb-1.5">Purchase Date</label>
@@ -492,9 +496,10 @@
     if ((p.acquisition_type || 'purchase') === 'borrow') {
       return '<span class="badge-count bg-violet-500/20 text-violet-300 border border-violet-500/20 ml-1">Borrowed</span>';
     }
-    if (p.acquisition_type === 'opening') {
-      return '<span class="badge-count bg-slate-500/20 text-slate-300 border border-slate-500/20 ml-1">Opening Stock</span>';
-    }
+    // "opening" stock deliberately has no badge next to the phone name in
+    // the list — the shop owner doesn't need bookkeeping jargon showing up
+    // in day-to-day browsing. The Acquired field in the detail panel still
+    // records it for the rare case someone needs to check.
     return '';
   };
 
@@ -590,7 +595,7 @@
     return phones.filter(p => {
       if (activeStatus !== 'All' && p.status !== activeStatus) return false;
       if (!q) return true;
-      const hay = `${p.imei||''} ${p.imei2||''} ${p.model||''} ${p.variant||''}`.toLowerCase();
+      const hay = `${p.imei||''} ${p.imei2||''} ${p.model||''} ${p.variant||''} ${p.color||''}`.toLowerCase();
       return hay.includes(q);
     });
   }
@@ -1055,6 +1060,7 @@
     document.getElementById('f-box-status').value = p.box_status || '';
     document.getElementById('f-battery').value = p.battery_health || '';
     document.getElementById('f-variant').value = p.variant || '';
+    document.getElementById('f-color').value = p.color || '';
     document.getElementById('f-type').value = p.type;
     document.getElementById('f-purchase-price').value = p.purchase_price;
     document.getElementById('f-purchase-date').value = toDatetimeLocal(p.purchase_date || p.created_at);
@@ -1108,8 +1114,9 @@
         <div><span class="text-slate-500">Box</span><p class="text-white">${esc(p.box_status)||'—'}</p></div>
         <div><span class="text-slate-500">Battery</span><p class="text-white">${esc(p.battery_health)||'—'}</p></div>
         <div><span class="text-slate-500">Variant</span><p class="text-white">${esc(p.variant)||'—'}</p></div>
+        <div><span class="text-slate-500">Color</span><p class="text-white">${esc(p.color)||'—'}</p></div>
         <div><span class="text-slate-500">Type</span><p>${typeBadge(p.type)}</p></div>
-        <div><span class="text-slate-500">Acquired</span><p class="text-white">${(p.acquisition_type || 'purchase') === 'borrow' ? 'Borrowed from shopkeeper' : (p.acquisition_type === 'opening' ? 'Already owned (opening stock)' : 'Purchase')}</p></div>
+        <div><span class="text-slate-500">Acquired</span><p class="text-white">${(p.acquisition_type || 'purchase') === 'borrow' ? 'Borrowed from shopkeeper' : (p.acquisition_type === 'opening' ? 'Already Owned' : 'Purchase')}</p></div>
         <div><span class="text-slate-500">Payable</span><p class="text-white">${fmt(p.payable_amount || 0)}</p></div>
       </div>
       <div class="border-t border-white/8 pt-4">
@@ -1274,6 +1281,7 @@
       box_status: document.getElementById('f-box-status').value,
       battery_health: document.getElementById('f-battery').value,
       variant: document.getElementById('f-variant').value,
+      color: document.getElementById('f-color').value,
       type: document.getElementById('f-type').value,
       purchase_price: document.getElementById('f-purchase-price').value,
       purchase_date: document.getElementById('f-purchase-date').value,

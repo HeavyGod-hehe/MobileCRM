@@ -339,6 +339,66 @@ def require_auth():
         return redirect(url_for("login_page"))
 
 
+# --- Undo / Redo ---
+# Snapshots the whole live db right before AND after every qualifying
+# mutating request (see database.py's "Undo / Redo" section for why it's
+# snapshot-based rather than a hand-written inverse per mutation type, and
+# for which routes are excluded). Wrapped in try/except so a bug in this
+# bookkeeping can never break the actual request it's piggybacking on.
+
+@app.before_request
+def undo_ensure_baseline():
+    user_id = session.get("user_id")
+    if not user_id or not db.undo_should_track(request.method, request.path):
+        return
+    try:
+        db.ensure_undo_baseline(user_id)
+    except Exception:
+        pass
+
+
+@app.after_request
+def undo_record_checkpoint(response):
+    try:
+        user_id = session.get("user_id")
+        if user_id and db.undo_should_track(request.method, request.path) \
+                and 200 <= response.status_code < 300:
+            db.record_undo_checkpoint(user_id, db.describe_undo_action(request.method, request.path))
+    except Exception:
+        pass
+    return response
+
+
+@app.route("/api/undo/status")
+def undo_status_api():
+    user_id = _current_user_id()
+    if not user_id:
+        return jsonify({"error": "Unauthorized"}), 401
+    return jsonify(db.get_undo_status(user_id))
+
+
+@app.route("/api/undo", methods=["POST"])
+def undo_api():
+    user_id = _current_user_id()
+    if not user_id:
+        return jsonify({"error": "Unauthorized"}), 401
+    try:
+        return jsonify(db.perform_undo(user_id))
+    except ValueError as e:
+        return jsonify({"error": str(e)}), 400
+
+
+@app.route("/api/redo", methods=["POST"])
+def redo_api():
+    user_id = _current_user_id()
+    if not user_id:
+        return jsonify({"error": "Unauthorized"}), 401
+    try:
+        return jsonify(db.perform_redo(user_id))
+    except ValueError as e:
+        return jsonify({"error": str(e)}), 400
+
+
 # --- License ---
 # Routes for the one-time activation screen (see templates/activation.html
 # and license_guard.py). "shutdown_system" also lives here since it needs
@@ -461,6 +521,24 @@ def auth_reset_password():
 def auth_vendor_reset_info():
     with db.db_session() as conn:
         return jsonify(db.get_vendor_reset_info(conn))
+
+
+@app.route("/api/auth/reset-password-hwid", methods=["POST"])
+def auth_reset_password_hwid():
+    """Vendor-assisted recovery for accounts with no email/OTP configured -
+    see db.reset_password_with_hwid_code for how the code is verified."""
+    data = request.get_json(force=True)
+    try:
+        with db.db_session() as conn:
+            result = db.reset_password_with_hwid_code(
+                conn,
+                data.get("username", ""),
+                data.get("code", ""),
+                data.get("new_password", ""),
+            )
+        return jsonify(result)
+    except ValueError as e:
+        return jsonify({"error": str(e)}), 400
 
 
 @app.route("/api/auth/login", methods=["POST"])
@@ -1272,10 +1350,40 @@ def restore_backup_api():
         safety = backup_service.restore_from_backup(user_id, backup_path)
     except ValueError as e:
         return jsonify({"error": str(e)}), 400
+    # The just-restored data doesn't follow on from whatever this user's
+    # undo history was tracking before the restore - clear it so a stray
+    # Undo click afterward can't quietly step back into a pre-restore state.
+    db.clear_undo_history(user_id)
     session.clear()
     return jsonify({
         "ok": True,
         "message": "Database restored. Please sign in again.",
+        "safety_copy": safety,
+    })
+
+
+@app.route("/api/settings/reset-crm", methods=["POST"])
+def reset_crm_api():
+    """Danger Zone -> Reset CRM: wipes this user's business data entirely
+    and sends them back through the Setup Wizard. Requires the literal
+    string "RESET" in the request body as a server-side confirmation gate,
+    not just the frontend's type-to-confirm modal - a defense-in-depth
+    check against anything that might call this endpoint directly."""
+    user_id = _current_user_id()
+    if not user_id:
+        return jsonify({"error": "Unauthorized"}), 401
+    data = request.get_json(force=True)
+    if (data.get("confirm") or "") != "RESET":
+        return jsonify({"error": "Type RESET to confirm"}), 400
+    try:
+        with db.db_session() as conn:
+            safety = db.reset_user_data(conn, user_id)
+    except ValueError as e:
+        return jsonify({"error": str(e)}), 400
+    session.clear()
+    return jsonify({
+        "ok": True,
+        "message": "CRM reset. Please sign in again to go through setup.",
         "safety_copy": safety,
     })
 

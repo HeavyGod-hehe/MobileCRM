@@ -174,18 +174,34 @@
             <label class="block text-xs text-slate-500 mb-1">IMEI (optional)</label>
             <input type="text" class="input-field stock-imei" data-index="${i}" placeholder="Leave blank if unknown" value="${esc(row.imei || '')}">
           </div>
-          <div class="sm:col-span-3 flex justify-end">
+          <div>
+            <label class="block text-xs text-slate-500 mb-1">Color</label>
+            <input type="text" class="input-field stock-color" data-index="${i}" placeholder="e.g. Space Gray" value="${esc(row.color || '')}">
+          </div>
+          <div class="sm:col-span-2 flex justify-end gap-2">
+            <button type="button" class="btn btn-ghost btn-sm stock-duplicate" data-index="${i}">Duplicate</button>
             <button type="button" class="btn btn-ghost btn-sm text-red-400 stock-remove" data-index="${i}">Remove</button>
           </div>
         </div>
       </div>`).join('');
-    document.querySelectorAll('.stock-model, .stock-condition, .stock-type, .stock-price, .stock-imei').forEach((input) => {
+    document.querySelectorAll('.stock-model, .stock-condition, .stock-type, .stock-price, .stock-imei, .stock-color').forEach((input) => {
       input.addEventListener('input', () => {
         const i = Number(input.dataset.index);
         const field = input.className.match(/stock-(\w+)/)[1];
         const key = field === 'price' ? 'purchase_price' : field;
         stockRows[i][key] = input.value;
         if (field === 'price') updateStockTotal();
+      });
+    });
+    document.querySelectorAll('.stock-duplicate').forEach((btn) => {
+      btn.addEventListener('click', () => {
+        const i = Number(btn.dataset.index);
+        // Clone everything (model, condition, type, color) except IMEI -
+        // a duplicated phone is a physically different unit, so it can't
+        // share an IMEI with the row it was cloned from.
+        stockRows.splice(i + 1, 0, { ...stockRows[i], imei: '' });
+        renderStockRows();
+        updateStockTotal();
       });
     });
     document.querySelectorAll('.stock-remove').forEach((btn) => {
@@ -204,7 +220,7 @@
   }
 
   function addStockRow() {
-    stockRows.push({ model: '', condition: '', type: 'PTA', purchase_price: '', imei: '' });
+    stockRows.push({ model: '', condition: '', type: 'PTA', purchase_price: '', imei: '', color: '' });
     renderStockRows();
   }
 
@@ -223,7 +239,7 @@
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ phones: rows.map(r => ({
           model: r.model, condition: r.condition, type: r.type,
-          purchase_price: Number(r.purchase_price) || 0, imei: r.imei,
+          purchase_price: Number(r.purchase_price) || 0, imei: r.imei, color: r.color,
         })) }),
       });
       stockRows = [];

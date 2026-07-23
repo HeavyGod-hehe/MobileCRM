@@ -469,6 +469,7 @@ def _migrate_phone_columns(conn):
         "battery_health": "TEXT NOT NULL DEFAULT ''",
         "variant": "TEXT NOT NULL DEFAULT ''",
         "purchase_date": "TEXT NOT NULL DEFAULT ''",
+        "color": "TEXT NOT NULL DEFAULT ''",
     }
     for col, typedef in columns.items():
         if not _column_exists(conn, "phones", col):
@@ -2087,6 +2088,48 @@ def verify_otp_and_reset_password(conn, email, otp, new_password):
     return {"ok": True, "message": "Password updated. You can sign in now."}
 
 
+def reset_password_with_hwid_code(conn, username: str, code: str, new_password: str) -> dict:
+    """Vendor-assisted fallback for accounts with no Gmail SMTP configured
+    (see request_password_reset's vendor_fallback branch): the customer
+    reads their Hardware ID off the login page, sends it to the vendor, and
+    types back a short code the vendor generated for that exact hardware_id
+    + username pair (see license_guard.generate_password_reset_code / the
+    Serial Key Generator tool). Verified entirely locally against THIS
+    machine's own hardware_id - no email, no internet, no secret ever
+    leaves the vendor's machine. Reuses the same rate-limit machinery as
+    OTP verification, keyed separately (hwid: prefix) so the two flows
+    can't interfere with each other's lockouts."""
+    username = (username or "").strip()
+    code = (code or "").strip()
+    if not username or not code:
+        raise ValueError("Username and reset code are required")
+    if not new_password or len(new_password) < 6:
+        raise ValueError("New password must be at least 6 characters")
+
+    rate_key = f"hwid:{username.lower()}"
+    _otp_rate_limit_check(rate_key)
+
+    user = conn.execute(
+        "SELECT id FROM users WHERE username = ? COLLATE NOCASE", (username,)
+    ).fetchone()
+    if not user:
+        _otp_rate_limit_record_attempt(rate_key)
+        raise ValueError("Invalid username or reset code")
+
+    import license_guard
+    hardware_id = license_guard.get_hardware_id()
+    if not license_guard.verify_password_reset_code(hardware_id, username, code):
+        _otp_rate_limit_record_attempt(rate_key)
+        raise ValueError("Invalid username or reset code")
+
+    conn.execute(
+        "UPDATE users SET password_hash = ? WHERE id = ?",
+        (generate_password_hash(new_password, method=PASSWORD_HASH_METHOD), user["id"]),
+    )
+    _otp_rate_limit_clear(rate_key)
+    return {"ok": True, "message": "Password updated. You can sign in now."}
+
+
 def update_auth_credentials(conn, user_id, data):
     """Settings-page account update: change username/password/shop name,
     gated behind re-entering the CURRENT password first (checked before
@@ -2549,6 +2592,7 @@ def _build_phone_insert_values(conn, data, status=None):
         data.get("box_status", ""),
         data.get("battery_health", ""),
         data.get("variant", ""),
+        data.get("color", ""),
         _normalize_datetime(data.get("purchase_date"), conn, date_only=True),
     )
 
@@ -2915,10 +2959,10 @@ def create_phone(conn, user_id, data):
             supplier_name, supplier_contact, status,
             payable_amount, advance_received,
             buyer_name, buyer_contact, sale_price, receivable_amount,
-            sold_at, imei, imei2, box_status, battery_health, variant, purchase_date,
+            sold_at, imei, imei2, box_status, battery_health, variant, color, purchase_date,
             purchase_payment_method, purchase_bank_id, sale_payment_method, sale_bank_id,
             supplier_account_id, buyer_account_id, acquisition_type, user_id
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """,
         (
             *values,
@@ -2968,7 +3012,7 @@ def create_phones_bulk(conn, user_id, data):
             unit = imeis[i]
             phone_data["imei"] = unit.get("imei", "")
             phone_data["imei2"] = unit.get("imei2", "")
-            for field in ("condition", "box_status", "battery_health", "variant"):
+            for field in ("condition", "box_status", "battery_health", "variant", "color"):
                 if (unit.get(field) or "").strip():
                     phone_data[field] = unit[field]
         else:
@@ -3008,6 +3052,8 @@ def add_opening_stock(conn, user_id, rows):
             "purchase_price": purchase_price,
             "imei": row.get("imei") or "",
             "imei2": row.get("imei2") or "",
+            "variant": row.get("variant") or "",
+            "color": row.get("color") or "",
             "status": "Bought",
             "acquisition_type": "opening",
         }
@@ -3078,7 +3124,7 @@ def update_phone(conn, user_id, phone_id, data):
         "supplier_name", "supplier_contact", "status",
         "payable_amount", "advance_received",
         "buyer_name", "buyer_contact", "sale_price", "receivable_amount",
-        "imei", "imei2", "box_status", "battery_health", "variant", "purchase_date",
+        "imei", "imei2", "box_status", "battery_health", "variant", "color", "purchase_date",
         "purchase_payment_method", "purchase_bank_id", "sale_payment_method", "sale_bank_id",
         "supplier_account_id", "sold_at", "buyer_account_id", "acquisition_type",
     ]
@@ -5856,7 +5902,23 @@ def restore_database_from_backup(backup_path: str, user_id: int) -> str:
     """Restore one user's data from their own backup file, in place, without
     touching any other user's rows in the shared crm.db.
 
-    Full-file replacement (the old behaviour) was wrong for a multi-user
+    Validates that `backup_path` is actually a file inside THIS user's own
+    configured backup folder (see _validate_restore_source) before doing
+    anything — backup_path here is user-supplied (picked via the Settings
+    file browser), so that check is load-bearing against path traversal /
+    restoring someone else's backup file. See _restore_user_rows_from_file
+    for the actual restore mechanics, shared with perform_undo/perform_redo
+    (which restore from backend-generated snapshot paths that were never
+    user input, so they call that lower-level function directly and skip
+    this validation - it would only ever reject their own trusted paths,
+    since undo/redo snapshots don't live inside anyone's backup folder)."""
+    with db_session() as conn:
+        src = _validate_restore_source(conn, user_id, backup_path)
+    return _restore_user_rows_from_file(src, user_id)
+
+
+def _restore_user_rows_from_file(backup_path, user_id: int) -> str:
+    """Full-file replacement (the old behaviour) was wrong for a multi-user
     database: it silently destroyed every other account's data, and did it
     with a raw shutil.copy2 straight onto the live db file, which risks a
     locked or torn copy on Windows if anything else touches the file mid-copy.
@@ -5877,11 +5939,16 @@ def restore_database_from_backup(backup_path: str, user_id: int) -> str:
          db is automatically rolled back to the pre-restore snapshot and a
          clear error is raised — the caller's data is left exactly as it was
          before the restore was attempted, not partially changed.
-    """
-    with db_session() as conn:
-        src = _validate_restore_source(conn, user_id, backup_path)
-    _validate_backup_file(src)
 
+    `backup_path` must already be a trusted path by the time it reaches
+    here as far as OWNERSHIP goes (this function does no path/ownership
+    validation) - but it's still run through _validate_backup_file (a
+    corruption/format check, not a path check) regardless of caller, since
+    a truncated or corrupted snapshot is just as possible for an internally
+    generated undo checkpoint as for a user-picked backup file.
+    """
+    src = Path(backup_path)
+    _validate_backup_file(src)
     dest = DB_PATH.resolve()
     safety = dest.with_name(
         f"{dest.stem}.pre_restore_{datetime.now().strftime('%Y%m%d_%H%M%S')}{dest.suffix}"
@@ -5932,3 +5999,458 @@ def restore_database_from_backup(backup_path: str, user_id: int) -> str:
         )
 
     return str(safety) if safety.is_file() else ""
+
+
+def _safety_snapshot_before_reset(conn) -> str:
+    """Same fresh-connection pattern as _backup_before_schema_migration -
+    opens its OWN new connection to the live db file rather than using the
+    caller's `conn` (which is about to run this same reset inside a
+    transaction), since .backup() on a connection with an in-flight
+    transaction on itself is a confirmed self-deadlock (see that function's
+    docstring). Kept in a dedicated pre_reset_backups folder, separate from
+    the customer's own Backups/ folder, since this is an internal safety
+    net for the type-RESET confirmation gate, not a backup the shop owner
+    manages themselves."""
+    db_file = conn.execute("PRAGMA database_list").fetchone()["file"]
+    if not db_file or not Path(db_file).is_file():
+        return ""
+    db_file_path = Path(db_file)
+    backup_dir = db_file_path.parent / "pre_reset_backups"
+    backup_dir.mkdir(parents=True, exist_ok=True)
+    stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    dest = backup_dir / f"crm_pre_reset_{stamp}.db"
+    source_conn = sqlite3.connect(str(db_file_path))
+    backup_conn = sqlite3.connect(str(dest))
+    try:
+        source_conn.backup(backup_conn)
+    finally:
+        backup_conn.close()
+        source_conn.close()
+    return str(dest)
+
+
+def reset_user_data(conn, user_id: int) -> str:
+    """Settings -> Danger Zone -> Reset CRM: wipes every row this user owns
+    across every user-owned table (phones, cash book, accounts, banks,
+    partners, ledger links, invoices - discovered the same dynamic way
+    restore_database_from_backup finds them, so a future table can never
+    be silently missed), but the `users` row itself is never touched -
+    _resolve_table_ownership_paths excludes it entirely (no user_id column
+    of its own) - so the login/password stays intact. Re-seeds fresh
+    defaults afterward and forces setup_completed back to '0' so the next
+    login drops straight into the Setup Wizard, exactly like a brand-new
+    signup. Takes a timestamped safety snapshot first in case this was
+    triggered by mistake despite the UI's type-RESET confirmation gate."""
+    safety = _safety_snapshot_before_reset(conn)
+
+    # Bug: PRAGMA foreign_keys is a documented no-op once a transaction is
+    # already open in SQLite - it can only be toggled while the connection
+    # is in autocommit mode. The old code called BEGIN IMMEDIATE first and
+    # only then tried to turn foreign_keys OFF, so the toggle silently did
+    # nothing and enforcement stayed ON for the whole delete loop. Deletes
+    # happen in dependency order between the "direct" and "via" groups, but
+    # NOT necessarily between two "direct" tables that reference each other
+    # (e.g. phones.purchase_cash_book_entry_id -> cash_book_entries.id, both
+    # "direct" tables) - with enforcement still on, deleting the referenced
+    # row before its referencing row raised "FOREIGN KEY constraint failed"
+    # and the whole reset aborted. Toggling OFF before BEGIN (matching
+    # restore_database_from_backup's live.execute("PRAGMA foreign_keys =
+    # OFF") call, which does this correctly) actually disables it this time.
+    conn.execute("PRAGMA foreign_keys = OFF")
+    if not conn.in_transaction:
+        conn.execute("BEGIN IMMEDIATE")
+    try:
+        ownership = _resolve_table_ownership_paths(conn)
+        for table, path in reversed(list(ownership.items())):
+            if path[0] == "direct":
+                conn.execute(f"DELETE FROM {table} WHERE user_id = ?", (user_id,))
+            else:
+                _, fk_col, parent = path
+                conn.execute(
+                    f"DELETE FROM {table} WHERE {fk_col} IN "
+                    f"(SELECT id FROM {parent} WHERE user_id = ?)",
+                    (user_id,),
+                )
+        conn.commit()
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        # Only takes effect now that the transaction above is closed
+        # (committed or rolled back) - same no-op-mid-transaction rule as
+        # the OFF toggle, so this has to happen after, not inside, the
+        # try/except.
+        conn.execute("PRAGMA foreign_keys = ON")
+
+    fk_errors = conn.execute("PRAGMA foreign_key_check").fetchall()
+    integrity = conn.execute("PRAGMA integrity_check").fetchone()[0]
+    if fk_errors or integrity != "ok":
+        if safety:
+            _restore_live_db_from_snapshot(Path(safety))
+        raise ValueError(
+            "Reset failed its post-wipe integrity check and was automatically "
+            "rolled back — your data was not changed."
+        )
+
+    _copy_legacy_settings_to_user(conn, user_id)
+    _seed_user_partners(conn, user_id)
+    ensure_user_backup_path(conn, user_id)
+    conn.execute(
+        """
+        INSERT INTO user_settings (user_id, key, value) VALUES (?, 'setup_completed', '0')
+        ON CONFLICT(user_id, key) DO UPDATE SET value = excluded.value
+        """,
+        (user_id,),
+    )
+    # A Reset promises "this cannot be undone" in the confirmation modal -
+    # clearing this user's undo history keeps that promise honest instead
+    # of leaving a generic Undo button able to silently resurrect
+    # everything that was just deliberately wiped.
+    clear_undo_history(user_id)
+    return safety
+
+
+# --- Undo / Redo ---
+#
+# Snapshot-based, not action-specific: rather than writing a hand-coded
+# inverse for every single mutation type in this file (an enormous surface
+# — phones, cash book, accounts, banks, partners, invoices, journal
+# vouchers...), each tracked request gets a full snapshot of the live
+# crm.db taken right after it succeeds, and "undo" is just restoring the
+# PREVIOUS snapshot via the exact same per-user restore path Settings ->
+# Restore from Backup already uses (restore_database_from_backup /
+# _restore_user_rows) — battle-tested, and guaranteed to only ever touch
+# this one user's rows no matter how many other accounts share this
+# install's crm.db.
+#
+# The bookkeeping tables (undo_checkpoints, undo_state) deliberately live
+# in a SEPARATE sqlite file (undo_meta.db, next to crm.db but never
+# ATTACHed or touched by it) rather than inside crm.db itself. If they were
+# in crm.db, restoring an OLDER checkpoint would also roll the bookkeeping
+# rows themselves back to whatever the undo stack looked like at that past
+# moment — corrupting the stack on every single undo/redo. A wholly
+# separate file sidesteps that entirely.
+UNDO_HISTORY_CAP = 25
+UNDO_TRACKED_METHODS = ("POST", "PUT", "DELETE", "PATCH")
+# Endpoints deliberately excluded from the generic undo/redo stack:
+#   - auth/license/system/update: not "user data" edits, or not meaningful
+#     to snapshot around (e.g. shutting down the server)
+#   - undo/redo themselves: applying an undo must never itself become a
+#     new undoable action, or the stack could never move backward twice
+#   - storage restore/reset-crm: each already has its own explicit,
+#     separately-worded safety net (a picked backup file / a typed "RESET"
+#     confirmation) and already clears undo history on success (see
+#     clear_undo_history calls above) — folding them into the generic
+#     stack too would let a plain "Undo" click quietly reverse a
+#     confirmation the user just deliberately typed out.
+UNDO_EXEMPT_PATH_PREFIXES = (
+    "/api/undo", "/api/redo",
+    "/api/auth/", "/api/license/", "/api/system/", "/api/update/",
+    "/api/storage/restore", "/api/settings/reset-crm",
+)
+
+# Human-friendly labels for the Undo/Redo button tooltips, keyed by
+# (method, path-prefix) - falls back to a generic label for anything not
+# listed here, so a new route never breaks the feature, just shows a
+# slightly less specific tooltip.
+_UNDO_ACTION_LABELS = (
+    ("POST", "/api/phones", "phone added"),
+    ("PUT", "/api/phones", "phone edited"),
+    ("DELETE", "/api/phones", "phone deleted"),
+    ("POST", "/api/accounts", "account added"),
+    ("PUT", "/api/accounts", "account edited"),
+    ("DELETE", "/api/accounts", "account deleted"),
+    ("POST", "/api/banks", "bank account added"),
+    ("PUT", "/api/banks", "bank account edited"),
+    ("DELETE", "/api/banks", "bank account deleted"),
+    ("POST", "/api/partners", "partner added"),
+    ("PUT", "/api/partners", "partner edited"),
+    ("DELETE", "/api/partners", "partner deleted"),
+    ("POST", "/api/cash-book", "cash book entry added"),
+    ("DELETE", "/api/cash-book", "cash book entry deleted"),
+    ("POST", "/api/journal-vouchers", "journal voucher added"),
+    ("DELETE", "/api/journal-vouchers", "journal voucher deleted"),
+    ("POST", "/api/setup/", "setup step saved"),
+)
+
+
+def undo_should_track(method: str, path: str) -> bool:
+    if method not in UNDO_TRACKED_METHODS:
+        return False
+    if path.startswith("/static/"):
+        return False
+    return not any(path.startswith(p) for p in UNDO_EXEMPT_PATH_PREFIXES)
+
+
+def describe_undo_action(method: str, path: str) -> str:
+    for m, prefix, label in _UNDO_ACTION_LABELS:
+        if method == m and path.startswith(prefix):
+            return label
+    return f"change ({method} {path})"
+
+
+def _undo_meta_db_path() -> Path:
+    # Namespaced off DB_PATH's own filename stem, not a fixed generic name -
+    # in production DB_PATH is always the one stable "crm.db" for this
+    # install, so this is just "crm_undo_meta.db" next to it. But in tests
+    # (and any future scenario with multiple db files sharing one parent
+    # folder), a fixed "undo_meta.db" name would be a single file shared by
+    # every one of them, so autoincrement user_ids starting fresh at 1 in
+    # each new db file would collide with unrelated leftover rows from a
+    # previous db's same user_id — exactly the cross-contamination bug this
+    # naming avoids.
+    return DB_PATH.resolve().parent / f"{DB_PATH.stem}_undo_meta.db"
+
+
+def _undo_meta_connection() -> sqlite3.Connection:
+    conn = sqlite3.connect(str(_undo_meta_db_path()), timeout=30)
+    conn.row_factory = sqlite3.Row
+    conn.execute("PRAGMA journal_mode = WAL")
+    conn.execute("PRAGMA busy_timeout = 30000")
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS undo_checkpoints (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id INTEGER NOT NULL,
+            seq INTEGER NOT NULL,
+            file_path TEXT NOT NULL,
+            description TEXT NOT NULL DEFAULT '',
+            created_at TEXT NOT NULL DEFAULT (datetime('now')),
+            UNIQUE(user_id, seq)
+        )
+        """
+    )
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS undo_state (
+            user_id INTEGER PRIMARY KEY,
+            position INTEGER NOT NULL
+        )
+        """
+    )
+    return conn
+
+
+def _undo_dir(user_id: int) -> Path:
+    d = DB_PATH.resolve().parent / f"{DB_PATH.stem}_UndoHistory" / str(user_id)
+    d.mkdir(parents=True, exist_ok=True)
+    return d
+
+
+def _snapshot_whole_db_for_undo(dest_path: Path) -> None:
+    """Same fresh-connection backup-API pattern as every other safety
+    snapshot in this file (see _backup_before_schema_migration) - a whole
+    copy of crm.db (every user, not just this one), because the per-user
+    extraction happens later, at undo/redo time, via
+    restore_database_from_backup / _restore_user_rows."""
+    source_conn = sqlite3.connect(str(DB_PATH))
+    backup_conn = sqlite3.connect(str(dest_path))
+    try:
+        source_conn.backup(backup_conn)
+    finally:
+        backup_conn.close()
+        source_conn.close()
+
+
+def _get_undo_position(meta, user_id: int):
+    row = meta.execute(
+        "SELECT position FROM undo_state WHERE user_id = ?", (user_id,)
+    ).fetchone()
+    return row["position"] if row else None
+
+
+def _set_undo_position(meta, user_id: int, position: int) -> None:
+    meta.execute(
+        """
+        INSERT INTO undo_state (user_id, position) VALUES (?, ?)
+        ON CONFLICT(user_id) DO UPDATE SET position = excluded.position
+        """,
+        (user_id, position),
+    )
+
+
+def ensure_undo_baseline(user_id: int) -> None:
+    """Called from app.py's before_request, right before a qualifying
+    mutating request executes: if this user has never had an undo
+    checkpoint at all, snapshot the CURRENT (pre-action) state as seq 0
+    first, so even their very first tracked action is undoable back to
+    this starting point."""
+    meta = _undo_meta_connection()
+    try:
+        existing = meta.execute(
+            "SELECT 1 FROM undo_checkpoints WHERE user_id = ? LIMIT 1", (user_id,)
+        ).fetchone()
+        if existing:
+            return
+        dest = _undo_dir(user_id) / "seq_0.db"
+        _snapshot_whole_db_for_undo(dest)
+        meta.execute(
+            """
+            INSERT INTO undo_checkpoints (user_id, seq, file_path, description)
+            VALUES (?, 0, ?, 'Starting point')
+            """,
+            (user_id, str(dest)),
+        )
+        _set_undo_position(meta, user_id, 0)
+        meta.commit()
+    finally:
+        meta.close()
+
+
+def record_undo_checkpoint(user_id: int, description: str) -> None:
+    """Called from app.py's after_request, right after a qualifying
+    mutating request succeeds: snapshots the new state as the next
+    sequence number. If the user had undone one or more actions and then
+    made a fresh change, this discards the stale "redo" branch first —
+    the same rule every undo/redo stack follows (a new action after an
+    undo overwrites whatever was ahead of it)."""
+    meta = _undo_meta_connection()
+    try:
+        position = _get_undo_position(meta, user_id)
+        if position is None:
+            # Shouldn't happen (ensure_undo_baseline runs first in
+            # before_request) but don't crash the real request over it.
+            position = -1
+
+        stale = meta.execute(
+            "SELECT file_path FROM undo_checkpoints WHERE user_id = ? AND seq > ?",
+            (user_id, position),
+        ).fetchall()
+        meta.execute(
+            "DELETE FROM undo_checkpoints WHERE user_id = ? AND seq > ?",
+            (user_id, position),
+        )
+        for row in stale:
+            Path(row["file_path"]).unlink(missing_ok=True)
+
+        next_seq = meta.execute(
+            "SELECT COALESCE(MAX(seq), -1) + 1 AS n FROM undo_checkpoints WHERE user_id = ?",
+            (user_id,),
+        ).fetchone()["n"]
+
+        dest = _undo_dir(user_id) / f"seq_{next_seq}.db"
+        _snapshot_whole_db_for_undo(dest)
+        meta.execute(
+            """
+            INSERT INTO undo_checkpoints (user_id, seq, file_path, description)
+            VALUES (?, ?, ?, ?)
+            """,
+            (user_id, next_seq, str(dest), description or ""),
+        )
+        _set_undo_position(meta, user_id, next_seq)
+
+        total = meta.execute(
+            "SELECT COUNT(*) c FROM undo_checkpoints WHERE user_id = ?", (user_id,)
+        ).fetchone()["c"]
+        if total > UNDO_HISTORY_CAP:
+            excess = meta.execute(
+                "SELECT id, file_path FROM undo_checkpoints WHERE user_id = ? "
+                "ORDER BY seq ASC LIMIT ?",
+                (user_id, total - UNDO_HISTORY_CAP),
+            ).fetchall()
+            for row in excess:
+                Path(row["file_path"]).unlink(missing_ok=True)
+                meta.execute("DELETE FROM undo_checkpoints WHERE id = ?", (row["id"],))
+        meta.commit()
+    finally:
+        meta.close()
+
+
+def get_undo_status(user_id: int) -> dict:
+    meta = _undo_meta_connection()
+    try:
+        position = _get_undo_position(meta, user_id)
+        if position is None:
+            return {
+                "can_undo": False, "can_redo": False,
+                "undo_description": None, "redo_description": None,
+            }
+        current = meta.execute(
+            "SELECT description FROM undo_checkpoints WHERE user_id = ? AND seq = ?",
+            (user_id, position),
+        ).fetchone()
+        prev_exists = meta.execute(
+            "SELECT 1 FROM undo_checkpoints WHERE user_id = ? AND seq < ? LIMIT 1",
+            (user_id, position),
+        ).fetchone()
+        nxt = meta.execute(
+            "SELECT description FROM undo_checkpoints WHERE user_id = ? AND seq > ? "
+            "ORDER BY seq ASC LIMIT 1",
+            (user_id, position),
+        ).fetchone()
+        return {
+            "can_undo": bool(prev_exists),
+            "can_redo": bool(nxt),
+            "undo_description": current["description"] if current and prev_exists else None,
+            "redo_description": nxt["description"] if nxt else None,
+        }
+    finally:
+        meta.close()
+
+
+def perform_undo(user_id: int) -> dict:
+    meta = _undo_meta_connection()
+    try:
+        position = _get_undo_position(meta, user_id)
+        if position is None:
+            raise ValueError("Nothing to undo")
+        current = meta.execute(
+            "SELECT description FROM undo_checkpoints WHERE user_id = ? AND seq = ?",
+            (user_id, position),
+        ).fetchone()
+        prev = meta.execute(
+            "SELECT seq, file_path FROM undo_checkpoints WHERE user_id = ? AND seq < ? "
+            "ORDER BY seq DESC LIMIT 1",
+            (user_id, position),
+        ).fetchone()
+        if not prev:
+            raise ValueError("Nothing to undo")
+        _restore_user_rows_from_file(prev["file_path"], user_id)
+        _set_undo_position(meta, user_id, prev["seq"])
+        meta.commit()
+        label = current["description"] if current else "last change"
+        return {"ok": True, "message": f"Undone: {label}"}
+    finally:
+        meta.close()
+
+
+def perform_redo(user_id: int) -> dict:
+    meta = _undo_meta_connection()
+    try:
+        position = _get_undo_position(meta, user_id)
+        if position is None:
+            raise ValueError("Nothing to redo")
+        nxt = meta.execute(
+            "SELECT seq, file_path, description FROM undo_checkpoints "
+            "WHERE user_id = ? AND seq > ? ORDER BY seq ASC LIMIT 1",
+            (user_id, position),
+        ).fetchone()
+        if not nxt:
+            raise ValueError("Nothing to redo")
+        _restore_user_rows_from_file(nxt["file_path"], user_id)
+        _set_undo_position(meta, user_id, nxt["seq"])
+        meta.commit()
+        return {"ok": True, "message": f"Redone: {nxt['description']}"}
+    finally:
+        meta.close()
+
+
+def clear_undo_history(user_id: int) -> None:
+    """Wipes this user's undo/redo stack and deletes its snapshot files -
+    called after a Reset or a Restore-from-backup (see their own tails),
+    both of which already have their own separate safety net and shouldn't
+    leave a generic Undo button able to reverse them."""
+    meta = _undo_meta_connection()
+    try:
+        rows = meta.execute(
+            "SELECT file_path FROM undo_checkpoints WHERE user_id = ?", (user_id,)
+        ).fetchall()
+        for row in rows:
+            Path(row["file_path"]).unlink(missing_ok=True)
+        meta.execute("DELETE FROM undo_checkpoints WHERE user_id = ?", (user_id,))
+        meta.execute("DELETE FROM undo_state WHERE user_id = ?", (user_id,))
+        meta.commit()
+    finally:
+        meta.close()
+    user_dir = DB_PATH.resolve().parent / f"{DB_PATH.stem}_UndoHistory" / str(user_id)
+    shutil.rmtree(user_dir, ignore_errors=True)

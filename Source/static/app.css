@@ -36,20 +36,32 @@ body {
     var(--surface);
 }
 
-/* Page enter — light transform/opacity only */
+/* Page enter/leave — opacity only, deliberately no `transform` here.
+   `.page-enter`/`.page-leave` sit on <main>, which every page's modals are
+   nested inside (see {% block content %}) - a `transform` (even a settled
+   `translateY(0)` left behind by `animation-fill-mode: both`) makes an
+   element a new containing block for any `position:fixed` descendant per
+   the CSS spec, so those modals would resolve "fixed" against <main>'s box
+   instead of the viewport. On a short page this is invisible (both boxes
+   start near the same place), but on a long, scrolled page (e.g. Settings)
+   the modal panel renders far off-screen, and its own overlay - now sized
+   to <main>'s full scrollable height instead of the viewport - is still
+   very much on top of whatever you can see, silently swallowing every
+   click site-wide until the page is reloaded. Opacity-only avoids this
+   category of bug entirely; the animation still reads as a soft fade. */
 .page-enter {
   animation: page-in 0.28s var(--ease-out) both;
 }
 @keyframes page-in {
-  from { opacity: 0; transform: translateY(8px); }
-  to   { opacity: 1; transform: translateY(0); }
+  from { opacity: 0; }
+  to   { opacity: 1; }
 }
 .page-leave {
   animation: page-out 0.15s ease-in both;
 }
 @keyframes page-out {
-  from { opacity: 1; transform: translateY(0); }
-  to   { opacity: 0; transform: translateY(-4px); }
+  from { opacity: 1; }
+  to   { opacity: 0; }
 }
 
 .stagger > * {

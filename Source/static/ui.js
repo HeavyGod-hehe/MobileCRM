@@ -316,13 +316,25 @@ function initTopBarControls() {
   });
   document.getElementById('sidebar-backdrop')?.addEventListener('click', () => setSidebarOpen(false));
 
-  // Global search: jumps to Inventory with the query pre-filled — it reuses
-  // Inventory's own existing client-side search rather than pretending to
-  // search everything (no cross-page search API exists).
+  // Global search: jumps to whichever section actually has a matching list
+  // to search, pre-filling that section's OWN client-side search (no
+  // cross-page search API exists) - searching while in Accounts searches
+  // accounts, searching anywhere else searches phone inventory (the only
+  // two pages with a real list-search box today). Staying on the same
+  // section just re-runs its own search in place instead of a full reload.
   document.getElementById('nav-search-form')?.addEventListener('submit', (e) => {
     e.preventDefault();
     const q = document.getElementById('nav-search-input')?.value.trim();
-    window.location.href = q ? `/inventory?q=${encodeURIComponent(q)}` : '/inventory';
+    const section = window.location.pathname.startsWith('/accounts') ? 'accounts' : 'inventory';
+    const targetPath = `/${section}`;
+    const searchInputId = section === 'accounts' ? 'account-search' : 'inventory-search';
+    const inPlaceInput = document.getElementById(searchInputId);
+    if (window.location.pathname === targetPath && inPlaceInput) {
+      inPlaceInput.value = q;
+      inPlaceInput.dispatchEvent(new Event('input', { bubbles: true }));
+      return;
+    }
+    window.location.href = q ? `${targetPath}?q=${encodeURIComponent(q)}` : targetPath;
   });
 }
 
@@ -428,7 +440,7 @@ async function initSettingsPage() {
   renderThemeGrid(document.getElementById('settings-theme-options'));
   loadAppVersion();
   initUpdateUi();
-  checkForUpdates({ banner: Boolean(document.getElementById('update-banner')) });
+  checkForUpdatesAuto({ banner: Boolean(document.getElementById('update-banner')) });
 
   try {
     const shop = await apiFetch('/api/settings/shop');
@@ -856,13 +868,15 @@ async function startUpdateInstall() {
 
 // Asks the server "is there a newer version?" (see /api/update/check ->
 // update_service.check_for_updates()) and repaints the UI with the answer.
-// Called on every page load (quiet banner check) and by the explicit
-// "Check for updates" button on Settings.
+// Called by checkForUpdatesAuto() below (throttled) and by the explicit
+// "Check for updates" button on Settings (always live, bypasses the throttle
+// - an explicit click should never show a stale cached answer).
 async function checkForUpdates(options = {}) {
   const { banner = false } = options;
   try {
     const data = await apiFetch('/api/update/check');
     renderUpdatePanel(data, { banner });
+    _cacheUpdateCheckResult(data);
     return data;
   } catch (_) {
     const statusEl = document.getElementById('update-status-text');
@@ -871,10 +885,103 @@ async function checkForUpdates(options = {}) {
   }
 }
 
+// update/check hits raw.githubusercontent.com over the real internet
+// (~800ms typical, much worse on a slow/flaky connection) - doing that on
+// every single page navigation made the whole app feel sluggish for no
+// reason, since a new version isn't going to appear between two clicks a
+// few seconds apart. Cache the last result in localStorage and only do a
+// live check once per UPDATE_CHECK_INTERVAL_MS; in between, repaint from
+// the cached answer (still shows the banner if an update was already known
+// to be pending) without touching the network at all.
+const UPDATE_CHECK_INTERVAL_MS = 6 * 60 * 60 * 1000; // 6 hours
+const UPDATE_CHECK_CACHE_KEY = 'crm-update-check-cache';
+
+function _cacheUpdateCheckResult(data) {
+  try {
+    localStorage.setItem(UPDATE_CHECK_CACHE_KEY, JSON.stringify({ ts: Date.now(), data }));
+  } catch (_) { /* localStorage unavailable - just skip caching, next load will check live */ }
+}
+
+function checkForUpdatesAuto(options = {}) {
+  let cached = null;
+  try {
+    cached = JSON.parse(localStorage.getItem(UPDATE_CHECK_CACHE_KEY) || 'null');
+  } catch (_) {
+    cached = null;
+  }
+  if (cached && typeof cached.ts === 'number' && Date.now() - cached.ts < UPDATE_CHECK_INTERVAL_MS) {
+    renderUpdatePanel(cached.data, options);
+    return Promise.resolve(cached.data);
+  }
+  return checkForUpdates(options);
+}
+
 function initUpdateUi() {
   document.getElementById('btn-check-updates')?.addEventListener('click', () => checkForUpdates());
   document.getElementById('btn-install-update')?.addEventListener('click', startUpdateInstall);
   document.getElementById('update-banner-install')?.addEventListener('click', startUpdateInstall);
+}
+
+// Settings -> Danger Zone -> Reset CRM. The typed "RESET" input is the
+// confirmation gate (mirrored server-side in /api/settings/reset-crm too,
+// so this can never be bypassed by calling the endpoint directly) - no
+// extra browser confirm() popup needed on top of it.
+function initResetCrmUi() {
+  const overlay = document.getElementById('reset-crm-overlay');
+  const modal = document.getElementById('reset-crm-modal');
+  const input = document.getElementById('reset-crm-confirm-input');
+  const confirmBtn = document.getElementById('btn-reset-crm-confirm');
+  const hint = document.getElementById('reset-crm-confirm-hint');
+  if (!overlay || !modal || !input || !confirmBtn) return;
+
+  const close = () => {
+    closeModal('reset-crm-overlay', 'reset-crm-modal');
+    input.value = '';
+    confirmBtn.disabled = true;
+    hint?.classList.add('hidden');
+  };
+
+  document.getElementById('btn-reset-crm')?.addEventListener('click', () => {
+    input.value = '';
+    confirmBtn.disabled = true;
+    hint?.classList.add('hidden');
+    openModal('reset-crm-overlay', 'reset-crm-modal');
+  });
+  document.getElementById('reset-crm-cancel')?.addEventListener('click', close);
+  document.getElementById('reset-crm-cancel-x')?.addEventListener('click', close);
+  overlay.addEventListener('click', close);
+  input.addEventListener('input', () => {
+    const matches = input.value === 'RESET';
+    confirmBtn.disabled = !matches;
+    // Silently disabling the button with no explanation left the user
+    // typing "reset" and seeing nothing happen, with no clue that case
+    // matters - show the mismatch as soon as they've typed something.
+    hint?.classList.toggle('hidden', matches || input.value === '');
+  });
+  confirmBtn.addEventListener('click', async () => {
+    if (input.value !== 'RESET') {
+      hint?.classList.remove('hidden');
+      return;
+    }
+    confirmBtn.disabled = true;
+    confirmBtn.textContent = 'Deleting…';
+    try {
+      const res = await apiFetch('/api/settings/reset-crm', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ confirm: input.value }),
+      });
+      const safetyNote = res.safety_copy
+        ? `\n\nA safety copy of your data before the reset was saved here, just in case:\n${res.safety_copy}`
+        : '';
+      alert((res.message || 'CRM reset. Please sign in again.') + safetyNote);
+      window.location.href = '/login';
+    } catch (err) {
+      toast(err.message, 'error');
+      confirmBtn.disabled = false;
+      confirmBtn.textContent = 'Delete Everything';
+    }
+  });
 }
 
 async function loadAppVersion() {
@@ -969,13 +1076,66 @@ function initPageTransitions() {
   });
 }
 
+// Top-right Undo/Redo buttons - work across the whole app (see the
+// database.py "Undo / Redo" section for how each click restores a whole-db
+// snapshot taken right before/after a mutating request). Re-checks status
+// on every page load since this is a traditional multi-page app, not a SPA
+// - there's no persistent client-side state to keep in sync otherwise.
+async function refreshUndoRedoButtons() {
+  const undoBtn = document.getElementById('btn-undo');
+  const redoBtn = document.getElementById('btn-redo');
+  if (!undoBtn || !redoBtn) return;
+  try {
+    const status = await apiFetch('/api/undo/status');
+    undoBtn.disabled = !status.can_undo;
+    redoBtn.disabled = !status.can_redo;
+    undoBtn.title = status.can_undo ? `Undo: ${status.undo_description}` : 'Nothing to undo';
+    redoBtn.title = status.can_redo ? `Redo: ${status.redo_description}` : 'Nothing to redo';
+  } catch (_) {
+    undoBtn.disabled = true;
+    redoBtn.disabled = true;
+  }
+}
+
+function initUndoRedoUi() {
+  const undoBtn = document.getElementById('btn-undo');
+  const redoBtn = document.getElementById('btn-redo');
+  if (!undoBtn || !redoBtn) return;
+  undoBtn.addEventListener('click', async () => {
+    if (undoBtn.disabled) return;
+    undoBtn.disabled = true;
+    try {
+      const res = await apiFetch('/api/undo', { method: 'POST' });
+      toast(res.message || 'Undone', 'success');
+      window.location.reload();
+    } catch (err) {
+      toast(err.message, 'error');
+      refreshUndoRedoButtons();
+    }
+  });
+  redoBtn.addEventListener('click', async () => {
+    if (redoBtn.disabled) return;
+    redoBtn.disabled = true;
+    try {
+      const res = await apiFetch('/api/redo', { method: 'POST' });
+      toast(res.message || 'Redone', 'success');
+      window.location.reload();
+    } catch (err) {
+      toast(err.message, 'error');
+      refreshUndoRedoButtons();
+    }
+  });
+  refreshUndoRedoButtons();
+}
+
 async function initApp() {
   initModalEscapeHandler();
   initWelcome();
   initTopBarControls();
   initSettingsNav();
   initPageTransitions();
-  checkForUpdates({ banner: true });
+  initUndoRedoUi();
+  checkForUpdatesAuto({ banner: true });
   const auth = await loadAppBranding();
   if (auth?.show_welcome) {
     showWelcomeModal(auth.session_username || auth.username, auth.shop_name);

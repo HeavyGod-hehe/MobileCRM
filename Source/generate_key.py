@@ -21,7 +21,7 @@ import sys
 from datetime import datetime
 from pathlib import Path
 
-from license_guard import _sign_hardware_id, get_hardware_id
+from license_guard import _sign_hardware_id, generate_password_reset_code, get_hardware_id
 
 LOG_FILE = Path(__file__).parent / "issued_keys.log"
 
@@ -71,6 +71,15 @@ def main() -> None:
         action="store_true",
         help="Show THIS machine's own Hardware ID (for testing the licensing flow yourself).",
     )
+    parser.add_argument(
+        "--reset-password",
+        metavar="USERNAME",
+        default=None,
+        help="Generate a password-reset code instead of an activation key, for a customer "
+        "whose account has no email/OTP configured. Needs the customer's Hardware ID "
+        "(same one shown on their login page's forgot-password screen) AND their exact "
+        "CRM username.",
+    )
     args = parser.parse_args()
 
     if args.mine:
@@ -92,6 +101,19 @@ def main() -> None:
             file=sys.stderr,
         )
         sys.exit(1)
+
+    if args.reset_password is not None:
+        username = args.reset_password.strip() or input("Customer's exact CRM username: ").strip()
+        code = generate_password_reset_code(hw, username)
+        _log_issued_key(hw, f"PWRESET({username})={code}", client)
+        print()
+        print("=" * 50)
+        print(f"Hardware ID:   {hw}")
+        print(f"Username:      {username}")
+        print(f"Reset Code:    {code}")
+        print("=" * 50)
+        print(f"\nSend the Reset Code above to the client. Saved to {LOG_FILE.name} for your records.")
+        return
 
     key = _sign_hardware_id(hw)
     _log_issued_key(hw, key, client)

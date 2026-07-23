@@ -63,3 +63,34 @@ def test_activation_key_survives_hardware_id_recompute(monkeypatch, tmp_path):
     lic.get_hardware_id.cache_clear()
 
     assert lic.is_licensed() is True
+
+
+def test_password_reset_code_verifies_for_matching_hwid_and_username():
+    hw = "ABCD1234EF567890"
+    code = lic.generate_password_reset_code(hw, "TalhaShop")
+    assert lic.verify_password_reset_code(hw, "TalhaShop", code)
+    # Username matching is case-insensitive (usernames are looked up
+    # COLLATE NOCASE in the db layer), hardware ID matching is not case
+    # sensitive either since it's always normalized to uppercase.
+    assert lic.verify_password_reset_code(hw.lower(), "talhashop", code)
+
+
+def test_password_reset_code_rejects_wrong_username_or_hwid_or_code():
+    hw = "ABCD1234EF567890"
+    code = lic.generate_password_reset_code(hw, "TalhaShop")
+    assert not lic.verify_password_reset_code(hw, "SomeoneElse", code)
+    assert not lic.verify_password_reset_code("1111222233334444", "TalhaShop", code)
+    assert not lic.verify_password_reset_code(hw, "TalhaShop", code[:-1] + ("0" if code[-1] != "0" else "1"))
+
+
+def test_password_reset_code_is_not_interchangeable_with_activation_key():
+    # A license activation key for this hardware ID must NOT also verify as
+    # a valid password-reset code, and vice versa — the "PWRESET:" prefix in
+    # the signed message keeps the two domains separate even though both are
+    # signed with the same secret tuple.
+    hw = "ABCD1234EF567890"
+    activation_key = lic._sign_hardware_id(hw)
+    assert not lic.verify_password_reset_code(hw, "TalhaShop", activation_key)
+
+    reset_code = lic.generate_password_reset_code(hw, "TalhaShop")
+    assert not lic.verify_activation_key(hw, reset_code)

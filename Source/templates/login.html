@@ -228,6 +228,31 @@
                   <span id="forgot-vendor-msg"></span>
                 </div>
 
+                <div id="forgot-hwid-fields" class="hidden space-y-4">
+                  <div class="auth-field">
+                    <label for="forgot-hwid-display">Your Hardware ID (send this to your vendor)</label>
+                    <div class="auth-input-wrap">
+                      <input type="text" id="forgot-hwid-display" readonly class="input-field font-mono text-sm" placeholder="Loading…">
+                    </div>
+                  </div>
+                  <div class="auth-field">
+                    <label for="forgot-hwid-username">Your Username</label>
+                    <input type="text" id="forgot-hwid-username" autocomplete="username" class="input-field" placeholder="Your CRM username">
+                  </div>
+                  <div class="auth-field">
+                    <label for="forgot-hwid-code">Reset Code (from your vendor)</label>
+                    <input type="text" id="forgot-hwid-code" class="input-field font-mono text-center tracking-widest" placeholder="Code your vendor sent you">
+                  </div>
+                  <div class="auth-field">
+                    <label for="forgot-hwid-new-pw">New Password</label>
+                    <input type="password" id="forgot-hwid-new-pw" minlength="6" class="input-field" placeholder="At least 6 characters">
+                  </div>
+                  <div id="forgot-hwid-error" class="auth-alert error hidden" role="alert"></div>
+                  <button type="button" id="forgot-hwid-reset-btn" class="btn btn-primary auth-submit w-full">
+                    <span class="btn-label">Set New Password</span>
+                  </button>
+                </div>
+
                 <div id="forgot-otp-fields">
                   <div class="auth-field">
                     <label for="forgot-otp">6-digit OTP</label>
@@ -409,6 +434,7 @@
         document.getElementById('forgot-step-otp').classList.remove('hidden');
         const vendorBox = document.getElementById('forgot-vendor-box');
         const otpFields = document.getElementById('forgot-otp-fields');
+        const hwidFields = document.getElementById('forgot-hwid-fields');
         if (res.vendor_fallback) {
           vendorBox.classList.remove('hidden');
           document.getElementById('forgot-vendor-msg').textContent = res.message;
@@ -416,12 +442,49 @@
             vendorBox.innerHTML = `<p>${esc(res.message)}</p><a href="https://wa.me/${formatPhoneForWhatsApp(res.vendor_whatsapp)}" target="_blank" class="btn btn-primary btn-sm mt-3 inline-block">WhatsApp Vendor</a>`;
           }
           otpFields.classList.add('hidden');
+          hwidFields.classList.remove('hidden');
+          loadHardwareIdForReset();
         } else {
           vendorBox.classList.add('hidden');
           otpFields.classList.remove('hidden');
+          hwidFields.classList.add('hidden');
         }
       } catch (err) {
         showAlert('forgot-error', err.message);
+      }
+      setLoading(btn, false);
+    });
+
+    async function loadHardwareIdForReset() {
+      const el = document.getElementById('forgot-hwid-display');
+      try {
+        const status = await apiFetch('/api/license/status');
+        el.value = status.hardware_id || '';
+      } catch (_) {
+        el.value = '';
+      }
+    }
+
+    document.getElementById('forgot-hwid-reset-btn').addEventListener('click', async () => {
+      const errEl = document.getElementById('forgot-hwid-error');
+      errEl.classList.add('hidden');
+      const btn = document.getElementById('forgot-hwid-reset-btn');
+      setLoading(btn, true);
+      try {
+        await apiFetch('/api/auth/reset-password-hwid', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            username: document.getElementById('forgot-hwid-username').value.trim(),
+            code: document.getElementById('forgot-hwid-code').value.trim(),
+            new_password: document.getElementById('forgot-hwid-new-pw').value,
+          }),
+        });
+        showMode('login');
+        alert('Password updated — sign in with your new password.');
+      } catch (err) {
+        errEl.textContent = err.message;
+        errEl.classList.remove('hidden');
       }
       setLoading(btn, false);
     });

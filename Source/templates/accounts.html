@@ -615,6 +615,14 @@
     renderAccountList();
   });
 
+  // Pre-fill from the top-bar global search (?q=...) if we were sent here
+  // from it (see initTopBarControls() in ui.js).
+  const qParam = new URLSearchParams(window.location.search).get('q');
+  if (qParam) {
+    document.getElementById('account-search').value = qParam;
+    searchQuery = qParam;
+  }
+
   function populateEntryBankSelect() {
     const opts = banks.map(b => `<option value="${b.id}">${esc(b.name)}</option>`).join('');
     document.getElementById('e-bank').innerHTML = '<option value="">— Select bank —</option>' + opts;
