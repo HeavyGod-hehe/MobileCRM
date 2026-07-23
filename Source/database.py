@@ -476,6 +476,11 @@ def _migrate_phone_columns(conn):
 
 
 def _migrate_phones_table(conn):
+    """One-time legacy rebuild: if the phones table still uses the old
+    status vocabulary ('In Stock' instead of 'Bought'), recreate it under
+    the current schema, carrying forward every column the live table
+    currently has (not just the ones this migration originally knew about)
+    so nothing added by a later migration gets silently dropped."""
     row = conn.execute(
         "SELECT sql FROM sqlite_master WHERE type='table' AND name='phones'"
     ).fetchone()
@@ -1287,6 +1292,8 @@ def _sold_profit(conn, row) -> float:
 
 
 def _migrate_cursor_panga(conn):
+    """Adds the invoices table (printable sale records) and
+    password_reset_tokens table (email OTP flow), if not already present."""
     conn.executescript(
         """
         CREATE TABLE IF NOT EXISTS invoices (
@@ -1393,6 +1400,11 @@ def _migrate_personal_assets(conn):
 
 
 def _migrate_multi_user(conn):
+    """Adds the users/user_settings tables and a user_id column to every
+    user-scoped table, then backfills any pre-existing rows (from before
+    this app supported more than one account) onto the first user found -
+    so upgrading an old single-user install never loses data, it just all
+    becomes owned by whoever's account already existed."""
     conn.executescript(
         """
         CREATE TABLE IF NOT EXISTS users (
@@ -1433,6 +1445,8 @@ def _migrate_multi_user(conn):
 
 
 def _migrate_purchase_invoices(conn):
+    """Adds the purchase_invoices table (printable purchase records, the
+    supplier-side counterpart to invoices)."""
     conn.executescript(
         """
         CREATE TABLE IF NOT EXISTS purchase_invoices (
@@ -1710,6 +1724,11 @@ def update_storage_settings(conn, user_id, data):
 
 
 def update_user_settings(conn, user_id, data):
+    """Save one or more settings key/value pairs for a user. Keys not in
+    the `allowed` whitelist raise instead of being silently dropped (bug
+    #14). theme/shop_name are mirrored onto the users table row itself
+    (denormalized for fast lookups elsewhere); everything else lives in
+    the generic user_settings key-value table."""
     allowed = {
         "partner1_name", "partner1_capital", "partner2_name", "partner2_capital",
         "cash_in_hand", "theme", "shop_name", "shop_address", "shop_phones", "shop_logo",
@@ -1810,6 +1829,12 @@ def verify_login(conn, username, password):
 
 
 def register_user(conn, username, password, email="", shop_name=""):
+    """Create a new shop-owner account: validates and hashes the password,
+    then seeds that user's starting settings/partners/expense accounts
+    (copying from the pre-multi-user legacy `settings` table if this is
+    the very first account ever created on this install) and marks the
+    opening setup wizard as pending (see DEFAULT_SETTINGS's
+    setup_completed docstring)."""
     username = username.strip()
     email = email.strip()
     shop_name = shop_name.strip() or DEFAULT_SETTINGS["shop_name"]
@@ -1943,6 +1968,10 @@ def _otp_rate_limit_clear(email: str) -> None:
 
 
 def request_password_reset(conn, email):
+    """Start the forgot-password flow: look up the account by email, and
+    either email a 6-digit OTP via that user's own configured Gmail SMTP,
+    or (if they haven't set that up) return the vendor's WhatsApp contact
+    as a fallback instead of failing outright."""
     email = email.strip().lower()
     if not email:
         raise ValueError("Email is required")
@@ -2006,6 +2035,11 @@ def request_password_reset(conn, email):
 
 
 def verify_otp_and_reset_password(conn, email, otp, new_password):
+    """Finish the forgot-password flow: checks the rate limit, then the
+    OTP itself (must match, be unused, and not expired), and if all three
+    pass, sets the new password and marks the token used. Every failure
+    path records a rate-limit attempt first, before revealing anything
+    about why it failed."""
     email = email.strip().lower()
     otp = (otp or "").strip()
     if not email or not otp:
@@ -2054,6 +2088,9 @@ def verify_otp_and_reset_password(conn, email, otp, new_password):
 
 
 def update_auth_credentials(conn, user_id, data):
+    """Settings-page account update: change username/password/shop name,
+    gated behind re-entering the CURRENT password first (checked before
+    any of the requested changes are applied)."""
     user = get_user(conn, user_id)
     if not user:
         raise ValueError("User not found")
@@ -2370,6 +2407,8 @@ def create_personal_asset(conn, user_id, data):
 
 
 def update_personal_asset(conn, user_id, asset_id, data):
+    """Partial update of one personal asset - only the fields present in
+    `data` are changed, everything else keeps its current value."""
     if not get_personal_asset(conn, user_id, asset_id):
         return None
     fields, values = [], []
@@ -2473,6 +2512,9 @@ def get_phone(conn, user_id, phone_id, include_details=False):
 
 
 def _build_phone_insert_values(conn, data, status=None):
+    """Turn a create_phone() payload into the positional value tuple for
+    the phones table INSERT - the one place that decides which fields
+    (sale_price, buyer info, etc.) only make sense once status is 'Sold'."""
     status = status or data.get("status", "Bought")
     if status not in PHONE_STATUSES:
         status = "Bought"
@@ -2512,6 +2554,10 @@ def _build_phone_insert_values(conn, data, status=None):
 
 
 def _save_phone_extras(conn, user_id, phone_id, data):
+    """Post-insert step for create_phone(): adds any per-phone expenses
+    supplied at creation time, and records each partner's investment
+    amount in this specific phone (upserted, so re-saving the same
+    partner/phone pair just updates the amount)."""
     expenses = data.get("expenses") or []
     for exp in expenses:
         if float(exp.get("amount") or 0) > 0:
@@ -2766,6 +2812,12 @@ def _reverse_phone_purchase_ledger(conn, user_id, phone_id):
 
 
 def _validate_phone_payments(conn, user_id, data, status):
+    """Reject a phone create/update before anything is written: negative
+    money fields, a payable/receivable that exceeds the purchase/sale
+    price, a bank payment with no bank selected, missing IMEI once status
+    is 'Sold', and udhar (receivable) without a buyer account chosen.
+    "borrow"/"opening" acquisition types skip the purchase-payment-method
+    checks entirely - see create_phone's acquisition_type handling for why."""
     if "purchase_price" in data and float(data.get("purchase_price") or 0) < 0:
         raise ValueError("Purchase price cannot be negative")
     if "payable_amount" in data and float(data.get("payable_amount") or 0) < 0:
@@ -2900,6 +2952,10 @@ def create_phone(conn, user_id, data):
 
 
 def create_phones_bulk(conn, user_id, data):
+    """Create `quantity` phones sharing the same model/price/type, each
+    with its own IMEI (and per-unit condition/box/battery/variant
+    overrides if given). Just loops create_phone() once per unit - each
+    phone still gets its own full purchase-ledger posting."""
     quantity = int(data.get("quantity") or 1)
     imeis = data.get("imeis") or []
     imei2s = data.get("imei2s") or []
@@ -3106,6 +3162,11 @@ def update_phone(conn, user_id, phone_id, data):
 
 
 def delete_phone(conn, user_id, phone_id):
+    """Hard-delete a phone and reverse everything linked to it (purchase
+    and sale ledger entries). Blocked outright if a sale/purchase invoice
+    was ever printed for it (see bug #18 below) - that's a paper trail
+    the owner needs to explicitly decide what to do with, not something
+    this should silently orphan."""
     if not get_phone(conn, user_id, phone_id):
         return
     # Bug #18: invoices.phone_id / purchase_invoices.phone_id have no FK
@@ -3216,6 +3277,9 @@ def bulk_mark_sold(conn, user_id, items, default_sale_price=None):
 
 
 def add_phone_expense(conn, user_id, phone_id, data):
+    """Record a cost against a specific phone (repair, accessory, etc.)
+    and post it as cash/bank going out, optionally also debiting an
+    expense-category account if one was picked."""
     phone = get_phone(conn, user_id, phone_id)
     if not phone:
         return None
@@ -3269,6 +3333,10 @@ def add_phone_expense(conn, user_id, phone_id, data):
 
 
 def update_phone_expense(conn, user_id, phone_id, expense_id, data):
+    """Edit a per-phone expense in place: reverses its old cash/bank/
+    account ledger entries and reposts fresh ones for the new amount/
+    date/account, rather than leaving the stale entries alongside new
+    ones."""
     phone = get_phone(conn, user_id, phone_id)
     if not phone:
         return None
@@ -3781,6 +3849,8 @@ def expense_summary(conn, user_id, start_date=None, end_date=None):
 
 
 def create_fixed_expense(conn, user_id, data):
+    """Record a recurring overhead cost (rent, salary) and post it as
+    cash/bank going out immediately."""
     amount = float(data["amount"])
     purpose = data["purpose"]
     cursor = conn.execute(
@@ -3860,6 +3930,10 @@ def get_bank(conn, user_id, bank_id):
 
 
 def create_bank(conn, user_id, data):
+    """Add a bank account, optionally seeding it with an opening balance
+    (posted as a plain credit bank_transaction dated at creation - not
+    synced to the cash book, since it's not cash moving, it's declaring
+    what's already sitting in that account)."""
     initial = None
     if "initial_balance" in data and data["initial_balance"] is not None and str(data["initial_balance"]).strip() != "":
         initial = float(data["initial_balance"])
@@ -3998,6 +4072,12 @@ def _mirror_bank_tx_to_cash_book(
 
 
 def create_bank_transaction(conn, bank_id, data, user_id=None, *, mirror_cash_book=False, force=False):
+    """Post a credit/debit directly against one bank account. With
+    mirror_cash_book=True (manual Deposit/Withdrawal from the UI), also
+    posts the matching Cash in Hand movement via
+    _mirror_bank_tx_to_cash_book - without it (e.g. a phone sale/purchase
+    paid by bank), this bank transaction is the only ledger entry, since
+    the caller is posting the cash-book side itself."""
     tx_type = data["transaction_type"]
     if tx_type not in BANK_TX_TYPES:
         raise ValueError("Invalid transaction type")
@@ -4033,6 +4113,9 @@ def create_bank_transaction(conn, bank_id, data, user_id=None, *, mirror_cash_bo
 
 
 def update_bank_transaction(conn, tx_id, data, user_id=None):
+    """Edit a bank transaction's type/amount/note, and if it has a mirrored
+    Cash in Hand entry (a manual Deposit/Withdrawal), keep that in sync
+    too rather than leaving it pointing at stale numbers."""
     existing = conn.execute(
         "SELECT * FROM bank_transactions WHERE id = ?", (tx_id,)
     ).fetchone()
@@ -4105,6 +4188,11 @@ def _cash_base_opening(conn, user_id) -> float:
 
 
 def _cash_book_running(conn, user_id):
+    """Every cash book entry for this user, oldest first, with a running
+    balance computed on top of the settings-configured opening cash
+    (only entries with payment_source='cash' move that balance - bank-
+    sourced entries appear in the list but don't affect it). Returned
+    newest-first for display."""
     rows = conn.execute(
         """
         SELECT cbe.*, a.name AS account_name, b.name AS bank_name
@@ -4160,6 +4248,10 @@ def create_cash_book_entry(conn, user_id, data):
 
 
 def update_cash_book_entry(conn, user_id, entry_id, data, *, _sync_linked=True):
+    """Edit a cash book entry's type/amount/note/date, and (unless
+    _sync_linked=False, used when a caller is about to overwrite the
+    linked rows itself) keep its mirrored bank transaction and/or account
+    entry in sync so all three sides of the same event never drift apart."""
     existing = conn.execute(
         "SELECT * FROM cash_book_entries WHERE id = ? AND user_id = ?",
         (entry_id, user_id),
@@ -4222,6 +4314,12 @@ def delete_cash_book_entry(conn, user_id, entry_id):
 
 
 def cash_book_daily_summary(conn, user_id, start_date=None, end_date=None):
+    """Day Book report: one row per calendar day with cash in/out,
+    bank in/out, and a running opening/closing cash balance carried
+    forward day to day from the settings-configured starting balance.
+    Grouped over the whole history first, then optionally sliced to a
+    date range, so a day's opening balance is always correct even when
+    only viewing a later window."""
     settings_opening = _cash_base_opening(conn, user_id)
     rows = conn.execute(
         """
@@ -4446,6 +4544,8 @@ def complete_setup(conn, user_id):
 
 
 def compute_monthly_metrics(conn, user_id):
+    """Overview page's "this month" tile: units sold, profit, margin, and
+    top-selling model for the current calendar month."""
     rows = conn.execute(
         """
         SELECT * FROM phones
@@ -4566,6 +4666,9 @@ def create_account(conn, user_id, data):
 
 
 def update_account(conn, user_id, account_id, data):
+    """Edit an account's name/contact/expense-category flag - never
+    touches its balance, which is always derived from account_entries,
+    not stored on the row itself."""
     existing = conn.execute(
         "SELECT id FROM accounts WHERE id = ? AND user_id = ?",
         (account_id, user_id),
@@ -4609,6 +4712,10 @@ def _account_still_referenced(conn, account_id):
 
 
 def delete_account(conn, user_id, account_id):
+    """Delete an account and every entry in its statement (cascading
+    through cash book/bank links too), but only once
+    _account_still_referenced confirms nothing else (a phone, expense,
+    return, or journal voucher) still points at it."""
     if not get_account(conn, user_id, account_id):
         return
     still_used = _account_still_referenced(conn, account_id)
@@ -4634,6 +4741,9 @@ def delete_account(conn, user_id, account_id):
 
 
 def build_statement(conn, user_id, account_id):
+    """One account's full khata statement: every entry oldest-first with a
+    running balance computed alongside it, then reversed to display
+    newest-first."""
     account = get_account(conn, user_id, account_id)
     if not account:
         return None
@@ -4663,6 +4773,11 @@ def build_statement(conn, user_id, account_id):
 
 
 def create_entry(conn, account_id, data, user_id=None):
+    """Post a credit/debit against a khata account. A debit (money coming
+    in) or a credit on an expense-category account always requires a real
+    cash/bank payment method and syncs the cash book; a plain credit
+    (e.g. billing new udhar) only syncs cash/bank if the caller explicitly
+    picked one, since billing debt by itself doesn't move any money."""
     entry_type = data["entry_type"]
     if entry_type not in ENTRY_TYPES:
         raise ValueError("Invalid entry type")
@@ -4721,6 +4836,11 @@ def _journal_voucher_for_entry(conn, entry_id):
 
 
 def update_entry(conn, entry_id, data, user_id=None):
+    """Edit a standalone account entry's type/amount/note, keeping its
+    mirrored cash book entry (and that entry's own mirrored bank
+    transaction, if any) in sync. Refuses if this entry is actually one
+    leg of a journal voucher - those must be edited from the Journal page
+    so both legs move together."""
     existing = conn.execute(
         "SELECT * FROM account_entries WHERE id = ?", (entry_id,)
     ).fetchone()
@@ -4781,6 +4901,11 @@ def update_entry(conn, entry_id, data, user_id=None):
 
 
 def delete_entry(conn, entry_id, user_id=None):
+    """Delete a standalone account entry and reverse whatever it's linked
+    to (cash book/bank). Refuses if it's one leg of a journal voucher -
+    same reasoning as update_entry above. Looks up the owning user_id
+    itself if not given, so callers that only have the entry id can still
+    call this safely."""
     voucher_id = _journal_voucher_for_entry(conn, entry_id)
     if voucher_id is not None:
         raise ValueError(
@@ -4886,6 +5011,11 @@ def list_journal_vouchers(conn, user_id):
 
 
 def create_journal_voucher(conn, user_id, data):
+    """Move a debt between two khata accounts with no cash/bank involved
+    (a hawala-style settlement) - posts one debit entry and one credit
+    entry, both for the same amount, and links them together on the
+    voucher row so they're always edited/deleted as a pair (see
+    update_entry/delete_entry's journal-voucher guard above)."""
     amount = float(data["amount"])
     if amount <= 0:
         raise ValueError("Amount must be greater than zero")
@@ -5072,6 +5202,9 @@ def export_all_data(conn, user_id):
 # --- Today dashboard ---
 
 def compute_today_summary(conn, user_id):
+    """Today page's numbers: phones sold/bought today (localtime, not
+    UTC - see the date() localtime conversions below), today's revenue/
+    profit/purchase spend, and today's cash in/out."""
     sold = conn.execute(
         """
         SELECT * FROM phones
@@ -5129,6 +5262,11 @@ def compute_today_summary(conn, user_id):
 # --- Month report ---
 
 def compute_month_report(conn, user_id, year_month=None, start_date=None, end_date=None):
+    """Month Report page: sales/profit/udhar/payables for one calendar
+    month (year_month, defaulting to the current month) or an explicit
+    custom start_date..end_date range - used for the printable monthly
+    report, distinct from the newer Monthly Closing summary below which
+    adds purchases, expense breakdown, and partner shares."""
     if start_date and end_date:
         sold = conn.execute(
             """
@@ -5188,6 +5326,12 @@ def compute_month_report(conn, user_id, year_month=None, start_date=None, end_da
 # from the underlying ledger.
 
 def compute_monthly_closing_summary(conn, user_id, year_month=None):
+    """Monthly Closing page: sales, purchases (excluding opening stock -
+    see the acquisition_type filter below), gross/net profit, udhar given
+    vs recovered, an expense breakdown, and a capital-proportional
+    partner profit split, all for one calendar month (defaulting to the
+    last completed month). Purely a read-only summary/reporting view -
+    computes everything fresh each call, nothing here writes anything."""
     if not year_month:
         # Default to the LAST COMPLETED month, not the current (still in
         # progress, partial) one.

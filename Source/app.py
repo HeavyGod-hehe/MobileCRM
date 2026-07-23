@@ -240,6 +240,11 @@ recent backup file (Settings &rarr; Storage &amp; Backups, or find the
 
 @app.before_request
 def ensure_db():
+    """before_request hook: makes sure the database is migrated and ready
+    before any route runs, serialized behind _DB_INIT_LOCK so concurrent
+    first-launch requests can't collide mid-migration (see the lock
+    comment below), and caches a real schema error as permanent (while
+    treating a transient lock as a "retry me" 503, not a crash)."""
     global _DB_READY, _DB_ERROR
     if _DB_ERROR:
         return _DB_ERROR_HTML.format(detail=_DB_ERROR, db_path=db.DB_PATH), 500
@@ -598,6 +603,10 @@ def get_shop_settings_api():
 
 @app.route("/api/settings/shop", methods=["PUT"])
 def update_shop_settings_api():
+    """Settings -> Shop Details: name/address/phones/WhatsApp, plus (if
+    given) Cash in Hand - validated as a non-negative number before
+    saving, since this is the one settings field that seeds a real money
+    balance rather than just display text."""
     user_id = _current_user_id()
     data = request.get_json(force=True)
     payload = {
@@ -970,6 +979,11 @@ def get_phone_api(phone_id):
 
 @app.route("/api/phones", methods=["POST"])
 def create_phone():
+    """POST /api/phones: validates the request (required fields, type,
+    status, quantity), then delegates to db.create_phones_bulk() for
+    quantity > 1 or db.create_phone() for a single unit - all the actual
+    ledger-posting logic lives in database.py, this is just HTTP
+    plumbing and input validation."""
     user_id = _current_user_id()
     data = request.get_json(force=True)
     required = ["model", "type", "purchase_price"]
@@ -1611,6 +1625,11 @@ def list_bank_transactions_api(bank_id):
 
 @app.route("/api/banks/<int:bank_id>/transactions", methods=["POST"])
 def create_bank_transaction_api(bank_id):
+    """POST a manual credit/debit on a bank account: validates the amount
+    and transaction_type, confirms the bank belongs to this user, then
+    creates it via db.create_bank_transaction() with mirror_cash_book=True
+    so it also shows up in the cash book. `force` re-submits past a
+    negative-balance warning the user already confirmed."""
     user_id = _current_user_id()
     data = request.get_json(force=True)
     amount, err = _require_amount(data)
@@ -1877,6 +1896,10 @@ def create_entry_api(account_id):
 
 @app.route("/api/accounts/<int:account_id>/entries/<int:entry_id>", methods=["PUT"])
 def update_entry_api(account_id, entry_id):
+    """PUT an edit to one account_entries row: validates entry_type/amount
+    if present, confirms the account and entry both belong to this user
+    (and that the entry belongs to that account) before delegating to
+    db.update_entry(), which recomputes the running balance."""
     user_id = _current_user_id()
     data = request.get_json(force=True)
     if "entry_type" in data:
