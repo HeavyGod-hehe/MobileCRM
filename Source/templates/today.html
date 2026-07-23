@@ -14,6 +14,11 @@
   </div>
 </div>
 
+<div id="gap-warning-banner" class="update-banner hidden mb-4 no-print" role="status">
+  <svg class="w-5 h-5 shrink-0 mt-0.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
+  <p class="flex-1">Hisaab mein farq: <strong id="gap-warning-amount"></strong> — <button type="button" id="gap-details-link" class="underline font-semibold">Details</button></p>
+</div>
+
 <section class="kpi-grid stagger mb-6">
   <div class="kpi-card">
     <p class="kpi-label">Cash in Hand</p>
@@ -99,6 +104,44 @@
     </section>
   </aside>
 </div>
+
+<!-- Gap Details Modal -->
+<div id="gap-details-overlay" class="modal-overlay"></div>
+<div id="gap-details-modal" class="modal-wrap">
+  <div class="modal-panel">
+    <div class="p-6 border-b border-white/8 flex items-center justify-between">
+      <h3 class="text-lg font-semibold text-white">Hisaab mein farq — Details</h3>
+      <button type="button" onclick="closeModal('gap-details-overlay','gap-details-modal')" class="btn btn-ghost btn-icon text-slate-400">
+        <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/></svg>
+      </button>
+    </div>
+    <div class="p-6 split-view">
+      <div>
+        <h4 class="text-sm font-semibold text-blue-300 mb-3">Expected Liquid (books)</h4>
+        <div class="space-y-2 text-sm">
+          <div class="flex justify-between"><span class="text-slate-400">Investment</span><span id="gap-d-investment" class="font-semibold">—</span></div>
+          <div class="flex justify-between"><span class="text-slate-400">Profit</span><span id="gap-d-profit" class="font-semibold">—</span></div>
+          <div class="flex justify-between"><span class="text-slate-400">Udhar (−)</span><span id="gap-d-udhar" class="font-semibold text-red-400">—</span></div>
+          <div class="flex justify-between"><span class="text-slate-400">Stock (−)</span><span id="gap-d-stock" class="font-semibold text-red-400">—</span></div>
+          <div class="flex justify-between"><span class="text-slate-400">Payables</span><span id="gap-d-payables" class="font-semibold">—</span></div>
+          <div class="flex justify-between border-t border-white/8 pt-2 mt-2"><span class="text-slate-300 font-semibold">Expected Liquid</span><span id="gap-d-expected" class="font-bold text-blue-300">—</span></div>
+        </div>
+      </div>
+      <div>
+        <h4 class="text-sm font-semibold text-amber-300 mb-3">Actual Liquid (real money)</h4>
+        <div class="space-y-2 text-sm">
+          <div class="flex justify-between"><span class="text-slate-400">Cash in Hand</span><span id="gap-d-cash" class="font-semibold">—</span></div>
+          <div class="flex justify-between"><span class="text-slate-400">Bank Balance</span><span id="gap-d-bank" class="font-semibold">—</span></div>
+          <div class="flex justify-between border-t border-white/8 pt-2 mt-2"><span class="text-slate-300 font-semibold">Actual Liquid</span><span id="gap-d-actual" class="font-bold text-amber-300">—</span></div>
+        </div>
+        <div class="mt-6 pt-4 border-t border-white/8">
+          <p class="text-xs text-slate-500 uppercase tracking-wide font-medium mb-1">Gap</p>
+          <p id="gap-d-gap" class="text-2xl font-bold text-red-400">—</p>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
 {% endblock %}
 
 {% block scripts %}
@@ -111,8 +154,6 @@
     if ((overviewSummary.total_udhar || 0) > 0) items.push({ tone: 'blue', text: `${fmt(overviewSummary.total_udhar)} udhar due from customers` });
     if ((overviewSummary.total_in_cash || 0) < 0) items.push({ tone: 'red', text: `Cash in hand is negative (${fmt(overviewSummary.total_in_cash)})` });
     if ((overviewSummary.total_in_bank || 0) < 0) items.push({ tone: 'red', text: `Bank balance is negative (${fmt(overviewSummary.total_in_bank)})` });
-    const gap = overviewSummary.liquidity_gap || 0;
-    if (Math.abs(gap) > 1) items.push({ tone: 'amber', text: `Books vs. actual money gap: ${fmt(gap)} — see Overview` });
     if (!items.length) items.push({ tone: 'emerald', text: 'No alerts — books look steady' });
 
     list.innerHTML = items.map(item => `
@@ -132,6 +173,7 @@
     document.getElementById('today-date-label').textContent = data.date_label || 'Today';
     document.getElementById('today-cash-hand').textContent = fmt(summary.total_in_cash);
     document.getElementById('today-bank').textContent = fmt(summary.total_in_bank);
+    renderGapBanner(summary);
     document.getElementById('today-revenue').textContent = fmt(data.sales_revenue);
     document.getElementById('today-profit').textContent = fmt(data.sales_profit);
     document.getElementById('today-bought-spend').textContent =

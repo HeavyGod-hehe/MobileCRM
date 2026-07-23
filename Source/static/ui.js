@@ -58,6 +58,7 @@ const MODAL_REGISTRY = [
   ['imei-scanner-overlay', 'imei-scanner-modal'],
   ['pi-scanner-overlay', 'pi-scanner-modal'],
   ['asset-overlay', 'asset-modal'],
+  ['gap-details-overlay', 'gap-details-modal'],
 ];
 
 function toast(message, type = 'success', duration = 2800) {
@@ -206,6 +207,52 @@ function renderBarChart(canvas, items, opts = {}) {
   });
 }
 window.renderBarChart = renderBarChart;
+
+// Shared by Overview and Today: shows the "Hisaab mein farq" warning banner
+// only when |liquidity_gap| exceeds a small threshold (ignores rounding
+// noise). When the gap is ~0, nothing about Expected/Gap is shown anywhere
+// on either page - see compute_dashboard's docstring in database.py for
+// why the underlying computation still always runs. No-ops on any page
+// that doesn't have the banner markup (only Overview/Today do).
+const GAP_WARNING_THRESHOLD = 100;
+let _lastGapSummary = null;
+
+function renderGapBanner(summary) {
+  const banner = document.getElementById('gap-warning-banner');
+  if (!banner) return;
+  _lastGapSummary = summary;
+  const gap = summary.liquidity_gap || 0;
+  const isSignificant = Math.abs(gap) > GAP_WARNING_THRESHOLD;
+  banner.classList.toggle('hidden', !isSignificant);
+  if (!isSignificant) return;
+
+  const amountEl = document.getElementById('gap-warning-amount');
+  if (amountEl) amountEl.textContent = fmt(Math.abs(gap));
+
+  const detailsLink = document.getElementById('gap-details-link');
+  if (detailsLink && !detailsLink.dataset.wired) {
+    detailsLink.dataset.wired = '1';
+    detailsLink.addEventListener('click', () => showGapDetails(_lastGapSummary));
+  }
+}
+
+function showGapDetails(summary) {
+  if (!summary || !document.getElementById('gap-details-modal')) return;
+  const set = (id, val) => { const el = document.getElementById(id); if (el) el.textContent = fmt(val); };
+  set('gap-d-investment', summary.total_investment);
+  set('gap-d-profit', summary.total_net_profit);
+  set('gap-d-udhar', summary.total_udhar);
+  set('gap-d-stock', summary.active_stock_worth);
+  set('gap-d-payables', summary.total_payables);
+  set('gap-d-expected', summary.expected_liquid);
+  set('gap-d-cash', summary.total_in_cash);
+  set('gap-d-bank', summary.total_in_bank);
+  set('gap-d-actual', summary.actual_liquid);
+  set('gap-d-gap', summary.liquidity_gap);
+  openModal('gap-details-overlay', 'gap-details-modal');
+}
+window.renderGapBanner = renderGapBanner;
+window.showGapDetails = showGapDetails;
 
 // Switch to `theme` ('light' or 'dark'): sets data-theme on <html> (app.css
 // keys off it) and remembers the choice in localStorage so it survives a

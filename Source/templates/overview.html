@@ -14,6 +14,11 @@
   </div>
 </div>
 
+<div id="gap-warning-banner" class="update-banner hidden mb-4 no-print" role="status">
+  <svg class="w-5 h-5 shrink-0 mt-0.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
+  <p class="flex-1">Hisaab mein farq: <strong id="gap-warning-amount"></strong> — <button type="button" id="gap-details-link" class="underline font-semibold">Details</button></p>
+</div>
+
 <section class="mb-8 stagger">
   <h2 class="text-xs font-semibold uppercase tracking-wider text-slate-500 mb-4">Financial Reconciliation</h2>
 
@@ -48,24 +53,10 @@
     </div>
   </div>
 
-  <!-- Actual vs Expected Liquid reconciliation -->
-  <div class="kpi-grid mb-4" style="grid-template-columns: repeat(2, minmax(0, 1fr));">
-    <div class="kpi-card">
-      <p class="kpi-label">Actual Liquid</p>
-      <p id="actual-liquid" class="kpi-value num-animate" data-value="0">—</p>
-      <p class="panel-sub mb-0 mt-2">Cash + Bank — what's really there</p>
-    </div>
-    <div class="kpi-card">
-      <p class="kpi-label">Expected Liquid</p>
-      <p id="expected-liquid" class="kpi-value num-animate" data-value="0">—</p>
-      <p class="panel-sub mb-0 mt-2">Investment + Profit − Udhar − Stock + Payables</p>
-    </div>
-  </div>
-
-  <div id="liquidity-gap-card" class="kpi-card mb-4">
-    <p class="kpi-label">Gap (Expected − Actual)</p>
-    <p id="liquidity-gap" class="kpi-value num-animate" style="font-size:2.25rem" data-value="0">—</p>
-    <p id="liquidity-gap-note" class="panel-sub mb-0 mt-2">Books and drawer/bank agree</p>
+  <!-- Total Money -->
+  <div class="kpi-card mb-4">
+    <p class="kpi-label">Total Money</p>
+    <p id="actual-liquid" class="kpi-value num-animate" style="font-size:2.25rem" data-value="0">—</p>
   </div>
 
   <div class="panel-card mb-4">
@@ -261,6 +252,44 @@
     </div>
   </div>
 </div>
+
+<!-- Gap Details Modal -->
+<div id="gap-details-overlay" class="modal-overlay"></div>
+<div id="gap-details-modal" class="modal-wrap">
+  <div class="modal-panel">
+    <div class="p-6 border-b border-white/8 flex items-center justify-between">
+      <h3 class="text-lg font-semibold text-white">Hisaab mein farq — Details</h3>
+      <button type="button" onclick="closeModal('gap-details-overlay','gap-details-modal')" class="btn btn-ghost btn-icon text-slate-400">
+        <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/></svg>
+      </button>
+    </div>
+    <div class="p-6 split-view">
+      <div>
+        <h4 class="text-sm font-semibold text-blue-300 mb-3">Expected Liquid (books)</h4>
+        <div class="space-y-2 text-sm">
+          <div class="flex justify-between"><span class="text-slate-400">Investment</span><span id="gap-d-investment" class="font-semibold">—</span></div>
+          <div class="flex justify-between"><span class="text-slate-400">Profit</span><span id="gap-d-profit" class="font-semibold">—</span></div>
+          <div class="flex justify-between"><span class="text-slate-400">Udhar (−)</span><span id="gap-d-udhar" class="font-semibold text-red-400">—</span></div>
+          <div class="flex justify-between"><span class="text-slate-400">Stock (−)</span><span id="gap-d-stock" class="font-semibold text-red-400">—</span></div>
+          <div class="flex justify-between"><span class="text-slate-400">Payables</span><span id="gap-d-payables" class="font-semibold">—</span></div>
+          <div class="flex justify-between border-t border-white/8 pt-2 mt-2"><span class="text-slate-300 font-semibold">Expected Liquid</span><span id="gap-d-expected" class="font-bold text-blue-300">—</span></div>
+        </div>
+      </div>
+      <div>
+        <h4 class="text-sm font-semibold text-amber-300 mb-3">Actual Liquid (real money)</h4>
+        <div class="space-y-2 text-sm">
+          <div class="flex justify-between"><span class="text-slate-400">Cash in Hand</span><span id="gap-d-cash" class="font-semibold">—</span></div>
+          <div class="flex justify-between"><span class="text-slate-400">Bank Balance</span><span id="gap-d-bank" class="font-semibold">—</span></div>
+          <div class="flex justify-between border-t border-white/8 pt-2 mt-2"><span class="text-slate-300 font-semibold">Actual Liquid</span><span id="gap-d-actual" class="font-bold text-amber-300">—</span></div>
+        </div>
+        <div class="mt-6 pt-4 border-t border-white/8">
+          <p class="text-xs text-slate-500 uppercase tracking-wide font-medium mb-1">Gap</p>
+          <p id="gap-d-gap" class="text-2xl font-bold text-red-400">—</p>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
 {% endblock %}
 
 {% block scripts %}
@@ -278,22 +307,7 @@
     animateValue(document.getElementById('total-in-bank'), s.total_in_bank, fmt, 800);
     animateValue(document.getElementById('total-in-cash'), s.total_in_cash, fmt, 800);
     animateValue(document.getElementById('actual-liquid'), s.actual_liquid, fmt, 800);
-    animateValue(document.getElementById('expected-liquid'), s.expected_liquid, fmt, 800);
-    animateValue(document.getElementById('liquidity-gap'), s.liquidity_gap, fmt, 800);
-    const gapCard = document.getElementById('liquidity-gap-card');
-    const gapNote = document.getElementById('liquidity-gap-note');
-    const gapValueEl = document.getElementById('liquidity-gap');
-    const gap = s.liquidity_gap || 0;
-    const gapIsSignificant = Math.abs(gap) > 1;
-    gapCard.classList.toggle('kpi-card-warn', gapIsSignificant);
-    gapValueEl.classList.toggle('text-amber-500', gapIsSignificant);
-    if (gapIsSignificant) {
-      gapNote.textContent = gap > 0
-        ? 'Books expect more than the drawer/bank actually have — check for unrecorded opening stock or cash.'
-        : 'Drawer/bank have more than the books expect — check for unrecorded income.';
-    } else {
-      gapNote.textContent = "Books and drawer/bank agree";
-    }
+    renderGapBanner(s);
     animateValue(document.getElementById('total-investment'), s.total_investment, fmt);
     animateValue(document.getElementById('total-profit'), s.total_net_profit, fmt);
     document.getElementById('available-profit').textContent = fmt(s.available_profit);
