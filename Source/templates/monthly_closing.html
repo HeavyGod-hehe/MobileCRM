@@ -1,0 +1,139 @@
+{% extends "base.html" %}
+{% set active = 'monthly_closing' %}
+{% block title %}Monthly Closing — Welcome, {{ current_username }}{% endblock %}
+
+{% block content %}
+<div class="mb-6 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
+  <div>
+    <h1 class="text-2xl font-bold tracking-tight">Monthly Closing</h1>
+    <p class="text-slate-400 text-sm mt-1">Read-only summary — nothing here locks the month, past months stay fully editable.</p>
+  </div>
+  <div class="flex items-center gap-2 no-print">
+    <input type="month" id="closing-month-picker" class="input-field w-auto">
+  </div>
+</div>
+
+<div id="closing-loading" class="text-slate-500 text-sm mb-4">Loading…</div>
+
+<div id="closing-content" class="hidden">
+  <h2 id="closing-month-label" class="text-xs font-semibold uppercase tracking-wider text-slate-500 mb-4">—</h2>
+
+  <div class="grid grid-cols-2 lg:grid-cols-3 gap-3 mb-6 stagger">
+    <div class="stat-card p-4">
+      <p class="text-xs text-slate-500 uppercase tracking-wide font-medium">Total Sales</p>
+      <p id="closing-sales-amount" class="text-xl font-bold mt-2 text-emerald-400">—</p>
+      <p id="closing-sales-count" class="text-xs text-slate-600 mt-1">—</p>
+    </div>
+    <div class="stat-card p-4">
+      <p class="text-xs text-slate-500 uppercase tracking-wide font-medium">Total Purchases</p>
+      <p id="closing-purchases-amount" class="text-xl font-bold mt-2 text-blue-400">—</p>
+      <p id="closing-purchases-count" class="text-xs text-slate-600 mt-1">—</p>
+    </div>
+    <div class="stat-card p-4">
+      <p class="text-xs text-slate-500 uppercase tracking-wide font-medium">Gross Profit</p>
+      <p id="closing-gross-profit" class="text-xl font-bold mt-2 text-emerald-400">—</p>
+      <p class="text-xs text-slate-600 mt-1">Sale − purchase − per-phone expenses</p>
+    </div>
+    <div class="stat-card p-4">
+      <p class="text-xs text-slate-500 uppercase tracking-wide font-medium">Overhead Expenses</p>
+      <p id="closing-overhead" class="text-xl font-bold mt-2 text-red-400">—</p>
+      <p class="text-xs text-slate-600 mt-1">Fixed + expense-category accounts</p>
+    </div>
+    <div class="stat-card p-4 border-emerald-500/30">
+      <p class="text-xs text-slate-500 uppercase tracking-wide font-medium">Net Profit</p>
+      <p id="closing-net-profit" class="text-xl font-bold mt-2 text-emerald-400">—</p>
+      <p class="text-xs text-slate-600 mt-1">Gross profit − overhead expenses</p>
+    </div>
+  </div>
+
+  <div class="kpi-grid mb-6" style="grid-template-columns: repeat(2, minmax(0, 1fr));">
+    <div class="kpi-card">
+      <p class="kpi-label">Udhar Given</p>
+      <p id="closing-udhar-given" class="kpi-value num-animate" data-value="0">—</p>
+    </div>
+    <div class="kpi-card">
+      <p class="kpi-label">Udhar Recovered</p>
+      <p id="closing-udhar-recovered" class="kpi-value num-animate" data-value="0">—</p>
+    </div>
+  </div>
+
+  <div class="grid grid-cols-1 lg:grid-cols-2 gap-4">
+    <div class="panel-card">
+      <h2 class="panel-title">Expense Breakdown</h2>
+      <p class="panel-sub">Top categories this month</p>
+      <div id="closing-expense-list" class="space-y-2"></div>
+      <div id="closing-expense-empty" class="hidden empty-state">No expenses recorded this month</div>
+    </div>
+    <div class="panel-card">
+      <h2 class="panel-title">Partner-wise Profit Share</h2>
+      <p class="panel-sub">Capital-proportional split of this month's net profit</p>
+      <div id="closing-partner-list" class="space-y-2"></div>
+      <div id="closing-partner-empty" class="hidden empty-state">No partners set up yet</div>
+    </div>
+  </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+  function defaultClosingMonth() {
+    const now = new Date();
+    const d = new Date(now.getFullYear(), now.getMonth(), 0); // last day of previous month
+    return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
+  }
+
+  function renderExpenseBreakdown(rows) {
+    const list = document.getElementById('closing-expense-list');
+    const empty = document.getElementById('closing-expense-empty');
+    empty.classList.toggle('hidden', rows.length > 0);
+    list.innerHTML = rows.map(r => `
+      <div class="list-item-row">
+        <p class="text-sm text-slate-300">${esc(r.category)}</p>
+        <p class="font-semibold ${r.amount < 0 ? 'text-emerald-400' : 'text-red-400'}">${fmt(r.amount)}</p>
+      </div>`).join('');
+  }
+
+  function renderPartnerShares(rows) {
+    const list = document.getElementById('closing-partner-list');
+    const empty = document.getElementById('closing-partner-empty');
+    empty.classList.toggle('hidden', rows.length > 0);
+    list.innerHTML = rows.map(r => `
+      <div class="list-item-row">
+        <div>
+          <p class="font-semibold text-white">${esc(r.name)}</p>
+          <p class="text-xs text-slate-500">${r.share_pct}% of capital</p>
+        </div>
+        <p class="font-semibold text-emerald-400">${fmt(r.profit_share)}</p>
+      </div>`).join('');
+  }
+
+  async function loadMonthlyClosing() {
+    const month = document.getElementById('closing-month-picker').value;
+    document.getElementById('closing-loading').classList.remove('hidden');
+    document.getElementById('closing-content').classList.add('hidden');
+
+    const data = await apiFetch(`/api/monthly-closing?month=${encodeURIComponent(month)}`);
+
+    document.getElementById('closing-month-label').textContent = data.month_label;
+    document.getElementById('closing-sales-amount').textContent = fmt(data.total_sales_amount);
+    document.getElementById('closing-sales-count').textContent = `${data.units_sold} unit${data.units_sold === 1 ? '' : 's'}`;
+    document.getElementById('closing-purchases-amount').textContent = fmt(data.total_purchases_amount);
+    document.getElementById('closing-purchases-count').textContent = `${data.units_purchased} unit${data.units_purchased === 1 ? '' : 's'}`;
+    document.getElementById('closing-gross-profit').textContent = fmt(data.gross_profit);
+    document.getElementById('closing-overhead').textContent = fmt(data.overhead_expenses);
+    document.getElementById('closing-net-profit').textContent = fmt(data.net_profit);
+    document.getElementById('closing-udhar-given').textContent = fmt(data.udhar_given);
+    document.getElementById('closing-udhar-recovered').textContent = fmt(data.udhar_recovered);
+
+    renderExpenseBreakdown(data.expense_breakdown || []);
+    renderPartnerShares(data.partner_shares || []);
+
+    document.getElementById('closing-loading').classList.add('hidden');
+    document.getElementById('closing-content').classList.remove('hidden');
+  }
+
+  document.getElementById('closing-month-picker').value = defaultClosingMonth();
+  document.getElementById('closing-month-picker').addEventListener('change', loadMonthlyClosing);
+  loadMonthlyClosing();
+</script>
+{% endblock %}

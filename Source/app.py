@@ -548,6 +548,11 @@ def personal_assets_page():
     return render_template("personal_assets.html")
 
 
+@app.route("/monthly-closing")
+def monthly_closing_page():
+    return render_template("monthly_closing.html")
+
+
 @app.route("/cashbook")
 def cashbook_page():
     return render_template("cashbook.html")
@@ -673,6 +678,14 @@ def month_report_api():
     end_date = request.args.get("to")
     with db.db_session() as conn:
         return jsonify(db.compute_month_report(conn, user_id, year_month, start_date, end_date))
+
+
+@app.route("/api/monthly-closing")
+def monthly_closing_api():
+    user_id = _current_user_id()
+    year_month = request.args.get("month")
+    with db.db_session() as conn:
+        return jsonify(db.compute_monthly_closing_summary(conn, user_id, year_month))
 
 
 @app.route("/api/settings/email", methods=["GET"])

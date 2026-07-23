@@ -2791,6 +2791,99 @@ def main():
     run_test("Existing users with no setup_completed row are grandfathered past the wizard",
               test_legacy_users_never_forced_into_wizard)
 
+    # --- Monthly Closing (phase 3) ---
+
+    def test_monthly_closing_summary_matches_hand_computed():
+        with db.db_session() as conn:
+            u = db.register_user(conn, "monthly_closing_user", "pass1234", "", "Monthly Closing Shop")
+            mc_uid = u["user_id"]
+            db.update_user_settings(conn, mc_uid, {"cash_in_hand": "500000"})
+
+            db.create_partner(conn, mc_uid, {"name": "P1", "capital": 60000})
+            db.create_partner(conn, mc_uid, {"name": "P2", "capital": 40000})
+
+            # Phone A: profit 70000 - 50000 = 20000, sold in March 2026.
+            db.create_phone(conn, mc_uid, {
+                "model": "MC Phone A", "type": "PTA", "purchase_price": 50000,
+                "status": "Sold", "sale_price": 70000,
+                "purchase_payment_method": "cash", "sale_payment_method": "cash",
+                "imei": "300030003000001",
+                "purchase_date": "2026-03-05", "sold_at": "2026-03-10 12:00:00",
+                "force": True,
+            })
+
+            # Phone B: purchase 30000, sale 45000, phone expense 2000 -> profit 13000.
+            b = db.create_phone(conn, mc_uid, {
+                "model": "MC Phone B", "type": "PTA", "purchase_price": 30000,
+                "status": "Sold", "sale_price": 45000,
+                "purchase_payment_method": "cash", "sale_payment_method": "cash",
+                "imei": "300030003000002",
+                "purchase_date": "2026-03-01", "sold_at": "2026-03-15 12:00:00",
+                "force": True,
+            })
+            db.add_phone_expense(conn, mc_uid, b["id"], {
+                "amount": 2000, "description": "Screen repair",
+                "expense_date": "2026-03-12", "force": True,
+            })
+
+            # Opening stock dated today (not March) must never count as a
+            # March purchase - confirms the acquisition_type='opening'
+            # exclusion in compute_monthly_closing_summary.
+            db.add_opening_stock(conn, mc_uid, [
+                {"model": "MC Opening Phone", "type": "PTA", "purchase_price": 99999},
+            ])
+
+            # Fixed expense 5000 in March.
+            fx = db.create_fixed_expense(conn, mc_uid, {"purpose": "Rent", "amount": 5000, "force": True})
+            conn.execute(
+                "UPDATE fixed_expenses SET created_at = '2026-03-01 00:00:00' WHERE id = ?", (fx["id"],)
+            )
+
+            # Expense-category account: credit 3000 in March.
+            food = db.create_account(conn, mc_uid, {"name": "MC Food", "is_expense_category": True})
+            db.create_entry(conn, food["id"], {
+                "entry_type": "credit", "amount": 3000, "note": "Lunch",
+                "payment_source": "cash", "force": True,
+            }, user_id=mc_uid)
+            conn.execute(
+                "UPDATE account_entries SET created_at = '2026-03-20 00:00:00' WHERE account_id = ?",
+                (food["id"],),
+            )
+
+            # Udhar: customer billed 10000 (credit, no cash moves), collected
+            # 4000 (debit, cash in) - both dated in March.
+            cust = db.create_account(conn, mc_uid, {"name": "MC Customer"})
+            db.create_entry(conn, cust["id"], {"entry_type": "credit", "amount": 10000, "note": "Udhar"}, user_id=mc_uid)
+            db.create_entry(conn, cust["id"], {
+                "entry_type": "debit", "amount": 4000, "note": "Wasool",
+                "payment_source": "cash", "force": True,
+            }, user_id=mc_uid)
+            conn.execute(
+                "UPDATE account_entries SET created_at = '2026-03-08 00:00:00' WHERE account_id = ?",
+                (cust["id"],),
+            )
+
+            summary = db.compute_monthly_closing_summary(conn, mc_uid, "2026-03")
+
+            assert summary["units_sold"] == 2
+            assert summary["total_sales_amount"] == 115000, summary["total_sales_amount"]
+            assert summary["units_purchased"] == 2, "opening stock must not count as a purchase"
+            assert summary["total_purchases_amount"] == 80000, summary["total_purchases_amount"]
+            assert summary["gross_profit"] == 33000, summary["gross_profit"]
+            assert summary["overhead_expenses"] == 8000, summary["overhead_expenses"]
+            assert summary["net_profit"] == 25000, summary["net_profit"]
+            assert summary["udhar_given"] == 10000, summary["udhar_given"]
+            assert summary["udhar_recovered"] == 4000, summary["udhar_recovered"]
+
+            shares = {s["name"]: s for s in summary["partner_shares"]}
+            assert shares["P1"]["share_pct"] == 60.0
+            assert shares["P2"]["share_pct"] == 40.0
+            assert shares["P1"]["profit_share"] == 15000, shares["P1"]["profit_share"]
+            assert shares["P2"]["profit_share"] == 10000, shares["P2"]["profit_share"]
+
+    run_test("Month summary of a seeded test month matches hand-computed numbers",
+              test_monthly_closing_summary_matches_hand_computed)
+
     # --- Stress load ---
     STRESS_PHONES = 200
     STRESS_BULK = 50

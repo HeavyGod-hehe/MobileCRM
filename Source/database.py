@@ -5190,6 +5190,131 @@ def compute_month_report(conn, user_id, year_month=None, start_date=None, end_da
     }
 
 
+# --- Monthly Closing ---
+# A read-only summary + explicit money-disposition tool, NOT a period lock -
+# past months stay fully editable. Every number here is computed live from
+# phones/account_entries/expense_summary each call, exactly like
+# compute_dashboard - there is no stored monthly snapshot that could drift
+# from the underlying ledger.
+
+def compute_monthly_closing_summary(conn, user_id, year_month=None):
+    if not year_month:
+        # Default to the LAST COMPLETED month, not the current (still in
+        # progress, partial) one.
+        year_month = conn.execute(
+            "SELECT strftime('%Y-%m', date('now', 'localtime', 'start of month', '-1 day'))"
+        ).fetchone()[0]
+
+    start_date = f"{year_month}-01"
+    end_date = conn.execute("SELECT date(?, '+1 month', '-1 day')", (start_date,)).fetchone()[0]
+    month_label = datetime.strptime(year_month, "%Y-%m").strftime("%B %Y")
+
+    sold = conn.execute(
+        """
+        SELECT * FROM phones
+        WHERE user_id = ? AND status = 'Sold' AND sold_at IS NOT NULL
+          AND date(sold_at) BETWEEN date(?) AND date(?)
+        ORDER BY sold_at DESC
+        """,
+        (user_id, start_date, end_date),
+    ).fetchall()
+    total_sales_amount = round(sum((r["sale_price"] or 0) for r in sold), 2)
+    gross_profit = round(sum(_sold_profit(conn, r) for r in sold), 2)
+
+    # Purchases: real acquisitions only. Opening stock (seeded via the
+    # opening setup wizard) always carries TODAY's date as its
+    # purchase_date - it has no real one, the money was spent long before
+    # this CRM existed (see create_phone's acquisition_type handling) - so
+    # counting it here would wrongly inflate whatever month the wizard
+    # happened to be run in.
+    purchased = conn.execute(
+        """
+        SELECT * FROM phones
+        WHERE user_id = ? AND acquisition_type != 'opening'
+          AND purchase_date != '' AND date(purchase_date) BETWEEN date(?) AND date(?)
+        """,
+        (user_id, start_date, end_date),
+    ).fetchall()
+    total_purchases_amount = round(sum((r["purchase_price"] or 0) for r in purchased), 2)
+
+    # Net profit: gross profit from sales (already nets out per-phone
+    # expenses - see _sold_profit/phone_to_dict) minus the month's fixed
+    # (overhead) expenses and expense-category account entries.
+    # total_phone_expenses is deliberately excluded here - it's already
+    # subtracted inside _sold_profit, so adding it again would double-count it.
+    exp = expense_summary(conn, user_id, start_date, end_date)
+    overhead_expenses = round(exp["total_fixed_expenses"] + exp["total_account_expenses"], 2)
+    net_profit = round(gross_profit - overhead_expenses, 2)
+
+    # Udhar given vs recovered this month: credit = billed (new debt),
+    # debit = collected (wasool) - same convention as
+    # customer_recovery_analysis, restricted to real (non-expense-category)
+    # khata accounts.
+    udhar_row = conn.execute(
+        """
+        SELECT
+            COALESCE(SUM(CASE WHEN ae.entry_type = 'credit' THEN ae.amount ELSE 0 END), 0) AS given,
+            COALESCE(SUM(CASE WHEN ae.entry_type = 'debit' THEN ae.amount ELSE 0 END), 0) AS recovered
+        FROM account_entries ae
+        JOIN accounts a ON a.id = ae.account_id
+        WHERE a.user_id = ? AND a.is_expense_category = 0
+          AND date(ae.created_at, 'localtime') BETWEEN date(?) AND date(?)
+        """,
+        (user_id, start_date, end_date),
+    ).fetchone()
+    udhar_given = round(udhar_row["given"] or 0, 2)
+    udhar_recovered = round(udhar_row["recovered"] or 0, 2)
+
+    # Expense breakdown by category/account for the month - exp["entries"]
+    # is already scoped to start_date..end_date by expense_summary above.
+    expense_categories = {}
+    for e in exp["entries"]:
+        label = e.get("account_name") or e["category"]
+        expense_categories[label] = round(expense_categories.get(label, 0) + e["amount"], 2)
+    expense_breakdown = sorted(
+        ({"category": k, "amount": v} for k, v in expense_categories.items()),
+        key=lambda x: abs(x["amount"]), reverse=True,
+    )
+
+    # Partner-wise profit share: capital-proportional split of this
+    # month's net profit. No pre-existing per-partner share function
+    # exists to reuse - reinvest_profit/available_profit in
+    # compute_dashboard treat profit as one shared pool available to any
+    # partner, not split by ownership - so this uses each partner's
+    # CURRENT capital as their ownership weight against this month's net
+    # profit. Equal split if nobody has any capital in yet.
+    partners = list_partners(conn, user_id)
+    total_capital = sum(p["capital"] for p in partners)
+    partner_shares = []
+    for p in partners:
+        weight = (p["capital"] / total_capital) if total_capital > 0 else (1 / len(partners) if partners else 0)
+        partner_shares.append({
+            "partner_id": p["id"],
+            "name": p["name"],
+            "capital": p["capital"],
+            "share_pct": round(weight * 100, 1),
+            "profit_share": round(net_profit * weight, 2),
+        })
+
+    return {
+        "year_month": year_month,
+        "month_label": month_label,
+        "start_date": start_date,
+        "end_date": end_date,
+        "units_sold": len(sold),
+        "total_sales_amount": total_sales_amount,
+        "units_purchased": len(purchased),
+        "total_purchases_amount": total_purchases_amount,
+        "gross_profit": gross_profit,
+        "overhead_expenses": overhead_expenses,
+        "net_profit": net_profit,
+        "udhar_given": udhar_given,
+        "udhar_recovered": udhar_recovered,
+        "expense_breakdown": expense_breakdown[:8],
+        "partner_shares": partner_shares,
+    }
+
+
 # --- Invoices ---
 
 def _next_invoice_number(conn, user_id):
