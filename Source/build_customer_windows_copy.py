@@ -4,7 +4,6 @@ Build Windows Customer Copy — compiled .exe, no Python source.
 
 Output:  ../Customer Windows Copy/
   Phone Reseller CRM/          (folder with Phone Reseller CRM.exe + libs)
-  FolderPicker.exe
   START HERE.txt
 
 Vendor: keep generate_key.py in Source only — never ship it.
@@ -64,8 +63,7 @@ def _write_license_secret_file() -> None:
 
 
 def run_build(spec: str) -> None:
-    """Run PyInstaller against one .spec file (there are two: the main app
-    and the separate FolderPicker helper .exe — see folder_picker.py)."""
+    """Run PyInstaller against the app's .spec file."""
     subprocess.run(
         [sys.executable, "-m", "PyInstaller", "--noconfirm", "--clean", spec],
         cwd=str(ROOT),
@@ -142,9 +140,21 @@ def verify_no_source(out: Path) -> None:
 
 
 def main() -> None:
-    """Full Windows customer-build pipeline: compile the app + FolderPicker
-    helper with PyInstaller, assemble them into OUT alongside a README and a
-    blank license.json, then verify no source code leaked into the output."""
+    """Full Windows customer-build pipeline: compile the app with
+    PyInstaller, assemble it into OUT alongside a README and a blank
+    license.json, then verify no source code leaked into the output.
+
+    Phase 3 distribution pass: no longer builds/ships FolderPicker.exe as a
+    separate customer-visible file. It was already dead code on Windows in
+    practice — app.py's browse_folder_api()/browse_backup_file_api() take
+    the `sys.platform in ("darwin", "win32")` branch first, which calls
+    folder_picker.pick_folder_windows() (ctypes SHBrowseForFolder) directly
+    in-process; the subprocess-spawn-a-separate-exe branch below it can only
+    ever be reached by a frozen Linux build, which doesn't exist for this
+    app. folder_picker.py itself is unchanged and still bundled as Python
+    source inside the main app (see PhoneResellerCRM-win.spec's datas) for
+    that in-process path — only the redundant standalone .exe build/copy
+    step is removed."""
     if sys.platform != "win32":
         raise SystemExit(
             "Windows customer builds must run on Windows.\n"
@@ -169,13 +179,6 @@ def main() -> None:
             raise FileNotFoundError(f"Expected app folder at {app_src}")
 
         shutil.copytree(app_src, OUT / "Phone Reseller CRM")
-
-        print("Building FolderPicker ...")
-        run_build("FolderPicker.spec")
-        picker_src = ROOT / "dist" / "FolderPicker.exe"
-        if not picker_src.is_file():
-            raise FileNotFoundError(f"Expected FolderPicker.exe at {picker_src}")
-        shutil.copy2(picker_src, OUT / "FolderPicker.exe")
 
         write_start_here(OUT)
         (OUT / "license.json").write_text("{}\n", encoding="utf-8")
