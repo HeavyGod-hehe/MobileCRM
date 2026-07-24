@@ -6,6 +6,7 @@
   <title>Activation Required — Phone Reseller CRM</title>
   <link rel="stylesheet" href="{{ url_for('static', filename='tailwind.min.css') }}">
   <link rel="stylesheet" href="{{ url_for('static', filename='app.css') }}">
+  <script src="{{ url_for('static', filename='api-fetch.js') }}"></script>
 </head>
 <body class="text-slate-100 min-h-screen antialiased flex items-center justify-center p-4">
 <script>
@@ -63,13 +64,11 @@
       errEl.classList.add('hidden');
       const key = document.getElementById('activation-key').value.trim();
       try {
-        const res = await fetch('/api/license/activate', {
+        await apiFetch('/api/license/activate', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ activation_key: key }),
         });
-        const data = await res.json();
-        if (!res.ok) throw new Error(data.error || 'Activation failed');
         window.location.href = '/';
       } catch (err) {
         errEl.textContent = err.message;

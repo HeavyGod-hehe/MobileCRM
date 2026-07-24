@@ -125,15 +125,34 @@ def open_maximized(url: str) -> None:
 
 
 def open_browser_when_ready(host: str, port: int) -> None:
-    url = f"http://{host}:{port}"
+    """Wait until the CRM server is actually answering HTTP requests before
+    opening the browser - not just until the OS accepts a TCP handshake on
+    the port.
+
+    The previous version used a raw socket.create_connection() as its
+    readiness check. On Windows, the OS can accept a TCP connection on a
+    listening socket slightly before the WSGI app behind it (Flask/Werkzeug)
+    is actually ready to handle a request - e.g. while run_startup_backups()
+    is still finishing on a fresh install, or under antivirus-induced disk
+    slowness right after a customer's very first launch. That race would
+    open the browser to a "connection refused"/blank page a moment too
+    early, which looked to a customer exactly like the app "getting stuck".
+    Matches find_running_crm()'s already-correct pattern in this same file:
+    an actual HTTP GET, where even an error response (e.g. the 403 the
+    activation gate returns pre-license) still proves the app itself is
+    live and serving, not just that a socket is open.
+    """
+    status_url = f"http://{host}:{port}/api/auth/status"
     for _ in range(40):
         time.sleep(0.5)
         try:
-            with socket.create_connection((host, port), timeout=0.5):
-                break
-        except OSError:
+            urllib.request.urlopen(status_url, timeout=0.5)
+            break
+        except urllib.error.HTTPError:
+            break
+        except (OSError, urllib.error.URLError, ValueError):
             continue
-    open_maximized(url)
+    open_maximized(f"http://{host}:{port}")
 
 
 def _spawn_detached_server(port: int) -> None:

@@ -2636,6 +2636,52 @@ def main():
     run_test("Reset CRM clears the user's undo history so it can't resurrect wiped data",
               test_reset_clears_undo_history)
 
+    # --- Gap coverage: real customer report of "database is busy" ---
+    def test_concurrent_backups_do_not_collide_on_filename():
+        # Reproduced live before the fix: backup_user_data() built its
+        # destination filename from a second-precision timestamp, so two
+        # backups landing in the same second (a manual "Save Data Now"
+        # click racing the hourly auto-backup thread, or the startup backup
+        # + the auto-backup thread's own first run) generated the IDENTICAL
+        # destination path. _snapshot_database()'s unlink-then-recreate on
+        # that shared path then raised a raw, unhandled
+        # PermissionError/OSError on Windows ("The process cannot access
+        # the file because it is being used by another process"). Fixed by
+        # adding microsecond precision to every timestamp-based backup/
+        # snapshot filename in the app.
+        import backup_service
+
+        with db.db_session() as conn:
+            uid = db.register_user(conn, "concurrent_backup_user", "pass1234", "", "Concurrent Backup Shop")["user_id"]
+            scratch = Path(tempfile.mkdtemp(prefix="crm_concurrent_backup_"))
+            db.update_storage_settings(conn, uid, {"local_backup_path": str(scratch)})
+
+        results = []
+
+        def run_backup():
+            try:
+                path = backup_service.backup_user_data(uid, force=True)
+                results.append(("ok", path))
+            except Exception as e:
+                results.append(("error", f"{type(e).__name__}: {e}"))
+
+        threads = [threading.Thread(target=run_backup) for _ in range(5)]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join(timeout=15)
+
+        errors = [r for r in results if r[0] == "error"]
+        assert not errors, f"Concurrent backups collided: {errors}"
+        assert len(results) == 5, f"Expected 5 backup results, got {len(results)}"
+        paths = [r[1] for r in results]
+        assert len(set(paths)) == 5, f"Expected 5 distinct backup file paths, got: {paths}"
+        for p in paths:
+            assert Path(p).is_file(), f"Backup file missing: {p}"
+
+    run_test("Concurrent backups (racing threads) never collide on the same destination filename",
+              test_concurrent_backups_do_not_collide_on_filename)
+
     # --- Gap coverage: backup/restore across a schema migration ---
     #
     # CURRENT_SCHEMA_VERSION is still 1 in this codebase (no real migration has

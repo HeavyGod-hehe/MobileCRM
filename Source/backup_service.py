@@ -5,6 +5,7 @@ from __future__ import annotations
 import sqlite3
 import threading
 import time
+import uuid
 from datetime import datetime
 from pathlib import Path
 
@@ -56,8 +57,8 @@ def _snapshot_database(dest_path: Path) -> None:
     transaction state any caller's own connection happens to be in."""
     if dest_path.exists():
         dest_path.unlink()
-    source_conn = sqlite3.connect(str(db.DB_PATH))
-    backup_conn = sqlite3.connect(str(dest_path))
+    source_conn = sqlite3.connect(str(db.DB_PATH), timeout=30)
+    backup_conn = sqlite3.connect(str(dest_path), timeout=30)
     try:
         source_conn.backup(backup_conn)
     finally:
@@ -82,9 +83,26 @@ def backup_user_data(user_id: int, *, force: bool = False) -> str | None:
 
         dest_dir = Path(backup_dir)
         dest_dir.mkdir(parents=True, exist_ok=True)
+        # Bug found via live reproduction: a second-precision timestamp lets
+        # two backups that fire close together (the startup backup and the
+        # auto-backup thread's first run land ~30s apart normally, but a
+        # manual "Save Data Now" click racing the hourly auto-backup can
+        # land in the SAME second) generate the identical destination
+        # filename. _snapshot_database()'s unlink-then-recreate on that
+        # shared path then raises a raw, unhandled PermissionError/OSError
+        # on Windows ("The process cannot access the file because it is
+        # being used by another process"). Switching to a microsecond-
+        # precision timestamp was NOT enough on its own - a dedicated
+        # concurrent-threads test proved multiple threads starting close
+        # together can still read the identical datetime.now() value down
+        # to the microsecond (Windows' clock resolution isn't guaranteed to
+        # be that fine), so 4 of 5 threads still collided on one run. A
+        # short random suffix is what actually guarantees uniqueness
+        # regardless of clock resolution.
         stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        unique = uuid.uuid4().hex[:8]
         username = db.backup_username_slug(conn, user_id)
-        dest = dest_dir / f"{username}_crm_backup_{stamp}.db"
+        dest = dest_dir / f"{username}_crm_backup_{stamp}_{unique}.db"
         _snapshot_database(dest)
 
         db.update_user_settings(conn, user_id, {

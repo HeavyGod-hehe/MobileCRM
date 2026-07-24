@@ -55,6 +55,7 @@ import sys
 import tempfile
 import threading
 import time
+import uuid
 from contextlib import contextmanager
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -238,10 +239,16 @@ def _backup_before_schema_migration(conn, from_version: int, to_version: int) ->
     db_file_path = Path(db_file)
     backup_dir = db_file_path.parent / "pre_migration_backups"
     backup_dir.mkdir(parents=True, exist_ok=True)
+    # Timestamp + random suffix, not timestamp alone - see
+    # backup_service.backup_user_data's comment for why a bare timestamp
+    # (even at microsecond precision) isn't enough to prevent two backups
+    # landing on the identical destination path and raising an unhandled
+    # PermissionError on Windows; a concurrent-threads test proved
+    # Windows' clock resolution isn't reliably that fine.
     stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    dest = backup_dir / f"crm_pre_v{from_version}_to_v{to_version}_{stamp}.db"
-    source_conn = sqlite3.connect(str(db_file_path))
-    backup_conn = sqlite3.connect(str(dest))
+    dest = backup_dir / f"crm_pre_v{from_version}_to_v{to_version}_{stamp}_{uuid.uuid4().hex[:8]}.db"
+    source_conn = sqlite3.connect(str(db_file_path), timeout=30)
+    backup_conn = sqlite3.connect(str(dest), timeout=30)
     try:
         source_conn.backup(backup_conn)
     finally:
@@ -1645,7 +1652,7 @@ def ensure_customer_data_layout(conn) -> None:
             shutil.move(str(legacy_db), str(DB_PATH))
         else:
             stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-            shutil.copy2(legacy_db, backup_dir / f"legacy_crm_backup_{stamp}.db")
+            shutil.copy2(legacy_db, backup_dir / f"legacy_crm_backup_{stamp}_{uuid.uuid4().hex[:8]}.db")
 
     users = conn.execute("SELECT id FROM users").fetchall()
     for row in users:
@@ -5705,7 +5712,7 @@ def _validate_backup_file(path: Path) -> None:
     before it's allowed to import into the live one. A corrupted, empty, or
     unrelated .db file gets rejected here instead of destroying today's data."""
     try:
-        check_conn = sqlite3.connect(str(path))
+        check_conn = sqlite3.connect(str(path), timeout=30)
     except sqlite3.Error as exc:
         raise ValueError(f"Backup file could not be opened: {exc}") from exc
     try:
@@ -5876,7 +5883,7 @@ def _snapshot_live_db(live: sqlite3.Connection, dest_path: Path) -> None:
     Windows)."""
     if dest_path.exists():
         dest_path.unlink()
-    snap_conn = sqlite3.connect(str(dest_path))
+    snap_conn = sqlite3.connect(str(dest_path), timeout=30)
     try:
         live.backup(snap_conn)
     finally:
@@ -5887,7 +5894,7 @@ def _restore_live_db_from_snapshot(dest_path: Path) -> None:
     """Overwrite the live database's content from a snapshot file, via the
     backup API (not a file copy). Used only to auto-roll-back a restore that
     failed its post-restore integrity check."""
-    snap_conn = sqlite3.connect(str(dest_path))
+    snap_conn = sqlite3.connect(str(dest_path), timeout=30)
     try:
         live = get_connection()
         try:
@@ -5950,14 +5957,22 @@ def _restore_user_rows_from_file(backup_path, user_id: int) -> str:
     src = Path(backup_path)
     _validate_backup_file(src)
     dest = DB_PATH.resolve()
+    # A random suffix (not just a timestamp) matters a lot here
+    # specifically: this function is also what perform_undo()/perform_redo()
+    # call on every single Undo/Redo click (see the "Undo / Redo" section
+    # below), and rapid repeated clicks landing close together used to
+    # collide on this exact safety-copy filename even at microsecond
+    # precision - see backup_service.backup_user_data's comment for the
+    # reproduced Windows PermissionError, and why a bare timestamp (however
+    # precise) isn't a reliable uniqueness guarantee on its own.
     safety = dest.with_name(
-        f"{dest.stem}.pre_restore_{datetime.now().strftime('%Y%m%d_%H%M%S')}{dest.suffix}"
+        f"{dest.stem}.pre_restore_{datetime.now().strftime('%Y%m%d_%H%M%S')}_{uuid.uuid4().hex[:8]}{dest.suffix}"
     )
 
     with tempfile.TemporaryDirectory(prefix="crm_restore_") as tmp:
         migrated = Path(tmp) / "migrated_backup.db"
         shutil.copy2(src, migrated)
-        mig_conn = sqlite3.connect(str(migrated))
+        mig_conn = sqlite3.connect(str(migrated), timeout=30)
         mig_conn.row_factory = sqlite3.Row
         try:
             _init_schema(mig_conn)
@@ -6018,9 +6033,9 @@ def _safety_snapshot_before_reset(conn) -> str:
     backup_dir = db_file_path.parent / "pre_reset_backups"
     backup_dir.mkdir(parents=True, exist_ok=True)
     stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    dest = backup_dir / f"crm_pre_reset_{stamp}.db"
-    source_conn = sqlite3.connect(str(db_file_path))
-    backup_conn = sqlite3.connect(str(dest))
+    dest = backup_dir / f"crm_pre_reset_{stamp}_{uuid.uuid4().hex[:8]}.db"
+    source_conn = sqlite3.connect(str(db_file_path), timeout=30)
+    backup_conn = sqlite3.connect(str(dest), timeout=30)
     try:
         source_conn.backup(backup_conn)
     finally:
@@ -6243,8 +6258,8 @@ def _snapshot_whole_db_for_undo(dest_path: Path) -> None:
     copy of crm.db (every user, not just this one), because the per-user
     extraction happens later, at undo/redo time, via
     restore_database_from_backup / _restore_user_rows."""
-    source_conn = sqlite3.connect(str(DB_PATH))
-    backup_conn = sqlite3.connect(str(dest_path))
+    source_conn = sqlite3.connect(str(DB_PATH), timeout=30)
+    backup_conn = sqlite3.connect(str(dest_path), timeout=30)
     try:
         source_conn.backup(backup_conn)
     finally:

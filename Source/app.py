@@ -386,6 +386,13 @@ def undo_api():
         return jsonify(db.perform_undo(user_id))
     except ValueError as e:
         return jsonify({"error": str(e)}), 400
+    except (OSError, sqlite3.Error) as e:
+        # perform_undo/perform_redo do real file + database I/O
+        # (_restore_user_rows_from_file) - only ValueError was ever caught
+        # here, so a transient file/db issue (locked by antivirus, a
+        # momentary sharing violation) fell through as an unhandled 500
+        # with no JSON body. Same class of bug as backup_now_api.
+        return jsonify({"error": f"Undo could not complete right now — {e}. Try again in a moment."}), 500
 
 
 @app.route("/api/redo", methods=["POST"])
@@ -397,6 +404,8 @@ def redo_api():
         return jsonify(db.perform_redo(user_id))
     except ValueError as e:
         return jsonify({"error": str(e)}), 400
+    except (OSError, sqlite3.Error) as e:
+        return jsonify({"error": f"Redo could not complete right now — {e}. Try again in a moment."}), 500
 
 
 # --- License ---
@@ -488,6 +497,18 @@ def auth_signup():
         return jsonify({"ok": True, **user})
     except ValueError as e:
         return jsonify({"error": str(e)}), 400
+    except sqlite3.Error as e:
+        # register_user() only ever had ValueError caught here - a real
+        # "database is locked"/OperationalError (SQLite lock contention,
+        # most likely from a background backup or migration holding a
+        # write lock) fell through as an unhandled 500 with no JSON body,
+        # which the customer would have experienced as signup just hanging
+        # or failing with no explanation. get_connection() already uses a
+        # generous 30s busy_timeout + WAL mode so genuine lock contention
+        # should be rare and self-resolving, but if it ever does happen
+        # this at least surfaces a clean, retryable message instead of a
+        # raw crash.
+        return jsonify({"error": f"Couldn't create your account right now — {e}. Please try again."}), 500
 
 
 @app.route("/api/auth/forgot-password", methods=["POST"])
@@ -1316,7 +1337,18 @@ def update_storage_settings_api():
 def backup_now_api():
     user_id = _current_user_id()
     import backup_service
-    path = backup_service.backup_user_data(user_id, force=True)
+    try:
+        path = backup_service.backup_user_data(user_id, force=True)
+    except OSError as exc:
+        # This route called backup_user_data() with no error handling at
+        # all - any OSError (e.g. the destination-filename collision fixed
+        # in backup_user_data's own docstring, or a transient file-lock
+        # from antivirus/another process) fell through as an unhandled 500
+        # with no JSON body, which the frontend couldn't show a clean
+        # message for. This was the closest thing in the app to the
+        # reported "database is busy" symptom on the manual "Save Data
+        # Now" button specifically.
+        return jsonify({"error": f"Backup could not be saved right now — {exc}. Try again in a moment."}), 500
     if not path:
         return jsonify({"error": "Set a local backup folder in Settings first"}), 400
     with db.db_session() as conn:
@@ -1350,6 +1382,8 @@ def restore_backup_api():
         safety = backup_service.restore_from_backup(user_id, backup_path)
     except ValueError as e:
         return jsonify({"error": str(e)}), 400
+    except (OSError, sqlite3.Error) as e:
+        return jsonify({"error": f"Restore could not complete right now — {e}. Try again in a moment."}), 500
     # The just-restored data doesn't follow on from whatever this user's
     # undo history was tracking before the restore - clear it so a stray
     # Undo click afterward can't quietly step back into a pre-restore state.
@@ -1380,6 +1414,8 @@ def reset_crm_api():
             safety = db.reset_user_data(conn, user_id)
     except ValueError as e:
         return jsonify({"error": str(e)}), 400
+    except (OSError, sqlite3.Error) as e:
+        return jsonify({"error": f"Reset could not complete right now — {e}. Try again in a moment."}), 500
     session.clear()
     return jsonify({
         "ok": True,
