@@ -41,6 +41,17 @@
     <div id="side-investments-empty" class="hidden empty-state">No side investments recorded yet</div>
   </div>
 
+  <!-- Devices (shop-owned equipment) -->
+  <div class="glass-card rounded-xl p-5 mb-4">
+    <div class="flex items-center justify-between mb-4">
+      <p class="text-xs font-semibold uppercase tracking-wider text-slate-500">Devices</p>
+      <button id="btn-add-device" class="btn btn-ghost btn-sm">+ Add</button>
+    </div>
+    <p class="text-xs text-slate-600 -mt-3 mb-3">Shop-owned equipment (POS terminal, delivery bike, laptop…) — reference only, never affects Cash/Bank or Expected Liquid.</p>
+    <div id="devices-list" class="space-y-2"></div>
+    <div id="devices-empty" class="hidden empty-state">No devices tracked yet</div>
+  </div>
+
   <!-- Cash / Bank split -->
   <div class="kpi-grid mb-4" style="grid-template-columns: repeat(2, minmax(0, 1fr));">
     <div class="kpi-card">
@@ -199,7 +210,7 @@
       </button>
     </div>
     <form id="side-inv-form" class="p-6 space-y-4">
-      <p class="text-sm text-slate-400">Record a partner putting fresh capital into the business right now — separate from any specific phone purchase. This increases their invested capital and records the money actually coming in.</p>
+      <p class="text-sm text-slate-400">Record a partner committing fresh capital to the business, separate from any specific phone purchase. This is a reference note only — it never changes Cash in Hand, Bank, or the partner's invested capital, exactly like a Personal Asset.</p>
       <div>
         <label class="block text-xs font-medium text-slate-400 mb-1.5">Partner *</label>
         <select id="side-inv-partner" required class="input-field"></select>
@@ -209,23 +220,53 @@
         <input type="number" id="side-inv-amount" required min="1" step="1" class="input-field">
       </div>
       <div>
-        <label class="block text-xs font-medium text-slate-400 mb-1.5">Received Into *</label>
-        <select id="side-inv-payment" class="input-field" required>
-          <option value="cash">Cash</option>
-          <option value="bank">Bank Account</option>
-        </select>
-      </div>
-      <div id="side-inv-bank-wrap" class="hidden">
-        <label class="block text-xs font-medium text-slate-400 mb-1.5">Bank Account *</label>
-        <select id="side-inv-bank" class="input-field">
-          <option value="">— Select bank —</option>
-        </select>
-      </div>
-      <div>
         <label class="block text-xs font-medium text-slate-400 mb-1.5">Note</label>
         <input type="text" id="side-inv-note" class="input-field" placeholder="e.g. Extra capital top-up">
       </div>
       <button type="submit" class="btn btn-primary w-full">Save Investment</button>
+    </form>
+  </div>
+</div>
+
+<!-- Device Modal -->
+<div id="device-overlay" class="modal-overlay"></div>
+<div id="device-modal" class="modal-wrap">
+  <div class="modal-panel">
+    <div class="p-6 border-b border-white/8 flex items-center justify-between">
+      <h3 id="device-modal-title" class="text-lg font-semibold text-white">Add Device</h3>
+      <button type="button" id="device-cancel-x" class="btn btn-ghost btn-icon text-slate-400">
+        <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/></svg>
+      </button>
+    </div>
+    <form id="device-form" class="p-6 space-y-4">
+      <input type="hidden" id="device-id">
+      <div>
+        <label class="block text-xs font-medium text-slate-400 mb-1.5">Name *</label>
+        <input type="text" id="device-name" required class="input-field" placeholder="e.g. POS Terminal, Delivery Bike">
+      </div>
+      <div>
+        <label class="block text-xs font-medium text-slate-400 mb-1.5">Category</label>
+        <select id="device-category" class="input-field">
+          <option value="Equipment">Equipment</option>
+          <option value="Vehicle">Vehicle</option>
+          <option value="Electronics">Electronics</option>
+          <option value="Furniture">Furniture</option>
+          <option value="Other" selected>Other</option>
+        </select>
+      </div>
+      <div>
+        <label class="block text-xs font-medium text-slate-400 mb-1.5">Value (Rs)</label>
+        <input type="number" id="device-value" min="0" step="1" class="input-field" placeholder="0">
+      </div>
+      <div>
+        <label class="block text-xs font-medium text-slate-400 mb-1.5">Acquired Date</label>
+        <input type="date" id="device-date" class="input-field">
+      </div>
+      <div>
+        <label class="block text-xs font-medium text-slate-400 mb-1.5">Note</label>
+        <input type="text" id="device-note" class="input-field" placeholder="Optional details">
+      </div>
+      <button type="submit" class="btn btn-primary w-full">Save Device</button>
     </form>
   </div>
 </div>
@@ -371,9 +412,107 @@
           <p class="font-semibold text-white">${esc(r.partner_name)}</p>
           <p class="text-xs text-slate-500">${esc(r.investment_date)}${r.note ? ' — ' + esc(r.note) : ''}</p>
         </div>
-        <p class="font-semibold text-emerald-400">${fmt(r.amount)}</p>
+        <div class="flex items-center gap-3">
+          <p class="font-semibold text-emerald-400">${fmt(r.amount)}</p>
+          <button onclick="deleteSideInvestment(${r.id})" class="action-pill delete">Delete</button>
+        </div>
       </div>`).join('');
   }
+
+  window.deleteSideInvestment = async (id) => {
+    if (!confirm('Delete this side investment record?')) return;
+    try {
+      await apiFetch(`/api/partners/side-investments/${id}`, { method: 'DELETE' });
+      toast('Side investment deleted');
+      loadSideInvestments();
+    } catch (err) {
+      toast(err.message, 'error');
+    }
+  };
+
+  let devices = [];
+
+  async function loadDevices() {
+    devices = await apiFetch('/api/devices');
+    const el = document.getElementById('devices-list');
+    const empty = document.getElementById('devices-empty');
+    empty.classList.toggle('hidden', devices.length > 0);
+    el.innerHTML = devices.map(d => `
+      <div class="list-item-row">
+        <div>
+          <p class="font-semibold text-white">${esc(d.name)}</p>
+          <p class="text-xs text-slate-500">${esc(d.category)}${d.acquired_date ? ' — ' + esc(d.acquired_date) : ''}${d.note ? ' — ' + esc(d.note) : ''}</p>
+        </div>
+        <div class="flex items-center gap-3">
+          <p class="font-semibold text-blue-400">${fmt(d.value)}</p>
+          <button onclick="editDevice(${d.id})" class="action-pill edit">Edit</button>
+          <button onclick="deleteDevice(${d.id})" class="action-pill delete">Delete</button>
+        </div>
+      </div>`).join('');
+  }
+
+  function openDeviceModal(device) {
+    document.getElementById('device-modal-title').textContent = device ? 'Edit Device' : 'Add Device';
+    document.getElementById('device-id').value = device ? device.id : '';
+    document.getElementById('device-name').value = device ? device.name : '';
+    document.getElementById('device-category').value = device ? device.category : 'Other';
+    document.getElementById('device-value').value = device ? device.value : '';
+    document.getElementById('device-date').value = device ? device.acquired_date : new Date().toISOString().slice(0, 10);
+    document.getElementById('device-note').value = device ? device.note : '';
+    openModal('device-overlay', 'device-modal');
+  }
+
+  window.editDevice = (id) => {
+    const d = devices.find(x => x.id === id);
+    if (d) openDeviceModal(d);
+  };
+
+  window.deleteDevice = async (id) => {
+    if (!confirm('Delete this device?')) return;
+    try {
+      await apiFetch(`/api/devices/${id}`, { method: 'DELETE' });
+      toast('Device deleted');
+      loadDevices();
+    } catch (err) {
+      toast(err.message, 'error');
+    }
+  };
+
+  document.getElementById('btn-add-device').addEventListener('click', () => openDeviceModal(null));
+  document.getElementById('device-cancel-x').addEventListener('click', () => closeModal('device-overlay', 'device-modal'));
+  document.getElementById('device-overlay').addEventListener('click', () => closeModal('device-overlay', 'device-modal'));
+
+  document.getElementById('device-form').addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const id = document.getElementById('device-id').value;
+    const payload = {
+      name: document.getElementById('device-name').value.trim(),
+      category: document.getElementById('device-category').value,
+      value: Number(document.getElementById('device-value').value) || 0,
+      acquired_date: document.getElementById('device-date').value,
+      note: document.getElementById('device-note').value.trim(),
+    };
+    try {
+      if (id) {
+        await apiFetch(`/api/devices/${id}`, {
+          method: 'PUT',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(payload),
+        });
+      } else {
+        await apiFetch('/api/devices', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(payload),
+        });
+      }
+      closeModal('device-overlay', 'device-modal');
+      toast('Device saved');
+      loadDevices();
+    } catch (err) {
+      toast(err.message, 'error');
+    }
+  });
 
   window.deletePartner = async (id) => {
     const p = partners.find(x => x.id === id);
@@ -527,21 +666,6 @@
     }
   });
 
-  let sideInvBanks = [];
-  async function loadSideInvBanks() {
-    const data = await apiFetch('/api/banks');
-    sideInvBanks = data.banks || [];
-    const sel = document.getElementById('side-inv-bank');
-    sel.innerHTML = '<option value="">— Select bank —</option>' +
-      sideInvBanks.map(b => `<option value="${b.id}">${esc(b.name)} (${fmt(b.balance)})</option>`).join('');
-  }
-
-  function toggleSideInvBank() {
-    const isBank = document.getElementById('side-inv-payment').value === 'bank';
-    document.getElementById('side-inv-bank-wrap').classList.toggle('hidden', !isBank);
-    document.getElementById('side-inv-bank').required = isBank;
-  }
-
   function openSideInvestmentModal() {
     const sel = document.getElementById('side-inv-partner');
     sel.innerHTML = partners.map(p =>
@@ -549,28 +673,19 @@
     ).join('') || '<option value="">No partners</option>';
     document.getElementById('side-inv-amount').value = '';
     document.getElementById('side-inv-note').value = '';
-    document.getElementById('side-inv-payment').value = 'cash';
-    toggleSideInvBank();
     openModal('side-inv-overlay', 'side-inv-modal');
   }
 
   document.getElementById('btn-side-investment').addEventListener('click', openSideInvestmentModal);
   document.getElementById('side-inv-cancel-x').addEventListener('click', () => closeModal('side-inv-overlay', 'side-inv-modal'));
   document.getElementById('side-inv-overlay').addEventListener('click', () => closeModal('side-inv-overlay', 'side-inv-modal'));
-  document.getElementById('side-inv-payment').addEventListener('change', toggleSideInvBank);
   document.getElementById('side-inv-form').addEventListener('submit', async (e) => {
     e.preventDefault();
     const payload = {
       partner_id: document.getElementById('side-inv-partner').value,
       amount: document.getElementById('side-inv-amount').value,
-      payment_method: document.getElementById('side-inv-payment').value,
       note: document.getElementById('side-inv-note').value.trim(),
     };
-    if (payload.payment_method === 'bank') {
-      const bankId = document.getElementById('side-inv-bank').value;
-      if (!bankId) { toast('Select a bank account', 'error'); return; }
-      payload.bank_id = bankId;
-    }
     try {
       await apiFetch('/api/partners/side-investment', {
         method: 'POST',
@@ -586,8 +701,8 @@
     }
   });
 
-  loadSideInvBanks();
   loadOverview();
   loadSideInvestments();
+  loadDevices();
 </script>
 {% endblock %}

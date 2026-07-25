@@ -661,11 +661,6 @@ def cashbook_page():
     return render_template("cashbook.html")
 
 
-@app.route("/journal")
-def journal_page():
-    return render_template("journal.html")
-
-
 @app.route("/settings")
 def settings_page():
     return render_template("settings.html")
@@ -793,6 +788,13 @@ def monthly_closing_api():
     year_month = request.args.get("month")
     with db.db_session() as conn:
         return jsonify(db.compute_monthly_closing_summary(conn, user_id, year_month))
+
+
+@app.route("/api/monthly-closing/close-month", methods=["POST"])
+def close_the_month_api():
+    user_id = _current_user_id()
+    with db.db_session() as conn:
+        return jsonify(db.close_the_month(conn, user_id))
 
 
 @app.route("/api/settings/email", methods=["GET"])
@@ -1623,6 +1625,17 @@ def list_side_investments_api():
         return jsonify(db.list_side_investments(conn, user_id))
 
 
+@app.route("/api/partners/side-investments/<int:investment_id>", methods=["DELETE"])
+def delete_side_investment_api(investment_id):
+    user_id = _current_user_id()
+    try:
+        with db.db_session() as conn:
+            result = db.reverse_side_investment(conn, user_id, investment_id)
+            return jsonify(result)
+    except ValueError as exc:
+        return jsonify({"error": str(exc)}), 400
+
+
 # --- Personal Assets ---
 # Plots, commodities, gold, or anything else the shop owner wants to note
 # the value of for their own reference. Deliberately NOT part of the money
@@ -1666,6 +1679,52 @@ def delete_personal_asset_api(asset_id):
     with db.db_session() as conn:
         if not db.delete_personal_asset(conn, user_id, asset_id):
             return jsonify({"error": "Asset not found"}), 404
+        return jsonify({"ok": True})
+
+
+# --- Devices ---
+# Shop-owned equipment (POS terminal, delivery bike, laptop, etc.), shown on
+# Overview. Isolated the same way as Personal Assets - see database.py's
+# _migrate_devices docstring for why this is NOT a partner-capital replacement.
+
+@app.route("/api/devices", methods=["GET"])
+def list_devices_api():
+    user_id = _current_user_id()
+    with db.db_session() as conn:
+        return jsonify(db.list_devices(conn, user_id))
+
+
+@app.route("/api/devices", methods=["POST"])
+def create_device_api():
+    user_id = _current_user_id()
+    data = request.get_json(force=True)
+    try:
+        with db.db_session() as conn:
+            return jsonify(db.create_device(conn, user_id, data)), 201
+    except ValueError as exc:
+        return jsonify({"error": str(exc)}), 400
+
+
+@app.route("/api/devices/<int:device_id>", methods=["PUT"])
+def update_device_api(device_id):
+    user_id = _current_user_id()
+    data = request.get_json(force=True)
+    try:
+        with db.db_session() as conn:
+            result = db.update_device(conn, user_id, device_id, data)
+            if not result:
+                return jsonify({"error": "Device not found"}), 404
+            return jsonify(result)
+    except ValueError as exc:
+        return jsonify({"error": str(exc)}), 400
+
+
+@app.route("/api/devices/<int:device_id>", methods=["DELETE"])
+def delete_device_api(device_id):
+    user_id = _current_user_id()
+    with db.db_session() as conn:
+        if not db.delete_device(conn, user_id, device_id):
+            return jsonify({"error": "Device not found"}), 404
         return jsonify({"ok": True})
 
 
@@ -1899,43 +1958,6 @@ def delete_cash_book_entry_api(entry_id):
     user_id = _current_user_id()
     with db.db_session() as conn:
         db.delete_cash_book_entry(conn, user_id, entry_id)
-        return jsonify({"ok": True})
-
-
-# --- Journal Vouchers ---
-# Manual, free-form ledger entries for anything that doesn't fit the normal
-# sale/purchase/expense flows (accounting adjustments, corrections, etc.).
-
-@app.route("/api/journal-vouchers", methods=["GET"])
-def list_journal_vouchers_api():
-    user_id = _current_user_id()
-    with db.db_session() as conn:
-        return jsonify(db.list_journal_vouchers(conn, user_id))
-
-
-@app.route("/api/journal-vouchers", methods=["POST"])
-def create_journal_voucher_api():
-    user_id = _current_user_id()
-    data = request.get_json(force=True)
-    amount, err = _require_amount(data)
-    if err:
-        return jsonify({"error": err}), 400
-    data["amount"] = amount
-    if not data.get("debit_account_id") or not data.get("credit_account_id"):
-        return jsonify({"error": "Debit and credit accounts are required"}), 400
-    try:
-        with db.db_session() as conn:
-            return jsonify(db.create_journal_voucher(conn, user_id, data)), 201
-    except ValueError as e:
-        return jsonify({"error": str(e)}), 400
-
-
-@app.route("/api/journal-vouchers/<int:voucher_id>", methods=["DELETE"])
-def delete_journal_voucher_api(voucher_id):
-    user_id = _current_user_id()
-    with db.db_session() as conn:
-        if not db.delete_journal_voucher(conn, user_id, voucher_id):
-            return jsonify({"error": "Voucher not found"}), 404
         return jsonify({"ok": True})
 
 

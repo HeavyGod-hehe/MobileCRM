@@ -113,7 +113,7 @@ FEATURES (v2.3)
   • Purchase/sale udhar linked to supplier & buyer accounts
   • Dual IMEI, bulk sell profit, expense edit/delete
   • Today — sold same-day phones count in bought today
-  • Billing, Month Report, Returns, Journal vouchers
+  • Billing, Month Report, Returns
   • Restore from backup in Settings
 
 OTHER PLATFORMS

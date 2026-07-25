@@ -128,11 +128,17 @@ DEFAULT_SETTINGS = {
     # register_user(). Never backfilled/migrated for old users; the default
     # itself is what grandfathers them.
     "setup_completed": "1",
+    # Phase 3 "Close the Month" (see close_the_month/compute_monthly_metrics
+    # below). Empty = never manually closed - the Overview "Monthly Metrics"
+    # tile just shows the current calendar month, same as always. Set to a
+    # localtime datetime by close_the_month() so that tile can restart from
+    # zero on demand without waiting for the calendar month to roll over.
+    "overview_period_start": "",
 }
 
 USER_SCOPED_TABLES = (
     "phones", "accounts", "partners", "fixed_expenses",
-    "bank_accounts", "cash_book_entries", "journal_vouchers",
+    "bank_accounts", "cash_book_entries",
 )
 
 
@@ -389,9 +395,9 @@ def _init_schema(conn) -> None:
     _migrate_phone_statuses(conn)
     _migrate_returns_table(conn)
     _migrate_cash_book_account(conn)
-    _migrate_journal_vouchers(conn)
     _migrate_side_investments(conn)
     _migrate_personal_assets(conn)
+    _migrate_devices(conn)
     _migrate_cursor_panga(conn)
     _migrate_payment_methods(conn)
     _migrate_account_entry_payments(conn)
@@ -399,6 +405,8 @@ def _init_schema(conn) -> None:
     _migrate_ledger_sync(conn)
     _migrate_fixed_expense_ledger(conn)
     _migrate_expense_category_column(conn)
+    _migrate_credit_debit_convention(conn)
+    _migrate_remove_journal_vouchers(conn)
 
     for key, value in DEFAULT_SETTINGS.items():
         conn.execute(
@@ -748,6 +756,65 @@ def _migrate_expense_category_column(conn):
         )
 
 
+def _migrate_credit_debit_convention(conn):
+    """Money-model phase 2: entry_type on account_entries used to store
+    'credit' for billing-style balance increases and 'debit' for a payment
+    received - the reverse of what "receiving a payment" / "giving a
+    payment" reads as to a shopkeeper. Every write site (see
+    _post_purchase_ledger, _post_sale_ledger, create_entry, etc.) and every
+    read site (_account_balance, build_statement, expense_summary,
+    customer_recovery_analysis, compute_month_report) were changed in
+    lockstep so every existing balance stays numerically identical - only
+    the label per row changes. That lockstep change only affects future
+    reads/writes though; every row already on disk was written under the
+    OLD label and must be flipped once, here, or the new formula would
+    misread every existing customer/supplier balance the instant it loads.
+
+    Guarded by a settings flag rather than a column check (no column is
+    involved) so this runs exactly once per database, ever."""
+    already_done = conn.execute(
+        "SELECT value FROM settings WHERE key = 'credit_debit_flip_applied'"
+    ).fetchone()
+    if already_done and already_done["value"] == "1":
+        return
+    has_rows = conn.execute("SELECT 1 FROM account_entries LIMIT 1").fetchone()
+    if has_rows:
+        _backup_before_schema_migration(conn, 1, 1)
+    conn.execute(
+        "UPDATE account_entries SET entry_type = "
+        "CASE entry_type WHEN 'credit' THEN 'debit' ELSE 'credit' END"
+    )
+    conn.execute(
+        "INSERT INTO settings (key, value) VALUES ('credit_debit_flip_applied', '1') "
+        "ON CONFLICT(key) DO UPDATE SET value = '1'"
+    )
+
+
+def _migrate_remove_journal_vouchers(conn):
+    """Phase 3: the Baroobaar/Hawala money-transfer feature (implemented as
+    "journal vouchers" - moving a debt between two khata accounts with no
+    cash/bank involved) never worked correctly and was removed entirely,
+    not just hidden from the UI. Confirmed zero rows in both the dev and
+    the live shop database before writing this migration, so there is
+    nothing real to lose.
+
+    Checked via sqlite_master rather than a settings flag so this is
+    naturally idempotent: a brand-new database never creates the table in
+    the first place (its old CREATE TABLE call was removed from the
+    legacy chain above), so this is a no-op there; an existing database
+    that still has the table from before this fix gets it dropped exactly
+    once, here."""
+    has_table = conn.execute(
+        "SELECT 1 FROM sqlite_master WHERE type='table' AND name='journal_vouchers'"
+    ).fetchone()
+    if not has_table:
+        return
+    has_rows = conn.execute("SELECT 1 FROM journal_vouchers LIMIT 1").fetchone()
+    if has_rows:
+        _backup_before_schema_migration(conn, 1, 1)
+    conn.execute("DROP TABLE journal_vouchers")
+
+
 def _migrate_ledger_sync(conn):
     """Cross-module ledger links, borrow phones, synced deletes."""
     conn.executescript(
@@ -784,10 +851,6 @@ def _migrate_ledger_sync(conn):
         conn.execute("ALTER TABLE cash_book_entries ADD COLUMN linked_bank_transaction_id INTEGER REFERENCES bank_transactions(id)")
     if not _column_exists(conn, "cash_book_entries", "linked_account_entry_id"):
         conn.execute("ALTER TABLE cash_book_entries ADD COLUMN linked_account_entry_id INTEGER REFERENCES account_entries(id)")
-    if not _column_exists(conn, "journal_vouchers", "debit_entry_id"):
-        conn.execute("ALTER TABLE journal_vouchers ADD COLUMN debit_entry_id INTEGER REFERENCES account_entries(id)")
-    if not _column_exists(conn, "journal_vouchers", "credit_entry_id"):
-        conn.execute("ALTER TABLE journal_vouchers ADD COLUMN credit_entry_id INTEGER REFERENCES account_entries(id)")
 
 
 def _record_ledger_link(
@@ -846,14 +909,6 @@ def _delete_account_entry_raw(conn, entry_id):
         )
         conn.execute(
             "UPDATE cash_book_entries SET linked_account_entry_id = NULL WHERE linked_account_entry_id = ?",
-            (entry_id,),
-        )
-        conn.execute(
-            "UPDATE journal_vouchers SET debit_entry_id = NULL WHERE debit_entry_id = ?",
-            (entry_id,),
-        )
-        conn.execute(
-            "UPDATE journal_vouchers SET credit_entry_id = NULL WHERE credit_entry_id = ?",
             (entry_id,),
         )
         conn.execute("DELETE FROM account_entries WHERE id = ?", (entry_id,))
@@ -1079,7 +1134,9 @@ def _create_cash_book_synced(
 
     if account_id and link_account:
         if account_entry_type is None:
-            account_entry_type = "credit" if entry_type == "out" else "debit"
+            # Money-model phase 2: credit = shop received money, debit = shop
+            # gave money or billed new debt — see _account_balance's docstring.
+            account_entry_type = "debit" if entry_type == "out" else "credit"
         acct_note = note or f"Cash book {entry_type} — entry #{entry_id}"
         account_entry_id = _insert_account_entry(
             conn, account_id, account_entry_type, amount, acct_note,
@@ -1336,24 +1393,6 @@ def _migrate_cursor_panga(conn):
     )
 
 
-def _migrate_journal_vouchers(conn):
-    conn.executescript(
-        """
-        CREATE TABLE IF NOT EXISTS journal_vouchers (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            voucher_date TEXT NOT NULL,
-            reference TEXT NOT NULL DEFAULT '',
-            narration TEXT NOT NULL DEFAULT '',
-            debit_account_id INTEGER NOT NULL REFERENCES accounts(id),
-            credit_account_id INTEGER NOT NULL REFERENCES accounts(id),
-            amount REAL NOT NULL,
-            user_id INTEGER REFERENCES users(id),
-            created_at TEXT NOT NULL DEFAULT (datetime('now'))
-        );
-        """
-    )
-
-
 def _migrate_side_investments(conn):
     """Bug #8: add_side_investment() used to link its cash/bank entry with
     source_id=partner_id -- fine for the link itself, but since every top-up
@@ -1495,7 +1534,6 @@ def _migrate_indexes(conn):
         ("idx_phone_expenses_phone_id", "phone_expenses", "phone_id"),
         ("idx_phone_expenses_account_id", "phone_expenses", "account_id"),
         ("idx_bank_transactions_bank_account_id", "bank_transactions", "bank_account_id"),
-        ("idx_journal_vouchers_user_id", "journal_vouchers", "user_id"),
         ("idx_invoices_user_id", "invoices", "user_id"),
         ("idx_purchase_invoices_user_id", "purchase_invoices", "user_id"),
         ("idx_side_investments_user_id", "side_investments", "user_id"),
@@ -1745,7 +1783,7 @@ def update_user_settings(conn, user_id, data):
         "shop_whatsapp", "vendor_whatsapp", "vendor_support_note",
         "gmail_smtp_user", "gmail_smtp_app_password", "invoice_counter",
         "purchase_invoice_counter", "profit_reinvested_total",
-        "setup_completed",
+        "setup_completed", "overview_period_start",
     }
     # Bug #14: this used to silently `continue` past any key not in
     # `allowed` -- which is exactly how purchase_invoice_counter's own save
@@ -2285,16 +2323,19 @@ def reinvest_profit(conn, user_id, data):
 
 def add_side_investment(conn, user_id, data):
     """Record a partner injecting fresh capital into the business at any
-    time, separate from any specific phone purchase. Unlike reinvest_profit
-    (an internal transfer of already-earned profit), this is real money
-    entering the business, so it also posts a bank/cash credit.
+    time, separate from any specific phone purchase. Money-model phase 2:
+    unlike an earlier version of this function, this is now a PURE
+    reference entry, deliberately isolated exactly like Personal Assets
+    (see _migrate_personal_assets' docstring) - it must never post a
+    cash/bank movement AND must never change the partner's tracked capital
+    (total_investment), so it can never create a Hisaab mein Farq gap. It
+    only exists so the shop owner has a record of who committed what
+    capital, and when; it never feeds compute_dashboard's money-model
+    formulas.
 
-    Each call gets its own side_investments row, and THAT row's id (not the
-    partner's id) is what's used as the ledger_links source_id -- so each
-    top-up is independently identifiable and reversible (see
-    reverse_side_investment below). Using partner_id here directly would
-    mean every top-up a partner ever makes shares one identity, and
-    reversing one could reverse all of them."""
+    Each call gets its own side_investments row (not the partner's id), so
+    each top-up is independently identifiable and reversible (see
+    reverse_side_investment below)."""
     if not conn.in_transaction:
         conn.execute("BEGIN IMMEDIATE")
     amount = float(data.get("amount") or 0)
@@ -2306,8 +2347,6 @@ def add_side_investment(conn, user_id, data):
     if not partner:
         raise ValueError("Partner not found")
 
-    payment_method = data.get("payment_method") or "cash"
-    bank_id = data.get("bank_id")
     entry_date = _normalize_datetime(data.get("investment_date"), conn, date_only=True)
     note = data.get("note") or f"Side investment from {partner['name']}"
 
@@ -2320,13 +2359,6 @@ def add_side_investment(conn, user_id, data):
     )
     investment_id = cursor.lastrowid
 
-    _post_payment_transaction(
-        conn, user_id, payment_method, bank_id, "in", amount, note, entry_date,
-        source_type="side_investment", source_id=investment_id,
-    )
-
-    new_capital = round(partner["capital"] + amount, 2)
-    update_partner(conn, user_id, partner_id, {"capital": new_capital})
     return {
         "partner": get_partner(conn, user_id, partner_id),
         "investment_id": investment_id,
@@ -2335,21 +2367,29 @@ def add_side_investment(conn, user_id, data):
 
 
 def reverse_side_investment(conn, user_id, investment_id):
-    """Undo exactly one side-investment top-up: reverses its cash/bank
-    ledger entry and subtracts it back off the partner's capital.
+    """Delete one side-investment top-up. Money-model phase 2:
+    add_side_investment no longer posts any cash/bank movement or touches
+    partner capital, so for any investment created after that fix this is
+    just a plain row delete.
 
-    The safety check is keyed directly off ledger_links, not off whether a
-    side_investments row exists for this id -- refuses (raises ValueError)
-    unless (source_type='side_investment', source_id=investment_id) resolves
-    to EXACTLY one linked transaction. For any investment created after this
-    fix that's always true (_post_payment_transaction / _create_cash_book_synced
-    create exactly one ledger_links row per call), since its source_id is
-    this row's own unique id. For a legacy row from before this fix --
-    where source_id was the partner's own id, shared by every top-up that
-    partner ever made -- this count will usually be 0 or >1 and gets
-    refused instead of guessing which cash book entry to delete."""
+    A legacy investment from BEFORE that fix may still have exactly one
+    ledger_links row (from when add_side_investment posted a real cash/bank
+    credit AND bumped the partner's capital) - if so, both are reversed
+    too, so deleting an old investment doesn't leave a phantom credit
+    sitting in Cash in Hand/Bank, or an inflated partner capital, forever.
+    A legacy row from even before per-event tracking existed (source_id was
+    the partner's own id, shared by every top-up that partner ever made)
+    will resolve to more than one linked transaction and is refused rather
+    than guessing which cash book entry to delete."""
     if not conn.in_transaction:
         conn.execute("BEGIN IMMEDIATE")
+
+    investment = conn.execute(
+        "SELECT * FROM side_investments WHERE id = ? AND user_id = ?",
+        (investment_id, user_id),
+    ).fetchone()
+    if not investment:
+        raise ValueError("Side investment not found")
 
     links = conn.execute(
         """
@@ -2358,38 +2398,27 @@ def reverse_side_investment(conn, user_id, investment_id):
         """,
         (user_id, investment_id),
     ).fetchall()
-    if len(links) != 1:
+    if len(links) > 1:
         raise ValueError(
             "Cannot safely reverse this side investment: its ledger data is "
-            "ambiguous or missing (predates per-event tracking and may be "
-            "shared with other top-ups for this partner). Reverse the "
-            "linked Cash Book or Bank Account entry manually instead."
+            "ambiguous (predates per-event tracking and may be shared with "
+            "other top-ups for this partner). Reverse the linked Cash Book "
+            "or Bank Account entry manually instead."
         )
 
-    cb_id = links[0]["cash_book_entry_id"]
-    cb_row = conn.execute(
-        "SELECT amount FROM cash_book_entries WHERE id = ? AND user_id = ?",
-        (cb_id, user_id),
-    ).fetchone() if cb_id else None
-    if not cb_row:
-        raise ValueError("Cannot safely reverse this side investment: its cash book entry is missing")
-    amount = cb_row["amount"]
+    partner_id = investment["partner_id"]
+    amount = investment["amount"]
 
-    investment = conn.execute(
-        "SELECT * FROM side_investments WHERE id = ? AND user_id = ?",
-        (investment_id, user_id),
-    ).fetchone()
-    partner_id = investment["partner_id"] if investment else None
-
-    _reverse_ledger_for_source(conn, user_id, "side_investment", investment_id)
-    if investment:
-        conn.execute("DELETE FROM side_investments WHERE id = ?", (investment_id,))
-
-    if partner_id:
+    if len(links) == 1:
+        # Legacy investment (pre money-model-phase-2): its creation both
+        # posted a cash/bank entry AND bumped partner capital, so undo both.
+        _reverse_ledger_for_source(conn, user_id, "side_investment", investment_id)
         partner = get_partner(conn, user_id, partner_id)
         if partner:
             new_capital = round(partner["capital"] - amount, 2)
             update_partner(conn, user_id, partner_id, {"capital": new_capital})
+
+    conn.execute("DELETE FROM side_investments WHERE id = ?", (investment_id,))
 
     return {"ok": True, "reversed_amount": round(amount, 2)}
 
@@ -2496,6 +2525,118 @@ def delete_personal_asset(conn, user_id, asset_id):
     if not get_personal_asset(conn, user_id, asset_id):
         return False
     conn.execute("DELETE FROM personal_assets WHERE id = ? AND user_id = ?", (asset_id, user_id))
+    return True
+
+
+# --- Devices ---
+# Phase 3: shop-owned equipment (POS terminal, delivery bike, laptop, etc.)
+# the owner wants a running list of, added to Overview in place of the old
+# Partner-only view for this slot. Deliberately built exactly like
+# Personal Assets above and just as isolated: compute_dashboard() never
+# reads this table, and nothing here ever posts to cash_book/accounts/
+# ledger_links or changes Total Investment/Expected Liquid - it's a
+# reference list only. NOT a replacement for partner capital tracking,
+# which stays fully intact elsewhere (Setup Wizard, Side Investment,
+# per-phone Partner Investment attribution, Monthly Closing's profit
+# share, and the Expected Liquid formula all still depend on it) - see
+# this session's summary for why that wasn't touched.
+
+def _migrate_devices(conn):
+    conn.executescript(
+        """
+        CREATE TABLE IF NOT EXISTS devices (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id INTEGER NOT NULL REFERENCES users(id),
+            name TEXT NOT NULL,
+            category TEXT NOT NULL DEFAULT 'Other',
+            value REAL NOT NULL DEFAULT 0,
+            note TEXT NOT NULL DEFAULT '',
+            acquired_date TEXT NOT NULL DEFAULT (date('now')),
+            created_at TEXT NOT NULL DEFAULT (datetime('now'))
+        );
+        CREATE INDEX IF NOT EXISTS idx_devices_user_id ON devices(user_id);
+        """
+    )
+
+
+def list_devices(conn, user_id):
+    rows = conn.execute(
+        "SELECT * FROM devices WHERE user_id = ? ORDER BY acquired_date DESC, id DESC",
+        (user_id,),
+    ).fetchall()
+    return [dict(r) for r in rows]
+
+
+def get_device(conn, user_id, device_id):
+    row = conn.execute(
+        "SELECT * FROM devices WHERE id = ? AND user_id = ?",
+        (device_id, user_id),
+    ).fetchone()
+    return dict(row) if row else None
+
+
+def create_device(conn, user_id, data):
+    name = (data.get("name") or "").strip()
+    if not name:
+        raise ValueError("Name is required")
+    value = float(data.get("value") or 0)
+    if value < 0:
+        raise ValueError("Value cannot be negative")
+    acquired = (
+        _normalize_datetime(data["acquired_date"], conn, date_only=True)
+        if data.get("acquired_date") else _local_date(conn)
+    )
+    cursor = conn.execute(
+        """
+        INSERT INTO devices (user_id, name, category, value, note, acquired_date)
+        VALUES (?, ?, ?, ?, ?, ?)
+        """,
+        (user_id, name, (data.get("category") or "Other").strip() or "Other",
+         value, data.get("note", ""), acquired),
+    )
+    return get_device(conn, user_id, cursor.lastrowid)
+
+
+def update_device(conn, user_id, device_id, data):
+    """Partial update of one device - only the fields present in `data`
+    are changed, everything else keeps its current value."""
+    if not get_device(conn, user_id, device_id):
+        return None
+    fields, values = [], []
+    if "name" in data:
+        name = (data["name"] or "").strip()
+        if not name:
+            raise ValueError("Name is required")
+        fields.append("name = ?")
+        values.append(name)
+    if "category" in data:
+        fields.append("category = ?")
+        values.append((data["category"] or "Other").strip() or "Other")
+    if "value" in data:
+        value = float(data["value"] or 0)
+        if value < 0:
+            raise ValueError("Value cannot be negative")
+        fields.append("value = ?")
+        values.append(value)
+    if "note" in data:
+        fields.append("note = ?")
+        values.append(data["note"] or "")
+    if data.get("acquired_date"):
+        fields.append("acquired_date = ?")
+        values.append(_normalize_datetime(data["acquired_date"], conn, date_only=True))
+    if fields:
+        values.extend([device_id, user_id])
+        conn.execute(
+            f"UPDATE devices SET {', '.join(fields)} WHERE id = ? AND user_id = ?",
+            values,
+        )
+    return get_device(conn, user_id, device_id)
+
+
+def delete_device(conn, user_id, device_id):
+    if not get_device(conn, user_id, device_id):
+        return False
+    conn.execute("DELETE FROM devices WHERE id = ? AND user_id = ?", (device_id, user_id))
     return True
 
 
@@ -2696,7 +2837,8 @@ def _post_purchase_ledger(conn, user_id, phone_id, data):
             f"Purchase: {model} (#{phone_id})", entry_date,
             source_type="phone_purchase", source_id=phone_id,
             account_id=supplier_account_id,
-            account_entry_type="credit" if supplier_account_id else None,
+            # Paying the supplier now = shop giving money = debit.
+            account_entry_type="debit" if supplier_account_id else None,
             force=force,
         )
         if cb:
@@ -2704,7 +2846,8 @@ def _post_purchase_ledger(conn, user_id, phone_id, data):
 
     if payable > 0 and supplier_account_id:
         note = f"{'Borrow' if acquisition == 'borrow' else 'Udhar'}: {model} (#{phone_id})"
-        acct_type = "debit"
+        # New debt owed TO the supplier (no cash moved yet) = credit.
+        acct_type = "credit"
         purchase_acct_id = _insert_account_entry(
             conn, supplier_account_id, acct_type, payable, note,
         )
@@ -2753,7 +2896,8 @@ def _post_sale_ledger(conn, user_id, phone_id, data):
             f"Sale: {model} (#{phone_id})", entry_date,
             source_type="phone_sale", source_id=phone_id,
             account_id=buyer_account_id,
-            account_entry_type="debit" if buyer_account_id else None,
+            # Receiving payment from the buyer now = shop received money = credit.
+            account_entry_type="credit" if buyer_account_id else None,
         )
         if cb:
             sale_cb_id = cb.get("cash_book_entry_id") or cb.get("id")
@@ -2763,7 +2907,8 @@ def _post_sale_ledger(conn, user_id, phone_id, data):
         if not acct_id:
             raise ValueError("Select a buyer account when recording sale udhar (receivable)")
         note = f"Sale udhar: {model} (#{phone_id})"
-        sale_acct_id = _insert_account_entry(conn, acct_id, "credit", receivable, note)
+        # New debt owed BY the buyer (no cash moved yet) = debit.
+        sale_acct_id = _insert_account_entry(conn, acct_id, "debit", receivable, note)
         _record_ledger_link(
             conn, user_id, "phone_receivable", phone_id, account_entry_id=sale_acct_id,
         )
@@ -2865,8 +3010,10 @@ def _reverse_phone_purchase_ledger(conn, user_id, phone_id):
 def _validate_phone_payments(conn, user_id, data, status):
     """Reject a phone create/update before anything is written: negative
     money fields, a payable/receivable that exceeds the purchase/sale
-    price, a bank payment with no bank selected, missing IMEI once status
-    is 'Sold', and udhar (receivable) without a buyer account chosen.
+    price, a bank payment with no bank selected, and udhar (receivable)
+    without a buyer account chosen. IMEI (both 1 and 2) is always optional,
+    including once a phone is marked Sold — not every shop tracks IMEIs for
+    every device, and requiring one must never block completing a sale.
     "borrow"/"opening" acquisition types skip the purchase-payment-method
     checks entirely - see create_phone's acquisition_type handling for why."""
     if "purchase_price" in data and float(data.get("purchase_price") or 0) < 0:
@@ -2893,14 +3040,6 @@ def _validate_phone_payments(conn, user_id, data, status):
         if payable > purchase_price:
             raise ValueError("Payable amount cannot exceed purchase price")
     if status == "Sold":
-        # Opening stock is allowed to skip IMEI at entry time (the shop owner
-        # is bulk-seeding phones they already own, sometimes without the
-        # IMEI handy) - but once a phone is actually marked Sold, IMEI
-        # becomes load-bearing (find-IMEI lookups, warranty, duplicate-sale
-        # prevention), so it's required from this point on regardless of how
-        # the phone was acquired.
-        if not _normalize_imei(data.get("imei")):
-            raise ValueError("IMEI is required before a phone can be marked Sold")
         method = data.get("sale_payment_method") or "cash"
         if method not in ("cash", "bank"):
             raise ValueError("Sale payment method must be Cash or Bank")
@@ -3040,8 +3179,8 @@ def add_opening_stock(conn, user_id, rows):
     before adopting this CRM. Always created as status='Bought' with
     acquisition_type='opening', which create_phone() then uses to skip
     posting any purchase-ledger entry - see the comment in create_phone for
-    why that matters. IMEI is optional here (see _validate_phone_payments -
-    it's only required once a phone is actually marked Sold)."""
+    why that matters. IMEI is optional here and stays optional even once a
+    phone is later marked Sold (see _validate_phone_payments)."""
     if not conn.in_transaction:
         conn.execute("BEGIN IMMEDIATE")
     created = []
@@ -3367,7 +3506,12 @@ def add_phone_expense(conn, user_id, phone_id, data):
             "payment_source": data.get("payment_source") or "cash",
             "bank_account_id": data.get("bank_account_id"),
         }, source_type="phone_expense", source_id=expense_id,
-           account_entry_type="debit" if account_id else None,
+           # Giving money to pay this expense = debit under the OLD label
+           # convention; kept as "credit" here post-fix so the arithmetic
+           # (via the flipped _account_balance formula) stays identical to
+           # before, and so expense_summary's own exclusion query below
+           # (which is flipped in lockstep) keeps ignoring this mirror.
+           account_entry_type="credit" if account_id else None,
            force=bool(data.get("force")))
         cash_book_entry_id = cb.get("cash_book_entry_id") or cb.get("id")
         account_entry_id = cb.get("account_entry_id")
@@ -3444,7 +3588,12 @@ def update_phone_expense(conn, user_id, phone_id, expense_id, data):
             "payment_source": data.get("payment_source") or "cash",
             "bank_account_id": data.get("bank_account_id"),
         }, source_type="phone_expense", source_id=expense_id,
-           account_entry_type="debit" if account_id else None,
+           # Giving money to pay this expense = debit under the OLD label
+           # convention; kept as "credit" here post-fix so the arithmetic
+           # (via the flipped _account_balance formula) stays identical to
+           # before, and so expense_summary's own exclusion query below
+           # (which is flipped in lockstep) keeps ignoring this mirror.
+           account_entry_type="credit" if account_id else None,
            force=bool(data.get("force")))
         cash_book_entry_id = cb.get("cash_book_entry_id") or cb.get("id")
         account_entry_id = cb.get("account_entry_id")
@@ -3655,7 +3804,10 @@ def process_purchase_return(conn, user_id, data):
             "payment_source": data.get("payment_source") or "cash",
             "bank_account_id": data.get("bank_account_id"),
         }, source_type="purchase_return", source_id=log_id,
-           account_entry_type="credit" if account_id else None)
+           # A refund from the supplier reduces what the shop owes them, the
+           # same direction as paying them down (money-model phase 2: both
+           # are "debit" now), even though cash flows the opposite way.
+           account_entry_type="debit" if account_id else None)
 
     log = conn.execute(
         "SELECT * FROM return_logs WHERE id = ?", (log_id,)
@@ -3773,7 +3925,10 @@ def process_sale_return(conn, user_id, data):
             "payment_source": data.get("payment_source") or "cash",
             "bank_account_id": data.get("bank_account_id"),
         }, source_type="sale_return", source_id=log_id,
-           account_entry_type="debit" if account_id else None,
+           # Refunding the buyer reduces their receivable, the same
+           # direction as them paying us down (money-model phase 2: both
+           # are "credit" now), even though cash flows the opposite way.
+           account_entry_type="credit" if account_id else None,
            force=bool(data.get("force")))
 
     log = conn.execute(
@@ -3803,19 +3958,20 @@ def expense_summary(conn, user_id, start_date=None, end_date=None):
     though the money moved correctly through the Cash Book and that
     account's own statement.
 
-    A 'credit' on an is_expense_category account always counts as an
-    expense here. A 'debit' on one is more subtle: add_phone_expense (via
-    _create_cash_book_synced) always creates the DEBIT side of its own
+    A 'debit' on an is_expense_category account always counts as an
+    expense here (money-model phase 2: debit = shop gave money). A
+    'credit' on one is more subtle: add_phone_expense (via
+    _create_cash_book_synced) always creates the CREDIT side of its own
     mirrored account entry whenever the expense has an account_id linked
-    (account_entry_type='debit'), and that event is already counted in
+    (account_entry_type='credit'), and that event is already counted in
     total_phone_expenses -- subtracting it again here would double-count
-    it in the other direction. A genuine standalone debit (e.g. a
+    it in the other direction. A genuine standalone credit (e.g. a
     shopkeeper manually recording a refund/credit note from a vendor
     against this category) is NOT linked to a phone_expense and should
     reduce the total. The two are told apart via ledger_links: an account
     entry recorded by _create_cash_book_synced always gets a
     ledger_links row for its own source_type ('phone_expense' in this
-    case); a manually-entered debit via create_entry never does.
+    case); a manually-entered credit via create_entry never does.
     """
     phone_rows = conn.execute(
         """
@@ -3847,9 +4003,9 @@ def expense_summary(conn, user_id, start_date=None, end_date=None):
         JOIN accounts a ON a.id = ae.account_id
         WHERE a.user_id = ? AND a.is_expense_category = 1
           AND (
-            ae.entry_type = 'credit'
+            ae.entry_type = 'debit'
             OR (
-              ae.entry_type = 'debit'
+              ae.entry_type = 'credit'
               AND NOT EXISTS (
                 SELECT 1 FROM ledger_links ll
                 WHERE ll.account_entry_id = ae.id AND ll.source_type = 'phone_expense'
@@ -3877,11 +4033,11 @@ def expense_summary(conn, user_id, start_date=None, end_date=None):
         if not _in_range(r["expense_date"]):
             continue
         d = dict(r)
-        # A standalone debit (refund/credit-note against this expense
+        # A standalone credit (refund/credit-note against this expense
         # category) reduces the total -- represented as a negative amount
         # so the entries list and the running total stay consistent with
         # each other at a glance.
-        if d.pop("entry_type") == "debit":
+        if d.pop("entry_type") == "credit":
             d["amount"] = -abs(d["amount"])
         d["category"] = "Account Expense"
         account_expenses.append(d)
@@ -4346,7 +4502,7 @@ def update_cash_book_entry(conn, user_id, entry_id, data, *, _sync_linked=True):
                     (tx_type, amount, note, row["linked_bank_transaction_id"]),
                 )
             if row["linked_account_entry_id"]:
-                acct_type = "credit" if entry_type == "out" else "debit"
+                acct_type = "debit" if entry_type == "out" else "credit"
                 conn.execute(
                     """
                     UPDATE account_entries
@@ -4447,8 +4603,13 @@ def compute_dashboard(conn, user_id):
     ).fetchall()
     inventory = conn.execute(
         """
-        SELECT id, model, purchase_price, receivable_amount, status, type, condition, imei
-        FROM phones WHERE status IN ('Bought', 'In Repair') AND user_id = ?
+        SELECT p.id, p.model, p.purchase_price, p.receivable_amount, p.status, p.type,
+               p.condition, p.imei,
+               COALESCE(SUM(pe.amount), 0) AS expense_total
+        FROM phones p
+        LEFT JOIN phone_expenses pe ON pe.phone_id = p.id
+        WHERE p.status IN ('Bought', 'In Repair') AND p.user_id = ?
+        GROUP BY p.id
         """,
         (user_id,),
     ).fetchall()
@@ -4474,7 +4635,36 @@ def compute_dashboard(conn, user_id):
         r["payable_amount"] or 0 for r in payables if not r["supplier_account_id"]
     )
     total_payables_combined = round(accounts_payable + phone_payables, 2)
-    active_stock_worth = sum(r["purchase_price"] or 0 for r in inventory)
+    # Stock worth includes every rupee sunk into a phone that hasn't sold yet -
+    # purchase price AND any repair/accessory expenses logged against it -
+    # so it matches total_costing (see phone_to_dict) and, together with
+    # total_net_profit (which already nets expenses off SOLD phones), keeps
+    # every rupee spent accounted for exactly once in the Expected Liquid
+    # formula below. Before this fix, an expense on unsold stock reduced
+    # actual cash/bank with nothing offsetting it here, which is what
+    # produced a false Hisaab mein Farq every time one was recorded.
+    active_stock_worth = sum(
+        (r["purchase_price"] or 0) + (r["expense_total"] or 0) for r in inventory
+    )
+
+    # Phase 0 answer #1 (money-model): active_stock_worth above covers
+    # per-phone expenses on UNSOLD stock, but Fixed Expenses (rent, salary)
+    # and standalone expense-category debits (e.g. a Food/Utilities account)
+    # are a real cash/bank outflow that total_net_profit never nets out -
+    # _sold_profit only subtracts a phone's OWN per-phone expenses from its
+    # sale, never general overhead. Left out of this formula, every rupee
+    # spent on overhead silently opened a Hisaab mein Farq gap the moment it
+    # was recorded, with no way to ever close it. Both categories here are
+    # always posted as an immediate cash/bank movement (see
+    # create_fixed_expense and create_entry's needs_payment rule for
+    # is_expense_category accounts - neither supports a "billed but unpaid"
+    # state), so - per that same answer - it's safe to subtract the full
+    # amount here without double-counting against Payables, which only
+    # tracks unpaid supplier/customer debt, never overhead.
+    overhead_paid = expense_summary(conn, user_id)
+    overhead_expenses_paid = round(
+        overhead_paid["total_fixed_expenses"] + overhead_paid["total_account_expenses"], 2
+    )
 
     total_in_bank = total_bank_balance(conn, user_id)
     total_in_cash = cash_in_hand_balance(conn, user_id)
@@ -4484,7 +4674,7 @@ def compute_dashboard(conn, user_id):
 
     formula_expected = (
         total_investment + total_net_profit - total_udhar - active_stock_worth
-        + total_payables_combined
+        + total_payables_combined - overhead_expenses_paid
     )
     expected_bank_balance = round(formula_expected - total_in_cash, 2)
 
@@ -4598,7 +4788,20 @@ def complete_setup(conn, user_id):
 
 def compute_monthly_metrics(conn, user_id):
     """Overview page's "this month" tile: units sold, profit, margin, and
-    top-selling model for the current calendar month."""
+    top-selling model for the current calendar month.
+
+    Phase 3 "Close the Month": also respects overview_period_start (set by
+    close_the_month() below) so a shop owner can manually restart this tile
+    from zero mid-month, without waiting for the calendar month to roll
+    over. Once a new calendar month actually starts, the strftime filter
+    alone already excludes every sale from the old period_start's month, so
+    there's nothing to separately clear - a stale period_start from last
+    month simply stops matching anything relevant.
+
+    Deliberately independent of compute_month_report - that report always
+    reflects the real, full calendar month for historical reference; only
+    this Overview tile is affected by a manual close."""
+    period_start = get_user_settings(conn, user_id).get("overview_period_start") or ""
     rows = conn.execute(
         """
         SELECT * FROM phones
@@ -4606,8 +4809,9 @@ def compute_monthly_metrics(conn, user_id):
           AND sold_at IS NOT NULL
           AND user_id = ?
           AND strftime('%Y-%m', sold_at) = strftime('%Y-%m', 'now', 'localtime')
+          AND (? = '' OR sold_at > ?)
         """,
-        (user_id,),
+        (user_id, period_start, period_start),
     ).fetchall()
 
     units_sold = len(rows)
@@ -4625,20 +4829,48 @@ def compute_monthly_metrics(conn, user_id):
         "total_profit": round(total_profit, 2),
         "profit_margin": round(margin, 1),
         "top_model": top_model,
-        "month_label": conn.execute(
-            "SELECT strftime('%B %Y', 'now') AS label"
-        ).fetchone()["label"],
+        # SQLite's strftime doesn't support %B (full month name) - it
+        # silently returns NULL rather than raising, so this always showed
+        # a blank month label until now. Found during this session's live
+        # walkthrough of Close the Month. Python's strftime (used by
+        # compute_monthly_closing_summary/compute_month_report already)
+        # supports it correctly.
+        "month_label": datetime.now().strftime("%B %Y"),
     }
+
+
+def close_the_month(conn, user_id):
+    """Phase 3 "Close the Month": resets ONLY the Overview page's "Monthly
+    Metrics" tile (units sold / profit / margin / top model), by moving
+    overview_period_start to right now - compute_monthly_metrics then only
+    counts sales after this instant for the rest of the current calendar
+    month. Nothing else is touched: no phone, expense, account_entry,
+    cash_book_entry, or bank_transaction row is deleted or modified, so
+    Month Report and every other historical view stay exactly as accurate
+    as before. Safe to call as many times as the shop owner wants."""
+    if not conn.in_transaction:
+        conn.execute("BEGIN IMMEDIATE")
+    closed_at = _local_datetime(conn)
+    update_user_settings(conn, user_id, {"overview_period_start": closed_at})
+    return {"ok": True, "closed_at": closed_at}
 
 
 # --- Accounts (Digikhata-style ledger) ---
 
 def _account_balance(conn, account_id):
+    """Positive = this person owes the shop; negative = the shop owes them
+    (money-model phase 2). 'debit' = they were billed more, or the shop
+    gave them money in a way that reduces what the shop owes (e.g. paying
+    a supplier down, or a supplier refund) -- both increase this balance.
+    'credit' = the shop received money from them, or the shop was billed
+    more by them (e.g. a purchase payable) -- both decrease this balance.
+    See create_entry's docstring for the plain-language version of this
+    rule that's shown to the user."""
     row = conn.execute(
         """
         SELECT
-            COALESCE(SUM(CASE WHEN entry_type = 'credit' THEN amount ELSE 0 END), 0) -
-            COALESCE(SUM(CASE WHEN entry_type = 'debit' THEN amount ELSE 0 END), 0) AS balance
+            COALESCE(SUM(CASE WHEN entry_type = 'debit' THEN amount ELSE 0 END), 0) -
+            COALESCE(SUM(CASE WHEN entry_type = 'credit' THEN amount ELSE 0 END), 0) AS balance
         FROM account_entries WHERE account_id = ?
         """,
         (account_id,),
@@ -4710,9 +4942,11 @@ def create_account(conn, user_id, data):
         except (TypeError, ValueError):
             amount = 0
         if amount > 0:
-            entry_type = data.get("opening_balance_type") or "credit"
+            # "They owe me" (the sensible default) = debit; see
+            # _account_balance's docstring for the full credit/debit rule.
+            entry_type = data.get("opening_balance_type") or "debit"
             if entry_type not in ("credit", "debit"):
-                entry_type = "credit"
+                entry_type = "debit"
             _insert_account_entry(conn, account_id, entry_type, amount, "Opening balance")
 
     return get_account(conn, user_id, account_id)
@@ -4752,8 +4986,6 @@ def _account_still_referenced(conn, account_id):
         ("phones", "buyer_account_id", "one or more phones list it as the buyer"),
         ("phone_expenses", "account_id", "it's linked to a phone expense"),
         ("return_logs", "account_id", "it's linked to a return record"),
-        ("journal_vouchers", "debit_account_id", "it's used in a journal voucher"),
-        ("journal_vouchers", "credit_account_id", "it's used in a journal voucher"),
     ]
     for table, column, reason in checks:
         row = conn.execute(
@@ -4767,8 +4999,8 @@ def _account_still_referenced(conn, account_id):
 def delete_account(conn, user_id, account_id):
     """Delete an account and every entry in its statement (cascading
     through cash book/bank links too), but only once
-    _account_still_referenced confirms nothing else (a phone, expense,
-    return, or journal voucher) still points at it."""
+    _account_still_referenced confirms nothing else (a phone, expense, or
+    return) still points at it."""
     if not get_account(conn, user_id, account_id):
         return
     still_used = _account_still_referenced(conn, account_id)
@@ -4812,7 +5044,7 @@ def build_statement(conn, user_id, account_id):
     lines = []
     for row in rows:
         d = dict(row)
-        if d["entry_type"] == "credit":
+        if d["entry_type"] == "debit":
             balance += d["amount"]
         else:
             balance -= d["amount"]
@@ -4826,11 +5058,16 @@ def build_statement(conn, user_id, account_id):
 
 
 def create_entry(conn, account_id, data, user_id=None):
-    """Post a credit/debit against a khata account. A debit (money coming
-    in) or a credit on an expense-category account always requires a real
-    cash/bank payment method and syncs the cash book; a plain credit
-    (e.g. billing new udhar) only syncs cash/bank if the caller explicitly
-    picked one, since billing debt by itself doesn't move any money."""
+    """Post a credit/debit against a khata account. Money-model phase 2:
+    credit = the shop received a payment; debit = the shop gave a payment,
+    OR billed new debt with no money moving yet (e.g. a sale/purchase on
+    credit) — see _account_balance's docstring for the full rule. A credit
+    (money coming in) or a debit on an expense-category account (paying
+    that expense) always requires a real cash/bank payment method and
+    syncs the cash book; a plain debit (e.g. billing new udhar, or paying
+    down what you owe a supplier) only syncs cash/bank if the caller
+    explicitly picked one, since billing debt by itself doesn't move any
+    money."""
     entry_type = data["entry_type"]
     if entry_type not in ENTRY_TYPES:
         raise ValueError("Invalid entry type")
@@ -4841,11 +5078,12 @@ def create_entry(conn, account_id, data, user_id=None):
     bank_account_id = data.get("bank_account_id")
 
     is_expense = user_id and is_expense_category_account(conn, account_id)
-    # Cash/bank sync is required for debit entries and expense-category credits
-    # (real money is guaranteed to move). It's optional but still honored for a
-    # plain credit entry (e.g. paying down what you owe a supplier) whenever the
-    # user explicitly picks Cash or Bank — that selection means real cash moved.
-    needs_payment = entry_type == "debit" or (entry_type == "credit" and is_expense)
+    # Cash/bank sync is required for credit entries (receiving payment) and
+    # expense-category debits (paying that expense) - real money is
+    # guaranteed to move. It's optional but still honored for a plain debit
+    # entry (e.g. paying down what you owe a supplier) whenever the user
+    # explicitly picks Cash or Bank — that selection means real cash moved.
+    needs_payment = entry_type == "credit" or (entry_type == "debit" and is_expense)
 
     if payment_source and payment_source not in ("cash", "bank"):
         raise ValueError("Payment source must be cash or bank")
@@ -4859,7 +5097,7 @@ def create_entry(conn, account_id, data, user_id=None):
             raise ValueError("Bank account not found")
 
     if user_id and payment_source in ("cash", "bank"):
-        cash_direction = "in" if entry_type == "debit" else "out"
+        cash_direction = "in" if entry_type == "credit" else "out"
         return _create_account_entry_synced(
             conn, user_id, account_id, entry_type, amount, note,
             payment_source=payment_source,
@@ -4879,32 +5117,15 @@ def create_entry(conn, account_id, data, user_id=None):
     return dict(row)
 
 
-def _journal_voucher_for_entry(conn, entry_id):
-    """Return the journal voucher id if this account entry is one leg of a voucher."""
-    row = conn.execute(
-        "SELECT id FROM journal_vouchers WHERE debit_entry_id = ? OR credit_entry_id = ?",
-        (entry_id, entry_id),
-    ).fetchone()
-    return row["id"] if row else None
-
-
 def update_entry(conn, entry_id, data, user_id=None):
     """Edit a standalone account entry's type/amount/note, keeping its
     mirrored cash book entry (and that entry's own mirrored bank
-    transaction, if any) in sync. Refuses if this entry is actually one
-    leg of a journal voucher - those must be edited from the Journal page
-    so both legs move together."""
+    transaction, if any) in sync."""
     existing = conn.execute(
         "SELECT * FROM account_entries WHERE id = ?", (entry_id,)
     ).fetchone()
     if not existing:
         return None
-    voucher_id = _journal_voucher_for_entry(conn, entry_id)
-    if voucher_id is not None:
-        raise ValueError(
-            f"This entry belongs to Journal Voucher #{voucher_id} — edit or delete it "
-            "from the Journal page so both sides stay in sync."
-        )
 
     entry_type = data.get("entry_type", existing["entry_type"])
     amount = float(data["amount"]) if "amount" in data else float(existing["amount"])
@@ -4924,7 +5145,7 @@ def update_entry(conn, entry_id, data, user_id=None):
 
     cb_id = existing["linked_cash_book_entry_id"]
     if user_id and cb_id:
-        cash_direction = "in" if entry_type == "debit" else "out"
+        cash_direction = "in" if entry_type == "credit" else "out"
         update_cash_book_entry(
             conn, user_id, cb_id,
             {"entry_type": cash_direction, "amount": amount, "note": note},
@@ -4955,16 +5176,8 @@ def update_entry(conn, entry_id, data, user_id=None):
 
 def delete_entry(conn, entry_id, user_id=None):
     """Delete a standalone account entry and reverse whatever it's linked
-    to (cash book/bank). Refuses if it's one leg of a journal voucher -
-    same reasoning as update_entry above. Looks up the owning user_id
-    itself if not given, so callers that only have the entry id can still
-    call this safely."""
-    voucher_id = _journal_voucher_for_entry(conn, entry_id)
-    if voucher_id is not None:
-        raise ValueError(
-            f"This entry belongs to Journal Voucher #{voucher_id} — delete it "
-            "from the Journal page so both sides stay in sync."
-        )
+    to (cash book/bank). Looks up the owning user_id itself if not given,
+    so callers that only have the entry id can still call this safely."""
     if user_id is None:
         row = conn.execute(
             """
@@ -4996,13 +5209,14 @@ def customer_recovery_analysis(conn, user_id):
     """Per-customer: total billed to them, total collected, total still
     outstanding, and how long the oldest outstanding amount has been owed.
 
-    Billed/collected are computed directly from account_entries (credit =
-    billed, debit = collected) rather than joining phones.sale_price — a
-    receivable can come from a phone sale, a journal/hawala settlement, or a
-    manual entry, and not all of those carry a phones.buyer_account_id link.
-    Deriving "collected" as total_sold - outstanding previously produced
-    impossible negative-implied values whenever a customer's balance grew
-    from something other than a phone linked to their account.
+    Billed/collected are computed directly from account_entries (money-model
+    phase 2: debit = billed, credit = collected) rather than joining
+    phones.sale_price — a receivable can come from a phone sale, a
+    journal/hawala settlement, or a manual entry, and not all of those carry
+    a phones.buyer_account_id link. Deriving "collected" as total_sold -
+    outstanding previously produced impossible negative-implied values
+    whenever a customer's balance grew from something other than a phone
+    linked to their account.
     """
     accounts = [a for a in list_accounts(conn, user_id) if not a["is_expense_category"]]
     results = []
@@ -5010,9 +5224,9 @@ def customer_recovery_analysis(conn, user_id):
         agg = conn.execute(
             """
             SELECT
-                COALESCE(SUM(CASE WHEN entry_type = 'credit' THEN amount ELSE 0 END), 0) AS billed,
-                COALESCE(SUM(CASE WHEN entry_type = 'debit' THEN amount ELSE 0 END), 0) AS collected,
-                MIN(CASE WHEN entry_type = 'credit' THEN date(created_at, 'localtime') END) AS oldest_credit
+                COALESCE(SUM(CASE WHEN entry_type = 'debit' THEN amount ELSE 0 END), 0) AS billed,
+                COALESCE(SUM(CASE WHEN entry_type = 'credit' THEN amount ELSE 0 END), 0) AS collected,
+                MIN(CASE WHEN entry_type = 'debit' THEN date(created_at, 'localtime') END) AS oldest_debit
             FROM account_entries
             WHERE account_id = ?
             """,
@@ -5030,7 +5244,7 @@ def customer_recovery_analysis(conn, user_id):
             "total_sold": billed,
             "total_collected": collected,
             "total_outstanding": outstanding,
-            "oldest_outstanding_date": (agg["oldest_credit"] if outstanding > 0 else None),
+            "oldest_outstanding_date": (agg["oldest_debit"] if outstanding > 0 else None),
         })
     results.sort(key=lambda r: r["total_outstanding"], reverse=True)
     return results
@@ -5044,114 +5258,6 @@ def seed_expense_accounts(conn, user_id):
 def list_khata_accounts(conn, user_id):
     """Person/supplier accounts only — excludes expense category accounts."""
     return [a for a in list_accounts(conn, user_id) if not a["is_expense_category"]]
-
-
-def list_journal_vouchers(conn, user_id):
-    rows = conn.execute(
-        """
-        SELECT jv.*,
-            da.name AS debit_account_name,
-            ca.name AS credit_account_name
-        FROM journal_vouchers jv
-        JOIN accounts da ON da.id = jv.debit_account_id
-        JOIN accounts ca ON ca.id = jv.credit_account_id
-        WHERE jv.user_id = ?
-        ORDER BY jv.voucher_date DESC, jv.id DESC
-        """,
-        (user_id,),
-    ).fetchall()
-    return [dict(r) for r in rows]
-
-
-def create_journal_voucher(conn, user_id, data):
-    """Move a debt between two khata accounts with no cash/bank involved
-    (a hawala-style settlement) - posts one debit entry and one credit
-    entry, both for the same amount, and links them together on the
-    voucher row so they're always edited/deleted as a pair (see
-    update_entry/delete_entry's journal-voucher guard above)."""
-    amount = float(data["amount"])
-    if amount <= 0:
-        raise ValueError("Amount must be greater than zero")
-
-    debit_id = int(data["debit_account_id"])
-    credit_id = int(data["credit_account_id"])
-    if debit_id == credit_id:
-        raise ValueError("Debit and credit accounts must be different")
-
-    debit_acct = get_account(conn, user_id, debit_id)
-    credit_acct = get_account(conn, user_id, credit_id)
-    if not debit_acct or not credit_acct:
-        raise ValueError("Invalid account selected")
-
-    voucher_date = data.get("voucher_date") or _local_date(conn)
-    reference = data.get("reference", "")
-    narration = data.get("narration", "")
-
-    cursor = conn.execute(
-        """
-        INSERT INTO journal_vouchers (
-            voucher_date, reference, narration,
-            debit_account_id, credit_account_id, amount, user_id
-        ) VALUES (?, ?, ?, ?, ?, ?, ?)
-        """,
-        (voucher_date, reference, narration, debit_id, credit_id, amount, user_id),
-    )
-    voucher_id = cursor.lastrowid
-    note = narration or reference or f"Journal voucher #{voucher_id}"
-    debit_entry_id = _insert_account_entry(conn, debit_id, "debit", amount, note)
-    credit_entry_id = _insert_account_entry(conn, credit_id, "credit", amount, note)
-    conn.execute(
-        """
-        UPDATE journal_vouchers
-        SET debit_entry_id = ?, credit_entry_id = ?
-        WHERE id = ?
-        """,
-        (debit_entry_id, credit_entry_id, voucher_id),
-    )
-    _record_ledger_link(
-        conn, user_id, "journal_voucher", voucher_id,
-        account_entry_id=debit_entry_id,
-    )
-    _record_ledger_link(
-        conn, user_id, "journal_voucher", voucher_id,
-        account_entry_id=credit_entry_id,
-    )
-
-    row = conn.execute(
-        """
-        SELECT jv.*,
-            da.name AS debit_account_name,
-            ca.name AS credit_account_name
-        FROM journal_vouchers jv
-        JOIN accounts da ON da.id = jv.debit_account_id
-        JOIN accounts ca ON ca.id = jv.credit_account_id
-        WHERE jv.id = ?
-        """,
-        (voucher_id,),
-    ).fetchone()
-    return dict(row)
-
-
-def delete_journal_voucher(conn, user_id, voucher_id):
-    row = conn.execute(
-        "SELECT * FROM journal_vouchers WHERE id = ? AND user_id = ?",
-        (voucher_id, user_id),
-    ).fetchone()
-    if not row:
-        return False
-    if row["debit_entry_id"]:
-        _delete_account_entry_cascade(conn, user_id, row["debit_entry_id"])
-    if row["credit_entry_id"]:
-        _delete_account_entry_cascade(conn, user_id, row["credit_entry_id"])
-    conn.execute(
-        "DELETE FROM ledger_links WHERE user_id = ? AND source_type = 'journal_voucher' AND source_id = ?",
-        (user_id, voucher_id),
-    )
-    conn.execute(
-        "DELETE FROM journal_vouchers WHERE id = ? AND user_id = ?",
-        (voucher_id, user_id),
-    )
-    return True
 
 
 # --- Backup / Export ---
@@ -5233,7 +5339,6 @@ def export_all_data(conn, user_id):
                 (user_id,),
             ).fetchall()
         ],
-        "journal_vouchers": list_journal_vouchers(conn, user_id),
         "return_logs": list_return_logs(conn, user_id),
         "invoices": list_invoices(conn, user_id, limit=-1),
         "purchase_invoices": list_purchase_invoices(conn, user_id, limit=-1),
@@ -5433,15 +5538,15 @@ def compute_monthly_closing_summary(conn, user_id, year_month=None):
     overhead_expenses = round(exp["total_fixed_expenses"] + exp["total_account_expenses"], 2)
     net_profit = round(gross_profit - overhead_expenses, 2)
 
-    # Udhar given vs recovered this month: credit = billed (new debt),
-    # debit = collected (wasool) - same convention as
+    # Udhar given vs recovered this month: debit = billed (new debt),
+    # credit = collected (wasool) - same convention as
     # customer_recovery_analysis, restricted to real (non-expense-category)
     # khata accounts.
     udhar_row = conn.execute(
         """
         SELECT
-            COALESCE(SUM(CASE WHEN ae.entry_type = 'credit' THEN ae.amount ELSE 0 END), 0) AS given,
-            COALESCE(SUM(CASE WHEN ae.entry_type = 'debit' THEN ae.amount ELSE 0 END), 0) AS recovered
+            COALESCE(SUM(CASE WHEN ae.entry_type = 'debit' THEN ae.amount ELSE 0 END), 0) AS given,
+            COALESCE(SUM(CASE WHEN ae.entry_type = 'credit' THEN ae.amount ELSE 0 END), 0) AS recovered
         FROM account_entries ae
         JOIN accounts a ON a.id = ae.account_id
         WHERE a.user_id = ? AND a.is_expense_category = 0
