@@ -6,7 +6,7 @@
 | **Branch** | `Test-1` |
 | **Version** | `2.4.13` |
 | **Audit date** | 2026-07-25 |
-| **Remediation pass** | Architecture issues fixed (same date) — see §2 |
+| **Remediation pass** | Architecture issues fixed (same date) — see §2; code cleanup/readability — see §15 |
 | **Method** | Static audit + template→API map + stress/unit + focused money proofs |
 | **Architecture reference source** | Phone Reseller CRM — Full Architecture Documentation (condensed in §14) |
 
@@ -26,7 +26,7 @@
 | `partner1_*` settings writable | Dual truth | Writes rejected; partners table is SoT |
 | Stress suite | 82/82 (blind to partial udhar) | **82/82** + finalize coverage **8/8** |
 
-**Still open (deferred):** god-module split, dual migration systems, CSRF hard-block on non-loopback, merge `personal_assets`/`devices`, invoice edit/void APIs, cash-book/bank-tx edit UI.
+**Still open (deferred):** physical split of `crm_db/core.py` (~6.6k still one file; domain modules are navigation re-exports), dual migration systems, CSRF hard-block on non-loopback, merge `personal_assets`/`devices`, invoice edit/void APIs. Dead HTTP routes and blueprint/`crm_db` navigation layout are done (§15).
 
 ---
 
@@ -51,19 +51,20 @@
 
 ## 3. Still open
 
-| Sev | Issue |
-|-----|-------|
-| High | `database.py` god module (~6.6k lines) — no service boundary |
-| Medium | Dual migrations (legacy `_migrate_*` + empty `SCHEMA_MIGRATIONS`) |
-| Medium | Incomplete `USER_SCOPED_TABLES` constant (restore uses dynamic resolver — OK) |
-| Medium | `cash_in_hand` setting rebases opening mid-life if edited in Settings |
-| Medium | Soft negative cash/bank with `force=True` |
-| Medium | Dead APIs: `GET /api/dashboard`, `/billing/phone/<id>`, `/accounts/expense-categories`, `/storage/backups`; unused PUTs for cash-book / bank txs |
-| Low | No CSRF; non-loopback bind only warns |
-| Low | `personal_assets` ≈ `devices` duplication |
-| Low | Invoice no edit/void |
-| Low | Client-only list filtering (scale) |
-| Ops | License HWID tests fail on Linux MAC fallback (Win/Mac primary IDs OK) |
+| Sev | Issue | Status |
+|-----|-------|--------|
+| High | `database.py` / `app.py` god modules | **Partially fixed** — thin facades + `crm_db/*` navigation modules + `routes/*` blueprints; implementation still concentrated in `crm_db/core.py` (~6.6k) |
+| Medium | Dual migrations (legacy `_migrate_*` + empty `SCHEMA_MIGRATIONS`) | Open |
+| Medium | Incomplete `USER_SCOPED_TABLES` constant (restore uses dynamic resolver — OK) | Open |
+| Medium | `cash_in_hand` setting rebases opening mid-life if edited in Settings | Open |
+| Medium | Soft negative cash/bank with `force=True` | Open |
+| Medium | Dead APIs (`/api/dashboard`, billing phone GET, expense-categories, storage backups, vendor-reset-info, POST logout, unused cash-book/bank PUTs) | **Fixed** — HTTP handlers removed (§15); DB helpers kept where internal |
+| Low | No CSRF; non-loopback bind only warns | Open (out of scope this pass) |
+| Low | `personal_assets` ≈ `devices` duplication | Open (product decision) |
+| Low | Invoice no edit/void | Open |
+| Low | Client-only list filtering (scale) | Open |
+| Low | Large `inventory.html` / `stress_test_crm.py` readability debt | Open (settings JS extracted; inventory extract deferred) |
+| Ops | License HWID tests fail on Linux MAC fallback (Win/Mac primary IDs OK) | Open |
 
 ---
 
@@ -74,8 +75,8 @@ Local Flask + SQLite desktop CRM for Panasonic/used-phone shops (Pakistan): inve
 ```mermaid
 flowchart TB
   Browser[Browser_Jinja_JS]
-  App[app.py_auth_license_validation]
-  DB[database.py_SQL_and_money_rules]
+  App[app.py_gates_plus_routes_blueprints]
+  DB[database.py_facade_to_crm_db_core]
   SQLite[crm.db_WAL]
   Browser -->|"apiFetch JSON"| App
   App -->|"db_session"| DB
@@ -84,7 +85,7 @@ flowchart TB
   Formula --> Gap[Hisaab_mein_Farq]
 ```
 
-**Gates:** `ensure_db` → `require_license` → `require_auth` → undo baseline.
+**Gates:** `ensure_db` → `require_license` → `require_auth` → undo baseline (still in `app.py`; handlers in `routes/*`).
 
 **Money sync spine:** `ledger_links` + `_create_cash_book_synced` / `_create_account_entry_synced` / reverse-by-source.
 
@@ -143,15 +144,15 @@ The original findings-only audit (pre-fix) documented Critical residual-only kha
 | `/login` | `login.html` |
 | `/activate` | `activation.html` |
 
-Approx. **111** `/api/*` routes; **215** functions in `database.py`.
+Approx. **~100** `/api/*` routes after dead-route removal; data layer still ~215 callables via `crm_db.core` / `database` facade.
 
 ### Prioritized remaining work
 
-1. Split `database.py` into schema / migrations / ledger / reports modules  
+1. Physically move bodies out of `crm_db/core.py` into the domain modules (today they are re-export maps)  
 2. Move new schema changes only into versioned `SCHEMA_MIGRATIONS`  
 3. Hard-block or CSRF-protect non-loopback binds  
-4. Wire or remove unused PUT/GET APIs; invoice void if shops need it  
-5. Unify personal assets / devices if product wants one tracker  
+4. Invoice void if shops need it; unify personal assets / devices if product wants one tracker  
+5. Extract large Inventory inline scripts → `static/inventory-page.js`  
 
 ---
 
@@ -183,17 +184,19 @@ Condensed from *Phone Reseller CRM — Full Architecture Documentation*. Use thi
 
 **Migrations:** Legacy idempotent `_migrate_*` chain every `init_db()` + versioned `SCHEMA_MIGRATIONS` / `PRAGMA user_version` (scaffold; `CURRENT_SCHEMA_VERSION = 1`, empty list). Pre-migration `.backup()` safety net.
 
-### 14.3 Backend (`app.py`)
+### 14.3 Backend (`app.py` + `routes/*`)
 
 - Secret key per-install file; no CSRF (localhost threat model; warn on non-loopback).
-- Gates: DB → license → auth → undo baseline.
+- Gates in `app.py`: DB → license → auth → undo baseline.
+- HTTP handlers in blueprints under `Source/routes/` (`auth`, `pages`, `inventory`, `billing`, `accounts_money`, `storage`, `reports`, `system`); helpers in `app_helpers.py`.
 - JSON `/api/*` + thin page routes; `NegativeBalanceWarning` → 409 `requires_confirmation` + `force`.
 - Nested routes re-check parent ownership (IDOR defense).
 
 ### 14.4 Frontend
 
 - `apiFetch` (20s timeout, 401→login); toast + reload mutation pattern.
-- `ui.js`: toasts, modals, charts, gap banner, settings, updates, undo/redo.
+- `ui.js`: toasts, modals, charts, gap banner, updates, undo/redo.
+- `settings-page.js`: Settings page wiring (`initSettingsPage`), loaded from `settings.html`.
 - WhatsApp: client-only `wa.me` links (no server WhatsApp API).
 
 ### 14.5 Money model (canonical after fix)
@@ -243,4 +246,80 @@ PyInstaller onedir → Inno Setup (Win) / `.app` (Mac). Build refuses without `C
 
 ---
 
-*Report updated after architecture remediation on Test-1. Critical money posting now matches shopkeeper intuition; Architecture Doc residual-only §5.2/§5.3 traces are obsolete.*
+## 15. Code cleanup & readability roadmap
+
+Behavior-preserving pass after the money-model remediations. Ledger formulas unchanged. Vendor keygen, stress harness, and `_migrate_remove_journal_vouchers` kept. Phone type enum `JV` / `.type-jv` kept (live product type, not Journal).
+
+### 15.1 What was deleted (Phase 1)
+
+**Dead HTTP routes removed from the Flask surface** (no template/static callers):
+
+| Method | Path |
+|--------|------|
+| GET | `/api/dashboard` (UI uses `/api/overview`) |
+| GET | `/api/billing/phone/<id>` |
+| GET | `/api/accounts/expense-categories` |
+| GET | `/api/storage/backup-status`, `/api/storage/backups` |
+| GET | `/api/auth/vendor-reset-info` |
+| POST | `/api/auth/logout` (UI uses `GET /logout`) |
+| PUT | `/api/cash-book/<id>`, `/api/banks/<id>/transactions/<tx_id>` |
+
+Corresponding `database` update helpers were kept where other internal paths may still use them.
+
+**Other strip:**
+
+- Noop `seed_expense_accounts` + call sites in `register_user`
+- Unused `CONDITION_OPTIONS`; JV undo label rows in `_UNDO_ACTION_LABELS`
+- `.journal-table-wrap` CSS; stale “Journal” comment in `createSearchableAccountSelect`
+- “journal vouchers” wording from README / customer-build feature lists
+- Stale `SOURCE_NAMES` entries in build/performance scripts
+- `Source/README.md` rewritten to point at root README
+- Shortened Baroobaar/JV historical comments (migration kept)
+
+### 15.2 Module map after split (Phase 2)
+
+| Path | Role |
+|------|------|
+| `Source/database.py` | Thin alias of `crm_db.core` (`import database as db` unchanged, including underscore helpers and test patches) |
+| `Source/crm_db/core.py` | Full data-layer implementation (~6.6k lines) |
+| `Source/crm_db/conn.py` … `backup_undo.py` | Domain navigation re-exports (`ledger`, `phones`, `accounts`, `reports`, `schema`, `migrations`, …) |
+| `Source/app.py` | Flask app, secret key, before_request gates, context processor, error handlers, blueprint registration |
+| `Source/app_helpers.py` | Shared request helpers (`_current_user_id`, amount/status validators, logo/folder pickers, …) |
+| `Source/routes/*.py` | Blueprints: `auth`, `pages`, `inventory`, `billing`, `accounts_money`, `storage`, `reports`, `system` |
+| `Source/static/settings-page.js` | `initSettingsPage` + Settings-only helpers |
+| `Source/static/ui.js` | Shared UI (toasts, modals, theme, updates, searchable selects, …) |
+
+### 15.3 Before / after line counts
+
+| File | Before (pre-cleanup) | After |
+|------|----------------------|-------|
+| `Source/database.py` | ~6,595 | ~19 (facade) + `crm_db/core.py` ~6,568 |
+| `Source/app.py` | ~2,273 | ~388 (+ `routes/*` + `app_helpers.py`) |
+| `Source/static/ui.js` | ~1,299 | ~904 (+ `settings-page.js` ~401) |
+
+### 15.4 Must-keep list
+
+- `stress_test_crm.py`, `test_finalize_coverage.py`, and related audit/stress artifacts
+- License / vendor keygen stack
+- `_migrate_remove_journal_vouchers` and other `_migrate_*` safety migrations
+- Phone type `JV` / CSS `.type-jv`
+- Money posting rules fixed in the architecture remediation pass (full bill + payment)
+
+### 15.5 Remaining readability debt
+
+- **Physical** move of function bodies from `crm_db/core.py` into domain modules (re-export map is navigation-only today)
+- Dual migration systems (legacy chain + versioned scaffold)
+- Large `templates/inventory.html` inline scripts (extract deferred)
+- Large `stress_test_crm.py` harness size
+- Incomplete `USER_SCOPED_TABLES` documentation vs dynamic restore resolver
+
+### 15.6 Gate
+
+| Suite | Result after cleanup |
+|-------|----------------------|
+| `test_finalize_coverage.py` | **8/8** |
+| `stress_test_crm.py` | **82/82** |
+
+---
+
+*Report updated after architecture remediation and code-cleanup/readability pass on Test-1. Critical money posting matches shopkeeper intuition; Architecture Doc residual-only §5.2/§5.3 traces are obsolete. Dead API surface removed; largest modules navigable via `crm_db/*` and `routes/*` (§15).*
