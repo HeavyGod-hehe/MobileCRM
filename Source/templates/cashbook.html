@@ -60,6 +60,38 @@
       </div>
     </form>
 
+    <div class="border-t border-white/10 pt-5 mb-6">
+      <p class="text-xs font-semibold uppercase tracking-wider text-slate-500 mb-1">Add Expense</p>
+      <p class="text-xs text-slate-600 mb-4">A general business expense (rent, salary, supplies…) — posts straight to Cash/Bank and shows up in Expense Summary. No phone required.</p>
+      <form id="cb-expense-form" class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
+        <div class="sm:col-span-2">
+          <label class="block text-xs font-medium text-slate-400 mb-1.5">Purpose *</label>
+          <input type="text" id="cbe-purpose" required class="input-field" placeholder="e.g. Shop rent, staff salary">
+        </div>
+        <div>
+          <label class="block text-xs font-medium text-slate-400 mb-1.5">Amount *</label>
+          <input type="number" id="cbe-amount" required min="1" step="1" class="input-field" placeholder="0">
+        </div>
+        <div>
+          <label class="block text-xs font-medium text-slate-400 mb-1.5">Payment Method *</label>
+          <select id="cbe-payment" class="input-field" required>
+            <option value="cash">Cash</option>
+            <option value="bank">Bank Account</option>
+          </select>
+        </div>
+        <div id="cbe-bank-wrap" class="hidden">
+          <label class="block text-xs font-medium text-slate-400 mb-1.5">Bank Account *</label>
+          <select id="cbe-bank" class="input-field">
+            <option value="">— Select bank —</option>
+          </select>
+        </div>
+        <div class="sm:col-span-2 lg:col-span-4">
+          <button type="submit" class="btn btn-primary btn-sm">Add Expense</button>
+        </div>
+      </form>
+      <div id="cb-expense-list" class="mt-4 space-y-2"></div>
+    </div>
+
     <h2 class="text-xs font-semibold uppercase tracking-wider text-slate-500 mb-3">Daily Summary</h2>
     <div class="overflow-x-auto mb-8">
       <table class="w-full text-sm">
@@ -226,8 +258,81 @@
     }
   });
 
+  function toggleCbeBank() {
+    const isBank = document.getElementById('cbe-payment').value === 'bank';
+    document.getElementById('cbe-bank-wrap').classList.toggle('hidden', !isBank);
+    document.getElementById('cbe-bank').required = isBank;
+  }
+  document.getElementById('cbe-payment').addEventListener('change', toggleCbeBank);
+
+  async function loadCbeBanks() {
+    const sel = document.getElementById('cbe-bank');
+    sel.innerHTML = '<option value="">— Select bank —</option>' +
+      cbBanks.map(b => `<option value="${b.id}">${esc(b.name)} (${fmt(b.balance)})</option>`).join('');
+  }
+
+  async function loadCbExpenses() {
+    const rows = await apiFetch('/api/fixed-expenses');
+    const list = document.getElementById('cb-expense-list');
+    if (!rows.length) {
+      list.innerHTML = '';
+      return;
+    }
+    list.innerHTML = rows.slice(0, 10).map(r => `
+      <div class="list-item-row flex items-center justify-between">
+        <div>
+          <p class="text-sm text-slate-300">${esc(r.purpose)}</p>
+          <p class="text-xs text-slate-500">${esc(r.created_at || '')}</p>
+        </div>
+        <div class="flex items-center gap-3">
+          <p class="font-semibold text-red-400">${fmt(r.amount)}</p>
+          <button onclick="deleteCbExpense(${r.id})" class="action-pill delete">Delete</button>
+        </div>
+      </div>`).join('');
+  }
+
+  window.deleteCbExpense = async (id) => {
+    if (!confirm('Delete this expense? Its Cash Book / Bank entry will also be reversed.')) return;
+    try {
+      await apiFetch(`/api/fixed-expenses/${id}`, { method: 'DELETE' });
+      toast('Expense deleted');
+      loadCbExpenses();
+      loadCashBook();
+    } catch (err) {
+      toast(err.message, 'error');
+    }
+  };
+
+  document.getElementById('cb-expense-form').addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const payload = {
+      purpose: document.getElementById('cbe-purpose').value,
+      amount: document.getElementById('cbe-amount').value,
+      payment_source: document.getElementById('cbe-payment').value,
+    };
+    if (payload.payment_source === 'bank') {
+      const bankId = document.getElementById('cbe-bank').value;
+      if (!bankId) { toast('Select a bank account', 'error'); return; }
+      payload.bank_account_id = bankId;
+    }
+    try {
+      await apiFetch('/api/fixed-expenses', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+      });
+      document.getElementById('cb-expense-form').reset();
+      toast('Expense added');
+      loadCbExpenses();
+      loadCashBook();
+    } catch (err) {
+      toast(err.message, 'error');
+    }
+  });
+
   loadCbAccounts();
-  loadCbBanks();
+  loadCbBanks().then(loadCbeBanks);
   loadCashBook();
+  loadCbExpenses();
 </script>
 {% endblock %}

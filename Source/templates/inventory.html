@@ -253,7 +253,7 @@
               </div>
             </div>
             <div>
-              <label class="block text-xs font-medium text-slate-400 mb-1.5" for="f-imei2">IMEI 2 *</label>
+              <label class="block text-xs font-medium text-slate-400 mb-1.5" for="f-imei2">IMEI 2</label>
               <input type="text" id="f-imei2" placeholder="Second IMEI" class="input-field" inputmode="numeric" autocomplete="off">
             </div>
           </div>
@@ -523,11 +523,12 @@
     return `<span class="type-badge ${cls}">${type}</span>`;
   };
 
-  const actions = (id, sold=false) => sold ? `
+  const actions = (id, sold=false, status='Bought') => sold ? `
     <button onclick="event.stopPropagation();viewPhone(${id})" class="action-pill edit">View</button>
     <button onclick="event.stopPropagation();editPhone(${id})" class="action-pill edit">Edit</button>
     <button onclick="event.stopPropagation();deletePhone(${id})" class="action-pill delete">Delete</button>` : `
     <button onclick="event.stopPropagation();markAsSold(${id})" class="action-pill sold">✓ Sold</button>
+    ${status === 'In Repair' ? `<button onclick="event.stopPropagation();markRepaired(${id})" class="action-pill edit">✓ Repaired</button>` : ''}
     <button onclick="event.stopPropagation();addExpense(${id})" class="action-pill edit">+ Expense</button>
     <button onclick="event.stopPropagation();editPhone(${id})" class="action-pill edit">Edit</button>
     <button onclick="event.stopPropagation();deletePhone(${id})" class="action-pill delete">Delete</button>`;
@@ -553,7 +554,7 @@
       <td class="px-4 py-3.5 text-right tabular-nums ${sold && (p.receivable_amount || 0) > 0 ? 'text-amber-400' : 'text-slate-600'} cursor-pointer" onclick="viewPhone(${p.id})">${sold && (p.receivable_amount || 0) > 0 ? fmt(p.receivable_amount) : sold ? fmt(0) : '—'}</td>
       <td class="px-4 py-3.5 text-right tabular-nums ${p.net_profit != null && p.net_profit >= 0 ? 'text-emerald-400/90' : p.net_profit != null ? 'text-red-400' : 'text-slate-600'} cursor-pointer" onclick="viewPhone(${p.id})">${p.net_profit != null ? fmt(p.net_profit) : '—'}</td>
       <td class="px-4 py-3.5 text-slate-400 cursor-pointer" onclick="viewPhone(${p.id})">${esc(party)}</td>
-      <td class="px-4 py-3.5 text-right"><div class="flex justify-end gap-1">${actions(p.id, sold)}</div></td>
+      <td class="px-4 py-3.5 text-right"><div class="flex justify-end gap-1">${actions(p.id, sold, p.status)}</div></td>
     </tr>`;
   };
 
@@ -716,7 +717,7 @@
                 placeholder="15-digit IMEI" inputmode="numeric" autocomplete="off">
             </div>
             <div>
-              <label class="block text-xs text-slate-500 mb-1" for="imei2-bulk-${i}">IMEI 2 *</label>
+              <label class="block text-xs text-slate-500 mb-1" for="imei2-bulk-${i}">IMEI 2</label>
               <input type="text" id="imei2-bulk-${i}" class="input-field imei2-bulk-input" data-index="${i}"
                 placeholder="Second IMEI" inputmode="numeric" autocomplete="off">
             </div>
@@ -1149,6 +1150,7 @@
       <div class="flex gap-2 pt-2">
         <button onclick="closeModal('detail-overlay','detail-modal');editPhone(${p.id})" class="btn btn-primary btn-sm flex-1">Edit</button>
         <button onclick="closeModal('detail-overlay','detail-modal');addExpense(${p.id})" class="btn btn-ghost btn-sm flex-1">Add Expense</button>
+        ${p.status === 'In Repair' ? `<button onclick="markRepaired(${p.id})" class="btn btn-ghost btn-sm flex-1">✓ Repaired</button>` : ''}
       </div>`;
     openModal('detail-overlay', 'detail-modal');
   };
@@ -1204,6 +1206,24 @@
       fillPhoneForm(p, 'Sold');
       document.getElementById('f-sale-date').value = localDatetimeValue();
       showPhoneModal('Mark as Sold');
+    }
+  };
+
+  window.markRepaired = async (id) => {
+    if (!confirm('Mark this phone as Repaired? It will move back to Bought / available stock.')) return;
+    try {
+      await apiFetch(`/api/phones/${id}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ status: 'Bought' }),
+      });
+      toast('Phone marked Repaired — back in available stock');
+      loadPhones();
+      if (document.getElementById('detail-modal').classList.contains('open')) {
+        viewPhone(id);
+      }
+    } catch (err) {
+      toast(err.message, 'error');
     }
   };
 

@@ -26,8 +26,8 @@ OUT = ROOT.parent / "Customer Windows Copy"
 SOURCE_NAMES = {
     "app.py", "database.py", "license_guard.py", "folder_picker.py",
     "launch_crm.py", "backup_service.py", "email_service.py", "generate_key.py",
-    "build_release.py", "build_customer_copy.py", "build_customer_windows_copy.py",
-    "run_crm.sh", "test_crm.py", "test_crm_performance.py",
+    "build_customer_copy.py", "build_customer_windows_copy.py",
+    "run_crm.sh", "test_crm.py",
 }
 
 
@@ -113,7 +113,7 @@ FEATURES (v2.3)
   • Purchase/sale udhar linked to supplier & buyer accounts
   • Dual IMEI, bulk sell profit, expense edit/delete
   • Today — sold same-day phones count in bought today
-  • Billing, Month Report, Returns, Journal vouchers
+  • Billing, Month Report, Returns
   • Restore from backup in Settings
 
 OTHER PLATFORMS

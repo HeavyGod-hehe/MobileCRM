@@ -66,7 +66,7 @@ def run_test(name: str, fn):
 def count_table(conn, table, user_id=None):
     if user_id is not None and table in (
         "phones", "cash_book_entries", "ledger_links", "accounts",
-        "journal_vouchers", "return_logs", "bank_accounts",
+        "return_logs", "bank_accounts",
     ):
         if table == "accounts":
             return conn.execute(
@@ -85,10 +85,6 @@ def count_table(conn, table, user_id=None):
                 f"SELECT COUNT(*) c FROM {table} WHERE user_id=?", (user_id,)
             ).fetchone()["c"]
         if table == "phones":
-            return conn.execute(
-                f"SELECT COUNT(*) c FROM {table} WHERE user_id=?", (user_id,)
-            ).fetchone()["c"]
-        if table == "journal_vouchers":
             return conn.execute(
                 f"SELECT COUNT(*) c FROM {table} WHERE user_id=?", (user_id,)
             ).fetchone()["c"]
@@ -134,8 +130,28 @@ def cash_book_cash_total(conn, user_id):
 
 def main():
     db_path = os.environ["CRM_DB_PATH"]
-    if Path(db_path).exists():
-        Path(db_path).unlink()
+    db_file = Path(db_path)
+    if db_file.exists():
+        db_file.unlink()
+    # Undo bookkeeping lives beside the live DB (see database._undo_meta_db_path /
+    # _undo_dir). Leaving it across runs reuses stale user_id checkpoints after
+    # the live DB is wiped and IDs restart at 1 — ensure_undo_baseline then
+    # skips, and undo tests restore the wrong snapshot.
+    for suffix in ("-wal", "-shm"):
+        side = Path(str(db_file) + suffix)
+        if side.exists():
+            side.unlink()
+    undo_meta = db_file.parent / f"{db_file.stem}_undo_meta.db"
+    if undo_meta.exists():
+        undo_meta.unlink()
+    for suffix in ("-wal", "-shm"):
+        side = Path(str(undo_meta) + suffix)
+        if side.exists():
+            side.unlink()
+    undo_history = db_file.parent / f"{db_file.stem}_UndoHistory"
+    if undo_history.is_dir():
+        import shutil
+        shutil.rmtree(undo_history, ignore_errors=True)
 
     db.init_db()
     user_id = None
@@ -212,7 +228,7 @@ def main():
                 "receivable_amount": 30000,
                 "buyer_account_id": buyer_id,
                 "sale_payment_method": "cash",
-                "imei": "600060006000600",  # now required before Sold
+                "imei": "600060006000600",
             })
             sold_ids.append(pid)
             recv = conn.execute(
@@ -220,6 +236,170 @@ def main():
                 (user_id, pid),
             ).fetchone()["c"]
             assert recv >= 1
+
+    def test_sell_without_imei():
+        with db.db_session() as conn:
+            p = db.create_phone(conn, user_id, {
+                "model": "No-IMEI Phone",
+                "type": "PTA",
+                "purchase_price": 20000,
+                "status": "Bought",
+                "purchase_payment_method": "cash",
+            })
+            sold = db.update_phone(conn, user_id, p["id"], {
+                "status": "Sold", "sale_price": 25000, "sale_payment_method": "cash",
+            })
+            assert sold["status"] == "Sold"
+            assert sold["imei"] == "" and sold["imei2"] == ""
+
+            p2 = db.create_phone(conn, user_id, {
+                "model": "No-IMEI Bulk Phone",
+                "type": "PTA",
+                "purchase_price": 15000,
+                "status": "Bought",
+                "purchase_payment_method": "cash",
+            })
+            result = db.bulk_mark_sold(conn, user_id, [
+                {"phone_id": p2["id"], "sale_price": 18000, "sale_payment_method": "cash"},
+            ])
+            assert not result["errors"], result["errors"]
+            assert result["updated"][0]["status"] == "Sold"
+
+    def test_credit_debit_convention():
+        # Money-model phase 2: receiving a payment must be stored/labeled as
+        # "credit", giving a payment (or billing new debt) as "debit" - and
+        # the resulting balance must read positive when the OTHER PARTY owes
+        # the shop, negative when the shop owes them, for BOTH customer and
+        # supplier accounts (no per-account-type sign flip).
+        with db.db_session() as conn:
+            u = db.register_user(conn, "credit_debit_user", "pass1234", "", "Credit Debit Shop")
+            cd_uid = u["user_id"]
+            db.update_user_settings(conn, cd_uid, {"cash_in_hand": "1000000"})
+            customer = db.create_account(conn, cd_uid, {"name": "CD Customer"})
+            supplier = db.create_account(conn, cd_uid, {"name": "CD Supplier"})
+
+            # Sale on credit: customer now owes the shop -> "debit", balance
+            # goes positive (they owe the shop).
+            phone = db.create_phone(conn, cd_uid, {
+                "model": "CD Sale Phone", "type": "PTA", "purchase_price": 50000,
+                "status": "Sold", "sale_price": 90000, "receivable_amount": 90000,
+                "purchase_payment_method": "cash", "buyer_account_id": customer["id"],
+                "imei": "900090009000900", "force": True,
+            })
+            row = conn.execute(
+                "SELECT entry_type FROM account_entries WHERE id = ?",
+                (phone["sale_account_entry_id"],),
+            ).fetchone()
+            assert row["entry_type"] == "debit", "Billing new receivable must be 'debit'"
+            assert db.get_account(conn, cd_uid, customer["id"])["balance"] == 90000, (
+                "Customer owing the shop must show a POSITIVE balance"
+            )
+
+            # Customer pays it down: shop receives money -> "credit", balance
+            # decreases back toward zero.
+            db.create_entry(conn, customer["id"], {
+                "entry_type": "credit", "amount": 90000, "note": "Full payment",
+                "payment_source": "cash",
+            }, user_id=cd_uid)
+            assert db.get_account(conn, cd_uid, customer["id"])["balance"] == 0, (
+                "Receiving the customer's payment must be labeled 'credit' and zero the balance"
+            )
+
+            # Purchase on credit: shop now owes the supplier -> "credit",
+            # balance goes NEGATIVE (shop owes them), not positive.
+            phone2 = db.create_phone(conn, cd_uid, {
+                "model": "CD Purchase Phone", "type": "PTA", "purchase_price": 60000,
+                "status": "Bought", "payable_amount": 60000,
+                "supplier_account_id": supplier["id"], "force": True,
+            })
+            row2 = conn.execute(
+                "SELECT entry_type FROM account_entries WHERE id = ?",
+                (phone2["purchase_account_entry_id"],),
+            ).fetchone()
+            assert row2["entry_type"] == "credit", "Billing a new payable must be 'credit'"
+            assert db.get_account(conn, cd_uid, supplier["id"])["balance"] == -60000, (
+                "Shop owing the supplier must show a NEGATIVE balance, same sign rule as any account"
+            )
+
+            # Shop pays the supplier down: giving money -> "debit", balance
+            # moves back toward zero (less negative).
+            db.create_entry(conn, supplier["id"], {
+                "entry_type": "debit", "amount": 60000, "note": "Pay off supplier",
+                "payment_source": "cash",
+            }, user_id=cd_uid)
+            assert db.get_account(conn, cd_uid, supplier["id"])["balance"] == 0, (
+                "Paying the supplier down must be labeled 'debit' and zero the balance"
+            )
+
+            payables = db.accounts_summary(conn, cd_uid)
+            assert payables["total_receivable"] == 0 and payables["total_payable"] == 0
+
+    run_test("Credit = shop received money, debit = shop gave money or billed new debt",
+              test_credit_debit_convention)
+
+    def test_credit_debit_migration_flips_existing_rows():
+        # A row written under the OLD (pre-fix) convention must be flipped
+        # exactly once by _migrate_credit_debit_convention, and never again
+        # (guarded by the 'credit_debit_flip_applied' settings flag) - a
+        # second flip would silently corrupt every balance back to wrong.
+        # The guard flag lives in the GLOBAL `settings` table (one per
+        # database file, not per-user), so this must run against its own
+        # throwaway database file rather than the shared stress-test one -
+        # deleting the flag there would re-flip every OTHER test's
+        # already-correct rows too.
+        scratch_path = Path(tempfile.gettempdir()) / f"cd_migration_test_{os.getpid()}_{int(time.time()*1000)}.db"
+        if scratch_path.exists():
+            scratch_path.unlink()
+        scratch_conn = sqlite3.connect(str(scratch_path))
+        scratch_conn.row_factory = sqlite3.Row
+        try:
+            db._init_schema(scratch_conn)  # fresh db: empty table, flip is a no-op, flag set to '1'
+            u = db.register_user(scratch_conn, "migration_flip_user", "pass1234", "", "Migration Flip Shop")
+            acct = db.create_account(scratch_conn, u["user_id"], {"name": "Pre-fix Legacy Account"})
+            # Simulate a row exactly as the OLD code would have written it for
+            # "customer billed 40000" (old convention: credit = billed), and
+            # remove the flag _init_schema just set, so this database looks
+            # exactly like a real pre-fix customer database that has never
+            # seen the migration.
+            scratch_conn.execute(
+                "INSERT INTO account_entries (account_id, entry_type, amount, note) "
+                "VALUES (?, 'credit', ?, ?)",
+                (acct["id"], 40000, "Pre-fix legacy billed entry"),
+            )
+            scratch_conn.execute("DELETE FROM settings WHERE key = 'credit_debit_flip_applied'")
+            scratch_conn.commit()
+
+            # First run: this is the moment the fix ships to an existing
+            # customer - the flip must happen now.
+            db._init_schema(scratch_conn)
+            entry = scratch_conn.execute(
+                "SELECT entry_type FROM account_entries WHERE account_id = ?",
+                (acct["id"],),
+            ).fetchone()
+            assert entry["entry_type"] == "debit", (
+                "A pre-fix 'credit' (old: billed) row must be flipped to 'debit' on first run"
+            )
+            flag = scratch_conn.execute(
+                "SELECT value FROM settings WHERE key = 'credit_debit_flip_applied'"
+            ).fetchone()
+            assert flag and flag["value"] == "1"
+
+            # Second run (every subsequent app launch calls init_db() ->
+            # _init_schema() again) must NOT flip it back.
+            db._init_schema(scratch_conn)
+            entry_again = scratch_conn.execute(
+                "SELECT entry_type FROM account_entries WHERE account_id = ?",
+                (acct["id"],),
+            ).fetchone()
+            assert entry_again["entry_type"] == "debit", (
+                "Re-running _init_schema must not flip an already-migrated row back to 'credit'"
+            )
+        finally:
+            scratch_conn.close()
+            scratch_path.unlink(missing_ok=True)
+
+    run_test("Pre-fix account_entries rows are flipped exactly once by the migration",
+              test_credit_debit_migration_flips_existing_rows)
 
     def test_phone_expense_sync():
         with db.db_session() as conn:
@@ -237,7 +417,7 @@ def main():
         with db.db_session() as conn:
             cash_before = db.cash_in_hand_balance(conn, user_id)
             db.create_entry(conn, food_id, {
-                "entry_type": "credit",
+                "entry_type": "debit",
                 "amount": 1500,
                 "note": "Lunch",
                 "payment_source": "cash",
@@ -249,7 +429,7 @@ def main():
         with db.db_session() as conn:
             cash_before = db.cash_in_hand_balance(conn, user_id)
             entry = db.create_entry(conn, buyer_id, {
-                "entry_type": "debit",
+                "entry_type": "credit",
                 "amount": 10000,
                 "note": "Partial payment",
                 "payment_source": "cash",
@@ -288,19 +468,6 @@ def main():
             ).fetchone()
             assert row is None
 
-    def test_journal_voucher():
-        with db.db_session() as conn:
-            jv = db.create_journal_voucher(conn, user_id, {
-                "debit_account_id": supplier_id,
-                "credit_account_id": buyer_id,
-                "amount": 5000,
-                "narration": "Transfer test",
-            })
-            db.delete_journal_voucher(conn, user_id, jv["id"])
-            assert conn.execute(
-                "SELECT id FROM journal_vouchers WHERE id=?", (jv["id"],)
-            ).fetchone() is None
-
     def test_purchase_return():
         with db.db_session() as conn:
             p = db.create_phone(conn, user_id, {
@@ -313,6 +480,78 @@ def main():
             db.process_purchase_return(conn, user_id, {"phone_id": p["id"], "refund_amount": 60000})
             row = conn.execute("SELECT status FROM phones WHERE id=?", (p["id"],)).fetchone()
             assert row["status"] == "Returned to Supplier"
+
+    def test_repair_cycle_keeps_purchase_ledger_intact():
+        with db.db_session() as conn:
+            cash_before = db.cash_in_hand_balance(conn, user_id)
+            p = db.create_phone(conn, user_id, {
+                "model": "Repair Cycle Phone", "type": "PTA", "purchase_price": 30000,
+                "status": "In Repair", "purchase_payment_method": "cash",
+                "imei": "888800000099001",
+            })
+            assert conn.execute(
+                "SELECT status FROM phones WHERE id=?", (p["id"],)
+            ).fetchone()["status"] == "In Repair"
+            assert round(db.cash_in_hand_balance(conn, user_id) - cash_before, 2) == -30000
+
+            # "Repaired" action: In Repair -> Bought, no ledger change at all
+            # (the purchase-side ledger doesn't depend on Bought vs In Repair).
+            db.update_phone(conn, user_id, p["id"], {"status": "Bought"})
+            row = conn.execute(
+                "SELECT status FROM phones WHERE id=?", (p["id"],)
+            ).fetchone()
+            assert row["status"] == "Bought"
+            assert round(db.cash_in_hand_balance(conn, user_id) - cash_before, 2) == -30000
+
+            # Then sell it normally - sale ledger posts on top, purchase side untouched.
+            db.update_phone(conn, user_id, p["id"], {
+                "status": "Sold", "sale_price": 45000, "sale_payment_method": "cash",
+            })
+            assert round(db.cash_in_hand_balance(conn, user_id) - cash_before, 2) == 15000
+
+    def test_close_the_month_resets_overview_tile_only():
+        with db.db_session() as conn:
+            u = db.register_user(conn, "close_month_user", "pass1234", "", "Close Month Shop")
+            cm_uid = u["user_id"]
+            db.update_user_settings(conn, cm_uid, {"cash_in_hand": "1000000"})
+
+            p1 = db.create_phone(conn, cm_uid, {
+                "model": "Before Close Phone", "type": "PTA", "purchase_price": 20000,
+                "status": "Sold", "sale_price": 25000,
+                "purchase_payment_method": "cash", "sale_payment_method": "cash",
+                "imei": "888800000077001",
+            })
+            before = db.compute_monthly_metrics(conn, cm_uid)
+            assert before["units_sold"] == 1
+            assert before["total_profit"] == 5000
+
+        time.sleep(1.1)
+        with db.db_session() as conn:
+            db.close_the_month(conn, cm_uid)
+            after_close = db.compute_monthly_metrics(conn, cm_uid)
+            assert after_close["units_sold"] == 0, "Overview tile must reset right after closing"
+            assert after_close["total_profit"] == 0
+
+        time.sleep(1.1)
+        with db.db_session() as conn:
+            p2 = db.create_phone(conn, cm_uid, {
+                "model": "After Close Phone", "type": "PTA", "purchase_price": 10000,
+                "status": "Sold", "sale_price": 13000,
+                "purchase_payment_method": "cash", "sale_payment_method": "cash",
+                "imei": "888800000077002",
+            })
+            after_new_sale = db.compute_monthly_metrics(conn, cm_uid)
+            assert after_new_sale["units_sold"] == 1, "A sale after closing must count again"
+            assert after_new_sale["total_profit"] == 3000
+
+            # Month Report and cumulative dashboard totals are NOT scoped by
+            # overview_period_start - both phones must still be fully present.
+            this_month = conn.execute("SELECT strftime('%Y-%m','now')").fetchone()[0]
+            report = db.compute_monthly_closing_summary(conn, cm_uid, this_month)
+            assert report["units_sold"] == 2, "Close the Month must never affect Month Report history"
+
+            dashboard = db.compute_dashboard(conn, cm_uid)
+            assert dashboard["total_net_profit"] == 8000, "Cumulative profit is untouched by closing"
 
     def test_sale_return():
         with db.db_session() as conn:
@@ -514,6 +753,7 @@ def main():
     run_test("Purchase + udhar ledger sync", test_purchase_with_udhar)
     run_test("Borrow phone ledger sync", test_borrow_phone)
     run_test("Sale + receivable ledger sync", test_sell_with_receivable)
+    run_test("Sell phone with no IMEI at all (direct + bulk)", test_sell_without_imei)
     run_test("Phone expense -> cash book sync", test_phone_expense_sync)
     run_test("Food expense -> cash out sync", test_food_expense_cash_out)
     run_test("Wasool debit -> cash in sync", test_wasool_cash_in)
@@ -683,14 +923,15 @@ def main():
                 "purpose": "Rent", "amount": 5000, "payment_source": "cash", "force": True,
             })
 
-            # Type 3: credit entry against an account marked as an expense
-            # category -- the one that used to be invisible here, and used
-            # to only work via the hidden Contact-field-typed-exactly-right
-            # trick. Uses the real checkbox-backed field now.
+            # Type 3: debit entry against an account marked as an expense
+            # category (money-model phase 2: debit = shop gave money) --
+            # the one that used to be invisible here, and used to only work
+            # via the hidden Contact-field-typed-exactly-right trick. Uses
+            # the real checkbox-backed field now.
             food = db.create_account(conn, es_uid, {"name": "Food", "is_expense_category": True})
             assert food["is_expense_category"] is True
             db.create_entry(conn, food["id"], {
-                "entry_type": "credit", "amount": 750, "note": "Lunch",
+                "entry_type": "debit", "amount": 750, "note": "Lunch",
                 "payment_source": "cash", "force": True,
             }, user_id=es_uid)
 
@@ -707,12 +948,12 @@ def main():
                 f"Expected all three expense types in the breakdown, got {categories}"
             )
 
-            # A STANDALONE debit against the same expense-category account
+            # A STANDALONE credit against the same expense-category account
             # (e.g. the shopkeeper manually recording a refund/credit note
             # from the vendor) is a genuine reduction and must lower the
             # total.
             db.create_entry(conn, food["id"], {
-                "entry_type": "debit", "amount": 200, "note": "Vendor refund",
+                "entry_type": "credit", "amount": 200, "note": "Vendor refund",
                 "payment_source": "cash",
             }, user_id=es_uid)
             summary_after_manual_debit = db.expense_summary(conn, es_uid)
@@ -726,9 +967,9 @@ def main():
             ]
             assert len(refund_rows) == 1 and refund_rows[0]["amount"] == -200
 
-            # A debit that's the MIRRORED side of a phone_expense with its
+            # A credit that's the MIRRORED side of a phone_expense with its
             # own account_id linked (add_phone_expense always creates this
-            # as account_entry_type='debit') must NOT also reduce the
+            # as account_entry_type='credit') must NOT also reduce the
             # total here -- that event is already counted in
             # total_phone_expenses, so subtracting it again would
             # double-count it in the other direction.
@@ -779,10 +1020,6 @@ def main():
                 "supplier_name": "Export Supplier", "phone_id": p["id"],
                 "model": "Export Test Phone", "amount": 20000,
             })
-            db.create_journal_voucher(conn, e_uid, {
-                "debit_account_id": supplier["id"], "credit_account_id": buyer["id"],
-                "amount": 500, "narration": "Export JV test",
-            })
             db.add_side_investment(conn, e_uid, {
                 "partner_id": partner["id"], "amount": 5000, "payment_method": "cash",
             })
@@ -797,7 +1034,7 @@ def main():
 
             expected_nonempty = [
                 "phones", "accounts", "account_entries", "invoices",
-                "purchase_invoices", "journal_vouchers", "side_investments",
+                "purchase_invoices", "side_investments",
                 "return_logs", "ledger_links",
             ]
             for key in expected_nonempty:
@@ -862,8 +1099,11 @@ def main():
               test_expense_category_migration_backfills_legacy_contact_trick_accounts)
 
     run_test("Delete account entry cascades cash book", test_delete_account_entry_cascade)
-    run_test("Journal voucher create/delete", test_journal_voucher)
     run_test("Purchase return flow", test_purchase_return)
+    run_test("Repair cycle (Bought -> In Repair -> Repaired -> Sold) keeps purchase ledger intact",
+              test_repair_cycle_keeps_purchase_ledger_intact)
+    run_test("Close the Month resets only the Overview tile, not Month Report/dashboard history",
+              test_close_the_month_resets_overview_tile_only)
     run_test("Sale return flow", test_sale_return)
 
     # --- Gap coverage: returns can't refund more than was actually paid (bug #12) ---
@@ -997,13 +1237,13 @@ def main():
                     "SELECT datetime(? || ' 00:05:00', '-5 hours')", (today_local,)
                 ).fetchone()[0]
 
-                # Insert a credit (billed) entry directly with an explicit
-                # created_at representing 00:05 LOCAL today, same technique
-                # as the bug #13 test -- its raw UTC value falls on the
-                # previous UTC calendar day.
+                # Insert a debit (billed - money-model phase 2) entry directly
+                # with an explicit created_at representing 00:05 LOCAL today,
+                # same technique as the bug #13 test -- its raw UTC value
+                # falls on the previous UTC calendar day.
                 conn.execute(
                     "INSERT INTO account_entries (account_id, entry_type, amount, note, created_at) "
-                    "VALUES (?, 'credit', ?, ?, ?)",
+                    "VALUES (?, 'debit', ?, ?, ?)",
                     (acct["id"], 5000, "Recovery TZ probe", created_at_utc),
                 )
 
@@ -1126,7 +1366,7 @@ def main():
                     "cash_sale", "bank_sale", "cash_purchase", "bank_purchase",
                     "fixed_expense_cash", "fixed_expense_bank",
                     "expense_credit_cash", "expense_credit_bank", "expense_debit_cash",
-                    "person_credit_cash", "person_debit_cash", "journal_voucher",
+                    "person_credit_cash", "person_debit_cash",
                 ]
                 if open_cash_phones:
                     choices.append("purchase_return_cash")
@@ -1221,9 +1461,11 @@ def main():
                     })
                     expected_bank -= amt
                 elif op == "expense_credit_cash":
+                    # Money-model phase 2: giving money to pay an expense is
+                    # "debit" now (was "credit" pre-fix).
                     amt = rng.randint(1, 10) * 500
                     db.create_entry(conn, r_util_id, {
-                        "entry_type": "credit", "amount": amt, "note": "Recon util",
+                        "entry_type": "debit", "amount": amt, "note": "Recon util",
                         "payment_source": "cash",
                     }, user_id=r_uid)
                     expected_cash -= amt
@@ -1231,46 +1473,43 @@ def main():
                 elif op == "expense_credit_bank":
                     amt = rng.randint(1, 10) * 500
                     db.create_entry(conn, r_util_id, {
-                        "entry_type": "credit", "amount": amt, "note": "Recon util",
+                        "entry_type": "debit", "amount": amt, "note": "Recon util",
                         "payment_source": "bank", "bank_account_id": r_bank_id,
                     }, user_id=r_uid)
                     expected_bank -= amt
                     expected_acct[r_util_id] += amt
                 elif op == "expense_debit_cash":
+                    # A standalone refund/credit-note against the category is
+                    # "credit" now (was "debit" pre-fix).
                     amt = rng.randint(1, 10) * 500
                     db.create_entry(conn, r_util_id, {
-                        "entry_type": "debit", "amount": amt, "note": "Recon util refund",
+                        "entry_type": "credit", "amount": amt, "note": "Recon util refund",
                         "payment_source": "cash",
                     }, user_id=r_uid)
                     expected_cash += amt
                     expected_acct[r_util_id] -= amt
                 elif op == "person_credit_cash":
+                    # Paying down what the shop owes this person is "debit"
+                    # now (was "credit" pre-fix).
                     acct_id = rng.choice([r_supplier_id, r_buyer_id])
                     amt = rng.randint(1, 20) * 1000
                     db.create_entry(conn, acct_id, {
-                        "entry_type": "credit", "amount": amt, "note": "Recon person credit",
+                        "entry_type": "debit", "amount": amt, "note": "Recon person credit",
                         "payment_source": "cash",
                     }, user_id=r_uid)
                     expected_cash -= amt
                     expected_acct[acct_id] += amt
                 elif op == "person_debit_cash":
+                    # Receiving a payment from this person is "credit" now
+                    # (was "debit" pre-fix).
                     acct_id = rng.choice([r_supplier_id, r_buyer_id])
                     amt = rng.randint(1, 20) * 1000
                     db.create_entry(conn, acct_id, {
-                        "entry_type": "debit", "amount": amt, "note": "Recon person debit",
+                        "entry_type": "credit", "amount": amt, "note": "Recon person debit",
                         "payment_source": "cash",
                     }, user_id=r_uid)
                     expected_cash += amt
                     expected_acct[acct_id] -= amt
-                elif op == "journal_voucher":
-                    amt = rng.randint(1, 20) * 1000
-                    debit_id, credit_id = rng.sample([r_supplier_id, r_buyer_id], 2)
-                    db.create_journal_voucher(conn, r_uid, {
-                        "debit_account_id": debit_id, "credit_account_id": credit_id,
-                        "amount": amt, "narration": f"Recon JV {i}",
-                    })
-                    expected_acct[debit_id] -= amt
-                    expected_acct[credit_id] += amt
 
             actual_cash = round(db.cash_in_hand_balance(conn, r_uid) - cash_open, 2)
             actual_bank = round(db.total_bank_balance(conn, r_uid) - bank_open, 2)
@@ -1855,12 +2094,47 @@ def main():
               test_negative_cash_guard_on_bank_deposit)
 
     # --- Gap coverage: side investment reversal is per-event, not per-partner (bug #8) ---
-    def test_side_investment_reversal_is_per_event():
+    def test_device_crud_is_isolated_from_money_model():
+        with db.db_session() as conn:
+            u = db.register_user(conn, "device_user", "pass1234", "", "Device Shop")
+            dv_uid = u["user_id"]
+            db.update_user_settings(conn, dv_uid, {"cash_in_hand": "100000"})
+            cash_before = db.cash_in_hand_balance(conn, dv_uid)
+            dash_before = db.compute_dashboard(conn, dv_uid)
+
+            created = db.create_device(conn, dv_uid, {
+                "name": "Delivery Bike", "category": "Vehicle", "value": 150000,
+                "note": "Used for deliveries",
+            })
+            assert created["name"] == "Delivery Bike"
+            assert db.cash_in_hand_balance(conn, dv_uid) == cash_before, (
+                "Creating a device must never change Cash in Hand"
+            )
+            dash_after = db.compute_dashboard(conn, dv_uid)
+            assert dash_after["total_investment"] == dash_before["total_investment"], (
+                "A device must never feed Total Investment/Expected Liquid"
+            )
+            assert dash_after["expected_liquid"] == dash_before["expected_liquid"]
+
+            updated = db.update_device(conn, dv_uid, created["id"], {"value": 140000})
+            assert updated["value"] == 140000
+
+            listed = db.list_devices(conn, dv_uid)
+            assert any(d["id"] == created["id"] for d in listed)
+
+            assert db.delete_device(conn, dv_uid, created["id"]) is True
+            assert db.get_device(conn, dv_uid, created["id"]) is None
+            assert db.cash_in_hand_balance(conn, dv_uid) == cash_before
+
+    def test_side_investment_is_isolated_and_reversal_is_per_event():
         with db.db_session() as conn:
             u = db.register_user(conn, "side_inv_user", "pass1234", "", "Side Inv Shop")
             si_uid = u["user_id"]
+            db.update_user_settings(conn, si_uid, {"cash_in_hand": "100000"})
             partner = db.create_partner(conn, si_uid, {"name": "Top-up Partner", "capital": 0})
             partner_id = partner["id"]
+
+            cash_before = db.cash_in_hand_balance(conn, si_uid)
 
             first = db.add_side_investment(conn, si_uid, {
                 "partner_id": partner_id, "amount": 50000, "payment_method": "cash",
@@ -1872,74 +2146,122 @@ def main():
                 "Each side investment must get its own identity, not share the partner's id"
             )
 
+            # Money-model phase 2: Side Investment must be a pure reference
+            # entry, exactly like Personal Assets - it must never touch Cash
+            # in Hand, Bank, or the partner's tracked capital.
             partner_after_both = db.get_partner(conn, si_uid, partner_id)
-            assert partner_after_both["capital"] == 125000
-
-            cb_count_before = conn.execute(
+            assert partner_after_both["capital"] == 0, (
+                "Side investment must never change partner capital"
+            )
+            assert db.cash_in_hand_balance(conn, si_uid) == cash_before, (
+                "Side investment must never change Cash in Hand"
+            )
+            cb_count = conn.execute(
                 "SELECT COUNT(*) c FROM cash_book_entries WHERE user_id=? AND note LIKE 'Side investment%'",
                 (si_uid,),
             ).fetchone()["c"]
-            assert cb_count_before == 2
+            assert cb_count == 0, "Side investment must never post a cash book entry"
+            dash = db.compute_dashboard(conn, si_uid)
+            assert dash["total_investment"] == 0, (
+                "Side investment must never feed compute_dashboard's total_investment"
+            )
 
-        # Reversing the FIRST top-up must only undo that one event -- the
-        # second top-up's cash book entry and capital contribution must
-        # survive untouched. This is exactly the bug: source_id used to be
-        # the partner's own id, shared by both top-ups, so reversing one
-        # could wipe out both.
+        # Reversing the FIRST top-up must only delete that one row -- the
+        # second top-up's own record must survive untouched. This is exactly
+        # the original bug: source_id used to be the partner's own id,
+        # shared by both top-ups, so reversing one could wipe out both.
         with db.db_session() as conn:
             result = db.reverse_side_investment(conn, si_uid, first["investment_id"])
             assert result["reversed_amount"] == 50000
-
-            partner_after_reverse = db.get_partner(conn, si_uid, partner_id)
-            assert partner_after_reverse["capital"] == 75000, (
-                f"Expected only the reversed 50000 to come off capital, got {partner_after_reverse['capital']}"
-            )
-
-            cb_count_after = conn.execute(
-                "SELECT COUNT(*) c FROM cash_book_entries WHERE user_id=? AND note LIKE 'Side investment%'",
-                (si_uid,),
-            ).fetchone()["c"]
-            assert cb_count_after == 1, (
-                "Reversing one side investment deleted more than its own cash book entry"
-            )
 
             still_there = conn.execute(
                 "SELECT COUNT(*) c FROM side_investments WHERE id = ?", (second["investment_id"],)
             ).fetchone()["c"]
             assert still_there == 1, "The other top-up's own record should be untouched"
+            gone = conn.execute(
+                "SELECT COUNT(*) c FROM side_investments WHERE id = ?", (first["investment_id"],)
+            ).fetchone()["c"]
+            assert gone == 0, "The reversed top-up's own record should be deleted"
 
-    run_test("Reversing one side investment doesn't touch the partner's other top-ups",
-              test_side_investment_reversal_is_per_event)
+    run_test("Side investment never touches Cash/Bank/partner capital; reversal is per-event",
+              test_side_investment_is_isolated_and_reversal_is_per_event)
+    run_test("Device CRUD is isolated from Cash/Bank/Total Investment/Expected Liquid",
+              test_device_crud_is_isolated_from_money_model)
 
-    def test_side_investment_reversal_refuses_ambiguous_legacy_data():
-        # Simulate data from BEFORE this fix: two independent top-ups whose
-        # ledger_links both used source_id=partner_id (ambiguous -- can't
-        # tell which cash book entry belongs to which top-up). reversal must
-        # refuse instead of guessing / deleting both.
+    def test_side_investment_reversal_cleans_up_legacy_ledger_entry():
+        # A legacy investment from BEFORE money-model phase 2 (when
+        # add_side_investment still posted a real cash/bank credit and
+        # bumped partner capital) must have BOTH cleaned up on reversal, not
+        # just its own row deleted.
         with db.db_session() as conn:
             u = db.register_user(conn, "side_inv_legacy_user", "pass1234", "", "Legacy Shop")
             lg_uid = u["user_id"]
-            partner = db.create_partner(conn, lg_uid, {"name": "Legacy Partner", "capital": 0})
+            db.update_user_settings(conn, lg_uid, {"cash_in_hand": "100000"})
+            partner = db.create_partner(conn, lg_uid, {"name": "Legacy Partner", "capital": 20000})
             partner_id = partner["id"]
+            cash_before = db.cash_in_hand_balance(conn, lg_uid)
+
+            cursor = conn.execute(
+                "INSERT INTO side_investments (partner_id, amount, note, investment_date, user_id) "
+                "VALUES (?, ?, ?, ?, ?)",
+                (partner_id, 20000, "Legacy top-up", "2026-01-01", lg_uid),
+            )
+            legacy_id = cursor.lastrowid
+            cb = db._create_cash_book_synced(conn, lg_uid, {
+                "entry_type": "in", "amount": 20000, "note": "Legacy top-up",
+                "entry_date": "2026-01-01",
+            }, source_type="side_investment", source_id=legacy_id)
+            assert cb
+
+            result = db.reverse_side_investment(conn, lg_uid, legacy_id)
+            assert result["reversed_amount"] == 20000
+
+            assert db.cash_in_hand_balance(conn, lg_uid) == cash_before, (
+                "Reversing a legacy investment must undo its old cash book credit"
+            )
+            partner_after = db.get_partner(conn, lg_uid, partner_id)
+            assert partner_after["capital"] == 0, (
+                "Reversing a legacy investment must undo its old capital bump"
+            )
+
+    run_test("Reversing a legacy (pre money-model) side investment cleans up its old cash/capital effect",
+              test_side_investment_reversal_cleans_up_legacy_ledger_entry)
+
+    def test_side_investment_reversal_refuses_ambiguous_legacy_data():
+        # Simulate data from BEFORE per-event tracking existed: two
+        # independent top-ups whose ledger_links both used source_id=
+        # partner_id (ambiguous -- can't tell which cash book entry belongs
+        # to which top-up). Reversal must refuse instead of guessing.
+        with db.db_session() as conn:
+            u = db.register_user(conn, "side_inv_ultra_legacy_user", "pass1234", "", "Ultra Legacy Shop")
+            lg_uid = u["user_id"]
+            partner = db.create_partner(conn, lg_uid, {"name": "Ultra Legacy Partner", "capital": 0})
+            partner_id = partner["id"]
+            cursor = conn.execute(
+                "INSERT INTO side_investments (partner_id, amount, note, investment_date, user_id) "
+                "VALUES (?, ?, ?, ?, ?)",
+                (partner_id, 20000, "Ultra legacy top-up", "2026-01-01", lg_uid),
+            )
+            legacy_id = cursor.lastrowid
 
             cb1 = db._create_cash_book_synced(conn, lg_uid, {
                 "entry_type": "in", "amount": 20000, "note": "Legacy top-up 1",
                 "entry_date": "2026-01-01",
-            }, source_type="side_investment", source_id=partner_id)
+            }, source_type="side_investment", source_id=legacy_id)
             cb2 = db._create_cash_book_synced(conn, lg_uid, {
                 "entry_type": "in", "amount": 30000, "note": "Legacy top-up 2",
                 "entry_date": "2026-01-02",
-            }, source_type="side_investment", source_id=partner_id)
+            }, source_type="side_investment", source_id=legacy_id)
             assert cb1 and cb2
 
             link_count = conn.execute(
                 "SELECT COUNT(*) c FROM ledger_links WHERE user_id=? AND source_type='side_investment' AND source_id=?",
-                (lg_uid, partner_id),
+                (lg_uid, legacy_id),
             ).fetchone()["c"]
             assert link_count == 2, "Test setup should reproduce the ambiguous legacy shape"
 
             try:
-                db.reverse_side_investment(conn, lg_uid, partner_id)
+                db.reverse_side_investment(conn, lg_uid, legacy_id)
                 raise AssertionError("Expected reversal of ambiguous legacy data to be refused")
             except ValueError as e:
                 assert "ambiguous" in str(e).lower()
@@ -2486,7 +2808,7 @@ def main():
             uid = db.register_user(conn, "reset_fk_user", "pass1234", "", "Reset FK Shop")["user_id"]
             bank = db.create_bank(conn, uid, {"name": "UBL", "initial_balance": 150000})
             db.create_account(conn, uid, {
-                "name": "Zaid", "opening_balance": 123000, "opening_balance_type": "credit",
+                "name": "Zaid", "opening_balance": 123000, "opening_balance_type": "debit",
             })
             db.create_phone(conn, uid, {
                 "model": "iPhone 14 JV", "type": "PTA", "purchase_price": 77000,
@@ -3132,11 +3454,11 @@ def main():
             db.create_bank(conn, w_uid, {"name": "Wizard Bank", "initial_balance": 15000})
             db.create_account(conn, w_uid, {
                 "name": "Old Customer Udhar", "opening_balance": 8000,
-                "opening_balance_type": "credit",
+                "opening_balance_type": "debit",
             })
             db.create_account(conn, w_uid, {
                 "name": "Old Supplier Payable", "opening_balance": 5000,
-                "opening_balance_type": "debit",
+                "opening_balance_type": "credit",
             })
 
             status = db.setup_status(conn, w_uid)
@@ -3158,6 +3480,46 @@ def main():
 
     run_test("Completed wizard on a fresh user drives liquidity_gap to ~0",
               test_completed_wizard_gap_is_zero)
+
+    def test_overhead_expenses_do_not_create_a_liquidity_gap():
+        with db.db_session() as conn:
+            u = db.register_user(conn, "overhead_gap_user", "pass1234", "", "Overhead Gap Shop")
+            oh_uid = u["user_id"]
+            db.update_user_settings(conn, oh_uid, {"cash_in_hand": "100000"})
+            # Back the opening cash with matching partner capital so the
+            # formula starts balanced, exactly like a completed wizard
+            # (see test_completed_wizard_gap_is_zero) - otherwise the gap
+            # would already be nonzero before either expense is even added.
+            db.create_partner(conn, oh_uid, {"name": "Owner", "capital": 100000})
+
+            gap_before = db.compute_dashboard(conn, oh_uid)["liquidity_gap"]
+            assert abs(gap_before) < 0.01
+
+            # A Fixed Expense (Cash Book's new "Add Expense") is a real
+            # cash outflow that total_net_profit never nets out on its
+            # own - without subtracting it in compute_dashboard's formula,
+            # this alone used to open a false Hisaab mein Farq gap.
+            db.create_fixed_expense(conn, oh_uid, {
+                "purpose": "Shop rent", "amount": 8000, "payment_source": "cash",
+            })
+            gap_after_fixed = db.compute_dashboard(conn, oh_uid)["liquidity_gap"]
+            assert abs(gap_after_fixed) < 0.01, (
+                f"A Fixed Expense must never open a liquidity gap, got {gap_after_fixed}"
+            )
+
+            # A standalone debit against an expense-category account (e.g.
+            # "Food") is the same kind of immediate cash outflow.
+            food = db.create_account(conn, oh_uid, {"name": "Food", "is_expense_category": True})
+            db.create_entry(conn, food["id"], {
+                "entry_type": "debit", "amount": 1500, "note": "Chai", "payment_source": "cash",
+            }, user_id=oh_uid)
+            gap_after_account = db.compute_dashboard(conn, oh_uid)["liquidity_gap"]
+            assert abs(gap_after_account) < 0.01, (
+                f"An expense-category debit must never open a liquidity gap, got {gap_after_account}"
+            )
+
+    run_test("Fixed/overhead expenses never open a false Hisaab mein Farq gap",
+              test_overhead_expenses_do_not_create_a_liquidity_gap)
 
     def test_pay_later_purchase_touches_no_cash_or_bank():
         with db.db_session() as conn:
@@ -3212,19 +3574,11 @@ def main():
             ])
             phone_id = created[0]["id"]
 
-            # IMEI is required before Sold (see _validate_phone_payments) -
-            # confirm the rule fires for opening stock same as any phone.
-            try:
-                db.update_phone(conn, so_uid, phone_id, {
-                    "status": "Sold", "sale_price": 70000, "sale_payment_method": "cash",
-                })
-                raise AssertionError("Expected marking Sold with no IMEI to be rejected")
-            except ValueError as e:
-                assert "IMEI" in str(e)
-
+            # IMEI is always optional, including once a phone is marked Sold -
+            # confirm selling with no IMEI at all succeeds, for opening stock
+            # same as any phone.
             sold = db.update_phone(conn, so_uid, phone_id, {
                 "status": "Sold", "sale_price": 70000, "sale_payment_method": "cash",
-                "imei": "800080008000800",
             })
             assert sold["status"] == "Sold"
             assert sold["net_profit"] == 15000, (
@@ -3274,7 +3628,7 @@ def main():
             ])[0]
             bank = db.create_bank(conn, uid, {"name": "UBL", "initial_balance": 150000})
             db.create_account(conn, uid, {
-                "name": "Zaid", "opening_balance": 123000, "opening_balance_type": "credit",
+                "name": "Zaid", "opening_balance": 123000, "opening_balance_type": "debit",
             })
 
             suggested = db.setup_status(conn, uid)["suggested_partner_capital"]
@@ -3322,7 +3676,7 @@ def main():
             ])[0]
             bank = db.create_bank(conn, uid, {"name": "UBL", "initial_balance": 150000})
             db.create_account(conn, uid, {
-                "name": "Zaid", "opening_balance": 123000, "opening_balance_type": "credit",
+                "name": "Zaid", "opening_balance": 123000, "opening_balance_type": "debit",
             })
 
             suggested = db.setup_status(conn, uid)["suggested_partner_capital"]
@@ -3415,10 +3769,11 @@ def main():
                 "UPDATE fixed_expenses SET created_at = '2026-03-01 00:00:00' WHERE id = ?", (fx["id"],)
             )
 
-            # Expense-category account: credit 3000 in March.
+            # Expense-category account: debit 3000 in March (money-model
+            # phase 2: giving money to pay an expense is debit).
             food = db.create_account(conn, mc_uid, {"name": "MC Food", "is_expense_category": True})
             db.create_entry(conn, food["id"], {
-                "entry_type": "credit", "amount": 3000, "note": "Lunch",
+                "entry_type": "debit", "amount": 3000, "note": "Lunch",
                 "payment_source": "cash", "force": True,
             }, user_id=mc_uid)
             conn.execute(
@@ -3426,12 +3781,12 @@ def main():
                 (food["id"],),
             )
 
-            # Udhar: customer billed 10000 (credit, no cash moves), collected
-            # 4000 (debit, cash in) - both dated in March.
+            # Udhar: customer billed 10000 (debit, no cash moves), collected
+            # 4000 (credit, cash in) - both dated in March.
             cust = db.create_account(conn, mc_uid, {"name": "MC Customer"})
-            db.create_entry(conn, cust["id"], {"entry_type": "credit", "amount": 10000, "note": "Udhar"}, user_id=mc_uid)
+            db.create_entry(conn, cust["id"], {"entry_type": "debit", "amount": 10000, "note": "Udhar"}, user_id=mc_uid)
             db.create_entry(conn, cust["id"], {
-                "entry_type": "debit", "amount": 4000, "note": "Wasool",
+                "entry_type": "credit", "amount": 4000, "note": "Wasool",
                 "payment_source": "cash", "force": True,
             }, user_id=mc_uid)
             conn.execute(
@@ -3532,21 +3887,12 @@ def main():
         # Account entries
         for i in range(50):
             db.create_entry(conn, food_id, {
-                "entry_type": "credit",
+                "entry_type": "debit",
                 "amount": 500 + i * 5,
                 "note": f"Meal {i}",
                 "payment_source": "cash",
                 "force": True,
             }, user_id=user_id)
-
-        # Journal vouchers
-        for i in range(20):
-            db.create_journal_voucher(conn, user_id, {
-                "debit_account_id": supplier_id,
-                "credit_account_id": buyer_id,
-                "amount": 1000 + i * 100,
-                "narration": f"JV stress {i}",
-            })
 
         # Collect final counts
         report.stats["phones_total"] = count_table(conn, "phones", user_id)
@@ -3572,7 +3918,6 @@ def main():
             """,
             (user_id,),
         ).fetchone()["c"]
-        report.stats["journal_vouchers"] = count_table(conn, "journal_vouchers", user_id)
         report.stats["return_logs"] = count_table(conn, "return_logs", user_id)
 
         report.stats["orphan_ledger_cash_links"] = orphan_ledger_links(conn, user_id)
@@ -3675,9 +4020,9 @@ def render_markdown(r: StressReport) -> str:
     lines.extend([
         "- Inventory purchase/sale/borrow -> cash book + accounts via `ledger_links`",
         "- Phone expenses -> cash book out (+ optional account)",
-        "- Account Wasool (debit) -> cash book in",
-        "- Expense category credit (Food) -> cash book out",
-        "- Delete phone / account entry / cash book / journal -> cascade reversal",
+        "- Account Wasool (credit) -> cash book in",
+        "- Expense category debit (Food) -> cash book out",
+        "- Delete phone / account entry / cash book -> cascade reversal",
         "- Returns post refunds without duplicate account rows",
     ])
 

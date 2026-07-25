@@ -37,9 +37,9 @@ ARCH_OUTPUT = {
 SOURCE_NAMES = {
     "app.py", "database.py", "license_guard.py", "folder_picker.py",
     "launch_crm.py", "backup_service.py", "email_service.py", "generate_key.py",
-    "build_release.py", "build_customer_copy.py", "build_customer_mac.py",
+    "build_customer_copy.py", "build_customer_mac.py",
     "build_customer_windows_copy.py", "run_crm.sh",
-    "test_crm.py", "test_crm_performance.py", "stress_test_crm.py",
+    "test_crm.py", "stress_test_crm.py",
 }
 
 
@@ -370,7 +370,7 @@ FEATURES
   • Inventory, cash book & accounts stay synced
   • Borrow phones from shopkeepers
   • Accounts Credit & Debit — Food/expenses deduct from cash or bank
-  • Dual IMEI, bulk sell, returns, journal, billing
+  • Dual IMEI, bulk sell, returns, billing
 
 Support: contact your CRM vendor.
 """,

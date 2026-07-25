@@ -233,8 +233,8 @@
         <div class="flex gap-2">
           <input type="number" id="acct-opening-amount" min="0" step="1" value="0" class="input-field flex-1" placeholder="0">
           <select id="acct-opening-type" class="input-field w-auto">
-            <option value="credit">They owe me</option>
-            <option value="debit">I owe them</option>
+            <option value="debit">They owe me</option>
+            <option value="credit">I owe them</option>
           </select>
         </div>
         <p class="text-xs text-slate-600 mt-1">If this person already owed (or was owed) money before you started using the CRM, enter it here — leave as 0 for a brand-new balance.</p>
@@ -357,9 +357,11 @@
   const selectedAccount = () => accounts.find(a => a.id === selectedId);
 
   const entryNeedsPayment = (entryType) => {
+    // Expense-category debits always need Cash/Bank. Credits without payment
+    // are unpaid supplier bills; credits with payment are collections.
     const acct = selectedAccount();
     if (!acct) return false;
-    return entryType === 'debit' || (entryType === 'credit' && acct.is_expense_category);
+    return entryType === 'debit' && acct.is_expense_category;
   };
 
   const entryShowsPayment = () => true;
@@ -633,7 +635,7 @@
     const acct = selectedAccount();
     const hint = document.getElementById('entry-hint');
     if (!acct) { hint.classList.add('hidden'); return; }
-    hint.textContent = 'Credit = amount they owe you (or you paying them down). Debit = payment received. Pick Cash or Bank whenever real money moves, so it syncs with cash book.';
+    hint.textContent = 'Credit = payment received. Debit = amount they now owe you, or you paying them down. Pick Cash or Bank whenever real money moves, so it syncs with cash book.';
     hint.classList.remove('hidden');
     toggleEntryPaymentFields();
   }
@@ -658,7 +660,7 @@
     const acct = selectedAccount();
     const expense = acct && acct.is_expense_category;
     const msg = document.getElementById('payment-pick-msg');
-    if (expense && payload.entry_type === 'credit') {
+    if (expense && payload.entry_type === 'debit') {
       msg.textContent = `Record expense in ${acct.name}? Amount will be subtracted from cash in hand or bank.`;
     } else {
       msg.textContent = 'Payment received — amount will be added to cash in hand or bank.';
@@ -775,7 +777,7 @@
     // transaction history) shouldn't silently inject another balance entry.
     document.getElementById('acct-opening-wrap').classList.toggle('hidden', Boolean(account));
     document.getElementById('acct-opening-amount').value = '0';
-    document.getElementById('acct-opening-type').value = 'credit';
+    document.getElementById('acct-opening-type').value = 'debit';
     openModal('acct-overlay', 'acct-modal');
   }
   function hideAcctModal() { closeModal('acct-overlay', 'acct-modal'); }
