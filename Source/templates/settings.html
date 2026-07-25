@@ -283,6 +283,7 @@
 {% endblock %}
 
 {% block scripts %}
+<script src="{{ url_for('static', filename='settings-page.js') }}"></script>
 <script>
   initSettingsPage();
   initResetCrmUi();

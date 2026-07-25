@@ -2,9 +2,9 @@
 
 A desktop CRM for phone resellers: inventory (PTA/NON-PTA/JV phones), bank
 accounts, cash book, customer/supplier ledgers with running balances,
-journal vouchers, monthly closing, and a licensing/activation system for
-paid customer installs. Built with Flask + SQLite (WAL mode) on the
-backend and server-rendered Jinja templates + vanilla JS on the frontend.
+monthly closing, and a licensing/activation system for paid customer
+installs. Built with Flask + SQLite (WAL mode) on the backend and
+server-rendered Jinja templates + vanilla JS on the frontend.
 It runs as a local web server that opens in the customer's default
 browser — there's no separate desktop UI framework.
 

@@ -385,11 +385,6 @@ body.modal-open {
   -webkit-overflow-scrolling: touch;
 }
 
-.journal-table-wrap {
-  max-height: 60vh;
-  overflow-y: auto;
-}
-
 .imei-fields-list .imei-field-row {
   padding-bottom: 0.25rem;
 }
