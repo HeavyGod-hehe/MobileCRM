@@ -357,9 +357,11 @@
   const selectedAccount = () => accounts.find(a => a.id === selectedId);
 
   const entryNeedsPayment = (entryType) => {
+    // Expense-category debits always need Cash/Bank. Credits without payment
+    // are unpaid supplier bills; credits with payment are collections.
     const acct = selectedAccount();
     if (!acct) return false;
-    return entryType === 'credit' || (entryType === 'debit' && acct.is_expense_category);
+    return entryType === 'debit' && acct.is_expense_category;
   };
 
   const entryShowsPayment = () => true;

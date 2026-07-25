@@ -10,7 +10,7 @@
   </div>
   <div class="flex items-center gap-2 no-print">
     <input type="month" id="closing-month-picker" class="input-field w-auto">
-    <button id="btn-close-month" class="btn btn-primary btn-sm">Close the Month</button>
+    <button id="btn-close-month" class="btn btn-primary btn-sm">Reset Overview Monthly Counters</button>
   </div>
 </div>
 
@@ -139,17 +139,18 @@
 
   document.getElementById('btn-close-month').addEventListener('click', async () => {
     const ok = confirm(
-      "Close the Month?\n\n" +
+      "Reset Overview monthly counters?\n\n" +
       "This resets the \"Monthly Metrics\" tile on the Overview page " +
       "(Units Sold, Net Profit, Profit Margin, Top Model) back to zero, " +
       "so it starts counting fresh from right now.\n\n" +
       "Nothing else changes: no phone, expense, or transaction is deleted. " +
-      "This month's real numbers stay fully available here and in Month Report."
+      "This month's real numbers stay fully available here and in Month Report. " +
+      "This does NOT lock the books."
     );
     if (!ok) return;
     try {
       await apiFetch('/api/monthly-closing/close-month', { method: 'POST' });
-      toast('Month closed — Overview\'s monthly tile has been reset');
+      toast('Overview monthly counters reset');
     } catch (err) {
       toast(err.message, 'error');
     }

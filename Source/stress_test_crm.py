@@ -130,8 +130,28 @@ def cash_book_cash_total(conn, user_id):
 
 def main():
     db_path = os.environ["CRM_DB_PATH"]
-    if Path(db_path).exists():
-        Path(db_path).unlink()
+    db_file = Path(db_path)
+    if db_file.exists():
+        db_file.unlink()
+    # Undo bookkeeping lives beside the live DB (see database._undo_meta_db_path /
+    # _undo_dir). Leaving it across runs reuses stale user_id checkpoints after
+    # the live DB is wiped and IDs restart at 1 — ensure_undo_baseline then
+    # skips, and undo tests restore the wrong snapshot.
+    for suffix in ("-wal", "-shm"):
+        side = Path(str(db_file) + suffix)
+        if side.exists():
+            side.unlink()
+    undo_meta = db_file.parent / f"{db_file.stem}_undo_meta.db"
+    if undo_meta.exists():
+        undo_meta.unlink()
+    for suffix in ("-wal", "-shm"):
+        side = Path(str(undo_meta) + suffix)
+        if side.exists():
+            side.unlink()
+    undo_history = db_file.parent / f"{db_file.stem}_UndoHistory"
+    if undo_history.is_dir():
+        import shutil
+        shutil.rmtree(undo_history, ignore_errors=True)
 
     db.init_db()
     user_id = None

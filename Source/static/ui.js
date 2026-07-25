@@ -52,13 +52,14 @@ const MODAL_REGISTRY = [
   ['payment-pick-overlay', 'payment-pick-modal'],
   ['inv-acct-overlay', 'inv-acct-modal'],
   ['bulk-sold-overlay', 'bulk-sold-modal'],
-  ['jv-acct-overlay', 'jv-acct-modal'],
   ['reinvest-overlay', 'reinvest-modal'],
   ['side-inv-overlay', 'side-inv-modal'],
   ['imei-scanner-overlay', 'imei-scanner-modal'],
   ['pi-scanner-overlay', 'pi-scanner-modal'],
   ['asset-overlay', 'asset-modal'],
   ['gap-details-overlay', 'gap-details-modal'],
+  ['device-overlay', 'device-modal'],
+  ['reset-crm-overlay', 'reset-crm-modal'],
 ];
 
 function toast(message, type = 'success', duration = 2800) {

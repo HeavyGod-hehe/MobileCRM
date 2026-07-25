@@ -1775,8 +1775,10 @@ def update_user_settings(conn, user_id, data):
     #14). theme/shop_name are mirrored onto the users table row itself
     (denormalized for fast lookups elsewhere); everything else lives in
     the generic user_settings key-value table."""
+    # partner1_*/partner2_* are legacy seed keys only (_seed_user_partners /
+    # _copy_legacy_settings). Live capital lives in the partners table — do not
+    # accept writes here or settings and partners diverge.
     allowed = {
-        "partner1_name", "partner1_capital", "partner2_name", "partner2_capital",
         "cash_in_hand", "theme", "shop_name", "shop_address", "shop_phones", "shop_logo",
         "local_backup_path",
         "last_backup_at", "auto_backup_enabled",
@@ -2831,6 +2833,11 @@ def _post_purchase_ledger(conn, user_id, phone_id, data):
     purchase_cb_id = None
     purchase_acct_id = None
 
+    # Full bill + payment: when a supplier account is linked, credit the FULL
+    # purchase_price (bill owed TO supplier), then debit whatever was paid now.
+    # Net balance = -(purchase_price - paid_now) = -payable. The old residual-
+    # only pattern (credit payable + debit paid_now) inverted supplier balances
+    # on every partial-credit purchase.
     if paid_now > 0:
         cb = _post_payment_transaction(
             conn, user_id, method, bank_id, "out", paid_now,
@@ -2844,12 +2851,13 @@ def _post_purchase_ledger(conn, user_id, phone_id, data):
         if cb:
             purchase_cb_id = cb.get("cash_book_entry_id") or cb.get("id")
 
-    if payable > 0 and supplier_account_id:
-        note = f"{'Borrow' if acquisition == 'borrow' else 'Udhar'}: {model} (#{phone_id})"
-        # New debt owed TO the supplier (no cash moved yet) = credit.
-        acct_type = "credit"
+    if supplier_account_id and purchase_price > 0:
+        note = (
+            f"{'Borrow' if acquisition == 'borrow' else 'Purchase'}: {model} (#{phone_id})"
+        )
+        # Full bill owed TO the supplier = credit.
         purchase_acct_id = _insert_account_entry(
-            conn, supplier_account_id, acct_type, payable, note,
+            conn, supplier_account_id, "credit", purchase_price, note,
         )
         _record_ledger_link(
             conn, user_id,
@@ -2890,6 +2898,14 @@ def _post_sale_ledger(conn, user_id, phone_id, data):
     sale_cb_id = None
     sale_acct_id = None
 
+    if receivable > 0 and not buyer_account_id:
+        raise ValueError("Select a buyer account when recording sale udhar (receivable)")
+
+    # Full bill + payment: when a buyer account is linked, debit the FULL
+    # sale_price (bill owed BY buyer), then credit whatever was received now.
+    # Net balance = sale_price - received_now = receivable. The old residual-
+    # only pattern (debit receivable + credit received_now) inverted buyer
+    # balances on every partial-credit sale.
     if received_now > 0:
         cb = _post_payment_transaction(
             conn, user_id, method, bank_id, "in", received_now,
@@ -2902,13 +2918,16 @@ def _post_sale_ledger(conn, user_id, phone_id, data):
         if cb:
             sale_cb_id = cb.get("cash_book_entry_id") or cb.get("id")
 
-    if receivable > 0:
-        acct_id = buyer_account_id
-        if not acct_id:
-            raise ValueError("Select a buyer account when recording sale udhar (receivable)")
-        note = f"Sale udhar: {model} (#{phone_id})"
-        # New debt owed BY the buyer (no cash moved yet) = debit.
-        sale_acct_id = _insert_account_entry(conn, acct_id, "debit", receivable, note)
+    if buyer_account_id and sale_price > 0:
+        note = (
+            f"Sale udhar: {model} (#{phone_id})"
+            if receivable > 0
+            else f"Sale: {model} (#{phone_id})"
+        )
+        # Full bill owed BY the buyer = debit.
+        sale_acct_id = _insert_account_entry(
+            conn, buyer_account_id, "debit", sale_price, note,
+        )
         _record_ledger_link(
             conn, user_id, "phone_receivable", phone_id, account_entry_id=sale_acct_id,
         )
@@ -4629,7 +4648,7 @@ def compute_dashboard(conn, user_id):
     phone_receivables = round(phone_only_receivables, 2)
     accounts_payable = acct_summary["total_payable"]
     # Phone payables synced to a supplier account are already in account balances
-    # (posted as a debit entry by _post_purchase_ledger) — only count the ones
+    # (posted as a credit bill by _post_purchase_ledger) — only count the ones
     # with no linked account here, mirroring phone_only_receivables above.
     phone_payables = sum(
         r["payable_amount"] or 0 for r in payables if not r["supplier_account_id"]
@@ -5059,15 +5078,17 @@ def build_statement(conn, user_id, account_id):
 
 def create_entry(conn, account_id, data, user_id=None):
     """Post a credit/debit against a khata account. Money-model phase 2:
-    credit = the shop received a payment; debit = the shop gave a payment,
-    OR billed new debt with no money moving yet (e.g. a sale/purchase on
-    credit) — see _account_balance's docstring for the full rule. A credit
-    (money coming in) or a debit on an expense-category account (paying
-    that expense) always requires a real cash/bank payment method and
-    syncs the cash book; a plain debit (e.g. billing new udhar, or paying
-    down what you owe a supplier) only syncs cash/bank if the caller
-    explicitly picked one, since billing debt by itself doesn't move any
-    money."""
+    credit = the shop received a payment, OR a new supplier bill (payable);
+    debit = the shop gave a payment, OR billed new customer debt (receivable)
+    — see _account_balance's docstring for the full rule.
+
+    Cash/bank sync:
+    - Expense-category debits always require a payment method.
+    - A credit WITH a payment method is a collection/receipt (money in).
+    - A credit WITHOUT a payment method is an unpaid supplier bill (payable).
+    - A debit WITH a payment method is paying someone (money out).
+    - A debit WITHOUT a payment method is billing new customer udhar.
+    """
     entry_type = data["entry_type"]
     if entry_type not in ENTRY_TYPES:
         raise ValueError("Invalid entry type")
@@ -5078,12 +5099,10 @@ def create_entry(conn, account_id, data, user_id=None):
     bank_account_id = data.get("bank_account_id")
 
     is_expense = user_id and is_expense_category_account(conn, account_id)
-    # Cash/bank sync is required for credit entries (receiving payment) and
-    # expense-category debits (paying that expense) - real money is
-    # guaranteed to move. It's optional but still honored for a plain debit
-    # entry (e.g. paying down what you owe a supplier) whenever the user
-    # explicitly picks Cash or Bank — that selection means real cash moved.
-    needs_payment = entry_type == "credit" or (entry_type == "debit" and is_expense)
+    # Only expense-category debits always require real cash/bank movement.
+    # Credits without payment are unpaid supplier bills; credits with payment
+    # are collections. Plain debits without payment are customer receivables.
+    needs_payment = entry_type == "debit" and is_expense
 
     if payment_source and payment_source not in ("cash", "bank"):
         raise ValueError("Payment source must be cash or bank")
